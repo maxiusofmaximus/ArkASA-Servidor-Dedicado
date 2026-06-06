@@ -1,0 +1,16 @@
+# Configuracion personal con contrasenas reales.
+config/
+
+# Backups o archivos temporales locales.
+*.log
+*.tmp
+tmp-*.ini
+
+# No guardar instalaciones pesadas si alguien cambia rutas dentro del repo.
+steamcmd/
+server/
+backups/
+
+# Windows
+Thumbs.db
+Desktop.ini
