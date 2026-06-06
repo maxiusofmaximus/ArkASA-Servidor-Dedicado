@@ -54,7 +54,7 @@ if ($LASTEXITCODE -ne 0) {
   Write-Host "Repositorio remoto existente: $repoFullName"
 }
 
-& $Git -c safe.directory="$ProjectRoot" remote get-url origin | Out-Null
+$null = & $Git -c safe.directory="$ProjectRoot" remote get-url origin 2>$null
 if ($LASTEXITCODE -ne 0) {
   & $Git -c safe.directory="$ProjectRoot" remote add origin $remoteUrl
 } else {
