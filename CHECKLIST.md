@@ -56,3 +56,16 @@ Marca cada paso cuando lo tengas hecho.
 - [ ] Actualizar servidor cuando ASA se actualice
 - [ ] Guardar contrasenas fuera de capturas o streams
 - [ ] No compartir `ServerAdminPassword`
+
+## ✨ Mods (NUEVO - 2026-06-08)
+
+- [ ] Editar `config\servidor.ps1` y agregar IDs de mods en `ActiveMods`
+- [ ] Copiar IDs de mods desde CurseForge (https://www.curseforge.com/ark-survival-ascended/mods)
+- [ ] Los IDs deben estar separados por comas: `'ID1,ID2,ID3'`
+- [ ] Ejecutar `DESPLIEGUE.bat` opción `1` para descargar mods automáticamente
+- [ ] Verificar que los mods se descargaron en `C:\ASA\server\ShooterGame\Mods\{ID}\`
+- [ ] Verificar que `GameUserSettings.ini` contiene `ActiveMods=...`
+- [ ] Iniciar el servidor y verificar en el log: `UShooterEngine::LoadGameMods with XX mods`
+- [ ] Si muestra `with 0 mods`, revisa `GameUserSettings.ini` y `config\servidor.ps1`
+- [ ] Algunos mods pueden ser incompatibles entre sí - si hay errores, intenta quitando mods
+- [ ] Ver documentación: `CONFIGURACION_MODS.md` y `CAMBIOS_REALIZADOS.md`
