@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '../services/tauri'
 import { useState } from 'react'
 import { useConfigStore } from '../stores/configStore'
 import type { ServerConfig, Tab } from '../types'
@@ -148,7 +148,7 @@ export default function ConfigForm({
         {activeTab === 'gameplay' && (
           <GameplaySettings config={config} onConfigChange={onConfigChange} />
         )}
-        {activeTab === 'server' && (
+        {activeTab === 'network' && (
           <ServerSettings config={config} onConfigChange={onConfigChange} />
         )}
         {activeTab === 'advanced' && (

@@ -1,6 +1,6 @@
 /**
  * Centralized logging service for debugging
- * Logs to both console and a visible in-app log file
+ * Logs to browser console, localStorage, and sends to backend for file storage
  */
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
@@ -15,6 +15,8 @@ interface LogEntry {
 class LogService {
   private logs: LogEntry[] = []
   private isDev = import.meta.env.DEV
+  private logQueue: string[] = []
+  private isFlushingLogs = false
 
   log(level: LogLevel, message: string, data?: any) {
     const entry: LogEntry = {
@@ -35,11 +37,50 @@ class LogService {
       logFn(`${prefix} ${message}`)
     }
 
+    // Format for file output
+    const fileLog = `[${entry.timestamp}] [${level}] ${message}${data ? ' | ' + JSON.stringify(data).substring(0, 200) : ''}`
+
+    // Queue for batch writing
+    this.logQueue.push(fileLog)
+
     // Save to localStorage for persistence
     try {
       localStorage.setItem('app_logs', JSON.stringify(this.logs.slice(-100))) // Keep last 100
     } catch (e) {
       console.error('Failed to save logs to localStorage', e)
+    }
+
+    // Flush logs periodically
+    this.flushLogsIfNeeded()
+  }
+
+  private async flushLogsIfNeeded() {
+    if (this.isFlushingLogs || this.logQueue.length < 5) {
+      return
+    }
+
+    this.isFlushingLogs = true
+    try {
+      // Send logs to backend via fetch (Tauri backend handles the write)
+      const logsToSend = [...this.logQueue]
+      this.logQueue = []
+
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logs: logsToSend }),
+      }).catch(() => {
+        // Silently fail if backend not available (dev mode)
+        this.logQueue = [...logsToSend, ...this.logQueue]
+      })
+    } finally {
+      this.isFlushingLogs = false
+    }
+  }
+
+  async flushAll() {
+    if (this.logQueue.length > 0) {
+      await this.flushLogsIfNeeded()
     }
   }
 

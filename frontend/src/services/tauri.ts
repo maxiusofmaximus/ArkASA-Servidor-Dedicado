@@ -14,15 +14,30 @@ let isTauriAvailable = false
 export async function initializeTauri() {
   logger.info('Initializing Tauri connection...')
 
+  // Check if we're in Tauri context by checking for __TAURI__ global
+  const isTauriContext = typeof window !== 'undefined' && '__TAURI__' in window
+
+  if (!isTauriContext) {
+    logger.info('Not in Tauri context - using mock implementation')
+    invokeFunction = createMockInvoke()
+    isTauriAvailable = false
+    return false
+  }
+
   try {
-    // Try to import the real Tauri invoke
+    // We're in Tauri context, try to import the real invoke
     const { invoke } = await import('@tauri-apps/api/core')
+
+    if (!invoke || typeof invoke !== 'function') {
+      throw new Error('invoke is not a function')
+    }
+
     logger.info('Tauri invoke loaded successfully')
     invokeFunction = invoke
     isTauriAvailable = true
     return true
   } catch (error) {
-    logger.warn('Failed to load Tauri invoke', error)
+    logger.warn('Failed to load Tauri invoke, falling back to mock', error)
     logger.info('Running in dev mode - will use mock implementation')
 
     // Fallback for dev mode
