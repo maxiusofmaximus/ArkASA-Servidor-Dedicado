@@ -31,7 +31,7 @@ body {
   height: 100%;
 }
 
-/* ARK SPACE BACKGROUND - DRAMATIC PARTICLE EFFECTS */
+/* ARK SPACE BACKGROUND - WITH BACKGROUND IMAGES */
 .ark-bg {
   position: fixed;
   top: 0;
@@ -41,6 +41,24 @@ body {
   background-color: #010203;
   overflow: hidden;
   z-index: 0;
+}
+
+/* Background image layer - large planet/hexagon effect */
+.ark-bg::before {
+  content: '';
+  position: absolute;
+  top: -20%;
+  right: -15%;
+  width: 800px;
+  height: 800px;
+  background-image: url('/assets/ark-background.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0.25;
+  pointer-events: none;
+  z-index: 1;
+  filter: brightness(1.1) saturate(1.1);
 }
 
 /* Base space gradient layer */
