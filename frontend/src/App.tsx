@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/tauri'
+import { invoke } from '@tauri-apps/api/core'
 import Navigation from './components/Navigation'
 import ConfigForm from './components/ConfigForm'
 import ServerStatus from './components/ServerStatus'
