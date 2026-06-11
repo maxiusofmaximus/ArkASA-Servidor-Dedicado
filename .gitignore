@@ -44,6 +44,7 @@ logs/
 *.backup
 *.backup_*
 config/
+!src-tauri/src/config/
 steamcmd/
 server/
 backups/
