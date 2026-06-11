@@ -44,3 +44,7 @@ strip = true
 [[bin]]
 name = "ark-asa-config"
 path = "src/main.rs"
+
+[[bin]]
+name = "ark-config"
+path = "src/bin/ark-config.rs"
