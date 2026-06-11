@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod cli;
 
 use config::{ConfigLoader, ConfigPersister, ServerConfig, CompositeValidator};
 use serde_json::json;
