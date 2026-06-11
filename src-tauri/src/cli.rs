@@ -1,5 +1,4 @@
 // Command-line interface for ARK server management
-use crate::config::ServerConfig;
 use crate::error::Result;
 use std::path::PathBuf;
 
@@ -168,7 +167,7 @@ For more information, visit: https://github.com/maxiusofmaximus/ArkASA-Config-Ma
                 Ok(format!("Restarting server with config: {:?}", config_path))
             }
             Command::Status => Ok("Server: RUNNING (PID: 1234, Uptime: 1h)".to_string()),
-            Command::Install { steam_cmd_dir, server_dir } => {
+            Command::Install { steam_cmd_dir: _, server_dir } => {
                 Ok(format!("Installing to {:?}", server_dir))
             }
             Command::Config { action } => match action {
