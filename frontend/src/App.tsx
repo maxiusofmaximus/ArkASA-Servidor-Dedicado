@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { initializeTauri, invoke, getTauriStatus } from './services/tauri'
+import { logger } from './services/logger'
 import Navigation from './components/Navigation'
 import ConfigForm from './components/ConfigForm'
 import ServerStatus from './components/ServerStatus'
 import StatusPage from './pages/Status'
+import LogsViewer from './components/LogsViewer'
 import { useConfigStore } from './stores/configStore'
 import type { ServerConfig, Tab } from './types'
 
@@ -11,19 +13,41 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('general')
+  const [tauriStatus, setTauriStatus] = useState<string>('')
   const { config, setConfig } = useConfigStore()
 
   useEffect(() => {
-    loadConfig()
+    logger.info('App component mounted')
+    initAppAndConfig()
   }, [])
+
+  const initAppAndConfig = async () => {
+    try {
+      logger.info('Initializing application...')
+      const tauriReady = await initializeTauri()
+      logger.info(`Tauri initialization result: ${tauriReady}`, getTauriStatus())
+      setTauriStatus(JSON.stringify(getTauriStatus()))
+      await loadConfig()
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      logger.error('App initialization failed', err)
+      setError(`Failed to initialize: ${errorMsg}`)
+      setLoading(false)
+    }
+  }
 
   const loadConfig = async () => {
     try {
+      logger.info('Loading default config...')
       setLoading(true)
       const defaultConfig: ServerConfig = await invoke('get_default_config')
+      logger.info('Config loaded successfully', defaultConfig)
       setConfig(defaultConfig)
+      setError(null)
     } catch (err) {
-      setError(`Failed to load config: ${err}`)
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      logger.error('Failed to load config', err)
+      setError(`Failed to load config: ${errorMsg}`)
     } finally {
       setLoading(false)
     }
@@ -68,6 +92,8 @@ function App() {
           )}
         </main>
       </div>
+
+      <LogsViewer />
     </div>
   )
 }
