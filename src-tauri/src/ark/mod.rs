@@ -8,4 +8,4 @@ pub use installer::SteamCmdInstaller;
 pub use logs::LogReader;
 pub use metrics::{MetricsCollector, ProcessMetrics, SystemMetrics};
 pub use process::ProcessManager;
-pub use server::ArkServer;
+pub use server::{ArkServer, ArkServerImpl};

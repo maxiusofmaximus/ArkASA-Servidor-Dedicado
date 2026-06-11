@@ -140,10 +140,13 @@ impl ProcessMgr for ProcessManager {
     }
 
     async fn get_status(&self) -> Result<ServerStatus> {
-        let process_id = self.process_id.lock().unwrap();
-        let start_time = self.start_time.lock().unwrap();
+        let (pid, start) = {
+            let process_id = self.process_id.lock().unwrap();
+            let start_time = self.start_time.lock().unwrap();
+            (*process_id, *start_time)
+        };
 
-        match (*process_id, *start_time) {
+        match (pid, start) {
             (Some(pid), Some(start)) => {
                 let running = self.is_running(pid).await.unwrap_or(false);
                 let uptime = if let Ok(elapsed) = start.elapsed() {

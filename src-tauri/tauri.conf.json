@@ -3,9 +3,8 @@
   "version": "2.0.0",
   "identifier": "com.arkasa.configmanager",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --dir ./frontend dev",
+    "beforeBuildCommand": "pnpm --dir ./frontend build",
     "frontendDist": "../frontend/dist"
   },
   "app": {
@@ -27,33 +26,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "wix",
-      "msi"
-    ],
-    "wix": {
-      "certificatePath": null,
-      "certificatePassword": null,
-      "dialogImagePath": "",
-      "bannerPath": "",
-      "language": "en-US"
-    },
-    "msi": {
-      "certificatePath": null,
-      "certificatePassword": null,
-      "upgradeCode": null,
-      "license": null,
-      "template": null,
-      "fragmentPath": null,
-      "componentGuid": null,
-      "installerLanguages": [
-        "en-US"
-      ]
+    "windows": {
+      "wix": null,
+      "allowDowngrades": false
     },
     "macOS": {
       "signingIdentity": null,
       "entitlements": null,
-      "provisioningProfile": null,
       "minimumSystemVersion": null,
       "exceptionDomain": ""
     },

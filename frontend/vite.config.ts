@@ -10,12 +10,18 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
-    minify: 'terser',
+    minify: 'esbuild',
     sourcemap: false,
+    rollupOptions: {
+      external: ['@tauri-apps/api', '@tauri-apps/api/tauri'],
+    },
   },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  optimizeDeps: {
+    include: ['@tauri-apps/api'],
   },
 })
