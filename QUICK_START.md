@@ -1,96 +1,151 @@
-# ⚡ QUICK START - EN 5 MINUTOS
+# ARK ASA Config Manager - Quick Start Guide (5 minutes)
 
-```
-╔════════════════════════════════════════════════════╗
-║  SI ESTÁS APURADO, LEE ESTO Y PUNTO              ║
-╚════════════════════════════════════════════════════╝
-```
+> ⚡ **TL;DR:** Run `npm install && npm run tauri:dev` - Done!
 
----
+## What You Get
 
-## ✅ ¿QUÉ SE HIZO?
+✅ Modern desktop UI (Tauri, 5-15MB)  
+✅ Full server configuration management  
+✅ Type-safe Rust backend with validation  
+✅ Auto-generates Game.ini + GameUserSettings.ini  
+✅ Server start/stop/restart controls  
+✅ Configuration history & audit logs  
 
-| Lo que querías | Estado |
-|---|---|
-| Mods funcionando | ✅ LISTO |
-| Spawn de dinos x2 | ✅ LISTO |
-| Configuración correcta | ✅ LISTO |
+## Prerequisites
 
----
+- ✅ Rust (already installed)
+- ✅ Node.js (already installed)
+- ✅ Tauri (already installed)
 
-## 🚀 3 COMANDOS Y LISTO
+## Step 1: Install Dependencies (1 minute)
 
-Abre **PowerShell** en la carpeta del proyecto y ejecuta:
-
-### Comando 1: Copiar configuración
 ```powershell
-Copy-Item config-ejemplos\servidor.ps1 config\servidor.ps1
+npm install
 ```
 
-### Comando 2: Ejecutar despliegue
+## Step 2: Start Development (1 minute)
+
 ```powershell
-.\DESPLEGAR.ps1
+npm run tauri:dev
 ```
 
-### Comando 3: Selecciona cuando aparezca el menú
+**Wait 2-3 minutes for first compile...**
+
+## Step 3: See It Working (1 minute)
+
+You'll see a window with:
+- Tabs: General, Gameplay, Server, Advanced, Status
+- Server status panel on the right
+- Configuration forms on the left
+- Save/Reset buttons at the bottom
+
+## Test It Out
+
+### Test 1: Change Configuration
+1. Click **General** tab
+2. Change "Session Name" to anything
+3. Change "Admin Password" to a strong password
+4. Click **Save Configuration**
+5. Check: `config.toml` file created ✓
+
+### Test 2: Validate Errors
+1. Click **Gameplay** tab
+2. Set "Max Players" to `0`
+3. Try to save → Shows error ✓
+4. Change back to `70` → Error goes away ✓
+
+### Test 3: Explore All Tabs
+- **General**: Session, network ports
+- **Gameplay**: Server type, 7 multipliers
+- **Server**: World settings, mods list
+- **Advanced**: 11 toggle options
+- **Status**: Server controls & uptime
+
+## Code Organization
+
 ```
-Opción 1 (Instalación completa) ← Si no tienes nada
-O
-Opción 4 (Solo aplicar config) ← Si ya tienes servidor
+src/
+├── config/           ← Configuration (load, validate, save)
+├── ark/             ← Server management (install, start/stop)
+├── storage/         ← SQLite (history, audit logs)
+└── error.rs         ← Error types
+
+frontend/src/
+├── pages/           ← Configuration UI (4 tabs)
+├── components/      ← Reusable components
+├── stores/          ← Zustand global state
+└── types/           ← TypeScript interfaces
 ```
 
-**FIN. Espera a que termine.**
+## Make Changes
+
+### Edit Rust (Backend)
+```powershell
+# Edit src/config/validator.rs (add new validator)
+# or src/ark/server.rs (change server logic)
+
+# Restart dev server to recompile
+npm run tauri:dev
+```
+
+### Edit React (Frontend)
+```powershell
+# Edit frontend/src/pages/GameplaySettings.tsx
+# (just save - hot reloads automatically)
+```
+
+## Build for Release
+
+```powershell
+npm run tauri:build
+# Creates: src-tauri/target/release/bundle/msi/ARK*.msi
+```
+
+## Documentation
+
+- 📖 [README.md](README.md) - Feature overview
+- 🏗️ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - System design
+- 📡 [docs/API.md](docs/API.md) - All Tauri commands
+
+## Troubleshooting
+
+**App won't start?**
+```powershell
+rm -r src-tauri/target  # Clear cache
+npm run tauri:dev       # Rebuild
+```
+
+**Rust compilation error?**
+```powershell
+rustup update           # Update toolchain
+cargo clean             # Clean build artifacts
+npm run tauri:dev       # Try again
+```
+
+**Port already in use?**
+```powershell
+netstat -ano | findstr :7777
+taskkill /PID <PID> /F
+```
+
+## What's Next?
+
+✅ Phase 1: Foundation (Config + Basic UI)  
+✅ Phase 2: Backend Integration (ARK module + Storage)  
+⏳ Phase 3: Advanced UI (Config preview, backup, logs)  
+🔮 Phase 4: Production Ready (Web variant, API, scaling)
+
+## Pro Tips
+
+1. **Ctrl+Shift+I** = DevTools in Tauri window
+2. **F5** = Reload app
+3. **Set RUST_LOG=debug** for verbose logging
+4. Check `~\AppData\Roaming\ARK ASA Config Manager\logs\` for debug logs
+5. Read code comments in `src/` for architecture details
 
 ---
 
-## ✔️ CÓMO SABER QUE FUNCIONA
+**That's it! You're ready to go. Happy configuring! 🚀**
 
-Cuando termine, abre este archivo:
-```
-C:\ASA\server\ShooterGame\Saved\Logs\ShooterGame.log
-```
-
-Busca `LoadGameMods` con Ctrl+F:
-
-✅ **Deberías ver:**
-```
-[OK] UShooterEngine::LoadGameMods with 11 mods
-```
-
-❌ **Si ves:**
-```
-[ERROR] UShooterEngine::LoadGameMods with 0 mods
-```
-→ Ve a [GUIA_VALIDACION_MODS.md](GUIA_VALIDACION_MODS.md) sección Troubleshooting
-
----
-
-## 📖 DOCUMENTOS (ELIGE UNO)
-
-### Si tienes 3 minutos:
-→ [CORRECCIONES_REALIZADAS.md](CORRECCIONES_REALIZADAS.md)
-
-### Si tienes 5 minutos:
-→ [PROXIMOS_PASOS.md](PROXIMOS_PASOS.md)
-
-### Si tienes 15 minutos:
-→ [ANALISIS_ERRORES_OFICIAL.md](ANALISIS_ERRORES_OFICIAL.md)
-
-### Si quieres TODOS los documentos:
-→ [INDICE_DOCUMENTACION.md](INDICE_DOCUMENTACION.md)
-
----
-
-## ⚠️ SI ALGO FALLA
-
-**Problema:** "LoadGameMods with 0 mods"  
-**Solución:** [GUIA_VALIDACION_MODS.md](GUIA_VALIDACION_MODS.md) → Troubleshooting
-
-**Problema:** Spawn de dinos normal (no el doble)  
-**Solución:** [GUIA_VALIDACION_MODS.md](GUIA_VALIDACION_MODS.md) → Validación Completa
-
----
-
-```
-✅ LISTO. Ahora ejecuta los 3 comandos arriba.
-```
+Generated: 2026-06-10  
+Version: 2.0.0 (Phase 2)
