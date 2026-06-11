@@ -1,17 +1,17 @@
-import type { Tab } from '../types'
+import type { PrimaryTab } from '../types'
 
 interface NavigationProps {
-  activeTab: Tab
-  onTabChange: (tab: Tab) => void
+  activeTab: PrimaryTab
+  onTabChange: (tab: PrimaryTab) => void
 }
 
 export default function Navigation({ activeTab, onTabChange }: NavigationProps) {
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'general', label: 'General' },
-    { id: 'gameplay', label: 'Gameplay' },
-    { id: 'server', label: 'Server' },
-    { id: 'advanced', label: 'Advanced' },
-    { id: 'status', label: 'Status' },
+  const tabs: { id: PrimaryTab; label: string }[] = [
+    { id: 'arks', label: 'ARKS' },
+    { id: 'mod_settings', label: 'MOD SETTINGS' },
+    { id: 'game_rules', label: 'GAME RULES' },
+    { id: 'advanced', label: 'ADVANCED' },
+    { id: 'engrams', label: 'ENGRAMS' },
   ]
 
   return (

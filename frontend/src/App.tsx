@@ -7,12 +7,12 @@ import ServerStatus from './components/ServerStatus'
 import StatusPage from './pages/Status'
 import LogsViewer from './components/LogsViewer'
 import { useConfigStore } from './stores/configStore'
-import type { ServerConfig, Tab } from './types'
+import type { ServerConfig, PrimaryTab } from './types'
 
 function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<Tab>('general')
+  const [activeTab, setActiveTab] = useState<PrimaryTab>('arks')
   const [tauriStatus, setTauriStatus] = useState<string>('')
   const { config, setConfig } = useConfigStore()
 
@@ -78,17 +78,11 @@ function App() {
 
         <main className="flex-1 p-8">
           {config && (
-            <>
-              {activeTab === 'status' ? (
-                <StatusPage config={config} />
-              ) : (
-                <ConfigForm
-                  config={config}
-                  activeTab={activeTab}
-                  onConfigChange={setConfig}
-                />
-              )}
-            </>
+            <ConfigForm
+              config={config}
+              activeTab={activeTab}
+              onConfigChange={setConfig}
+            />
           )}
         </main>
       </div>

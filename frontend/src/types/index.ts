@@ -1,5 +1,64 @@
-export type Tab = 'general' | 'gameplay' | 'server' | 'advanced' | 'status'
+// Primary and sub-tab type unions
+export type PrimaryTab = 'arks' | 'mod_settings' | 'game_rules' | 'advanced' | 'engrams'
+export type GameRulesSubTab = 'player' | 'creature' | 'structure' | 'world' | 'rules'
+export type AdvancedSubTab = 'pve' | 'pvp' | 'world' | 'wild_dino' | 'tamed_dino' | 'player' | 'xp_multipliers' | 'misc'
+export type ModSettingsSubTab = 'active_mods' | 'available_mods'
 
+// Legacy alias for compatibility
+export type Tab = PrimaryTab
+
+// Stat multipliers for dinos (10 stats: health, stamina, oxygen, food, water, weight, melee_damage, speed, fortitude, torpidity)
+export interface DinoStatsPerLevel {
+  health: number
+  stamina: number
+  oxygen: number
+  food: number
+  water: number
+  weight: number
+  melee_damage: number
+  speed: number
+  fortitude: number
+  torpidity: number
+}
+
+// Player stats (11 stats: same as dino + crafting_speed at index 9)
+export interface PlayerStatsPerLevel {
+  health: number
+  stamina: number
+  oxygen: number
+  food: number
+  water: number
+  weight: number
+  melee_damage: number
+  speed: number
+  fortitude: number
+  crafting_speed: number
+  torpidity: number
+}
+
+// Tamed dino stats: three tables (per_level, add_per_level, affinity)
+export interface DinoTamedStatsConfig {
+  per_level: DinoStatsPerLevel
+  add_per_level: DinoStatsPerLevel
+  affinity: DinoStatsPerLevel
+}
+
+// XP multipliers (11 types)
+export interface XpMultipliersConfig {
+  generic_xp_multiplier: number
+  kill_xp_multiplier: number
+  harvest_xp_multiplier: number
+  craft_xp_multiplier: number
+  special_xp_multiplier: number
+  explorer_note_xp_multiplier: number
+  boss_kill_xp_multiplier: number
+  alpha_kill_xp_multiplier: number
+  wild_kill_xp_multiplier: number
+  cave_kill_xp_multiplier: number
+  tamed_kill_xp_multiplier: number
+}
+
+// Identification settings
 export interface IdentificationConfig {
   session_name: string
   server_password: string
@@ -7,6 +66,7 @@ export interface IdentificationConfig {
   server_message_of_the_day: string
 }
 
+// Network settings
 export interface NetworkConfig {
   port: number
   query_port: number
@@ -14,24 +74,58 @@ export interface NetworkConfig {
   server_platform: string
 }
 
+// Gameplay settings (expanded with ~20 new boolean/number fields)
 export interface GameplayConfig {
   server_pve: boolean
+  server_hardcore: boolean
   max_players: number
   difficulty_offset: number
+  override_official_difficulty: number
   dino_count_multiplier: number
   enable_pvp_gamma_bypass: boolean
+  disable_pvp_gamma: boolean
   allow_third_person_player: boolean
   allow_cryopod_nerf_removal: boolean
+  allow_speed_leveling: boolean
+  allow_flyer_speed_leveling: boolean
+  allow_unlimited_respecs: boolean
+  show_floating_damage_text: boolean
+  allow_hit_markers: boolean
+  server_crosshair: boolean
+  force_no_hud: boolean
+  proximity_chat: boolean
+  global_voice_chat: boolean
+  admin_logging: boolean
+  always_notify_player_left: boolean
+  dont_always_notify_player_joined: boolean
+  kick_idle_players_period: number
 }
 
+// Multipliers (expanded with all drain/recovery and dino fields)
 export interface MultipliersConfig {
   xp_multiplier: number
   taming_speed_multiplier: number
   harvest_amount_multiplier: number
   harvest_health_multiplier: number
+  player_damage_multiplier: number
+  player_resistance_multiplier: number
+  player_character_water_drain_multiplier: number
+  player_character_food_drain_multiplier: number
+  player_character_stamina_drain_multiplier: number
+  player_character_health_recovery_multiplier: number
+  dino_damage_multiplier: number
+  dino_resistance_multiplier: number
+  dino_character_health_multiplier: number
+  dino_character_food_drain_multiplier: number
+  dino_character_stamina_drain_multiplier: number
+  structure_damage_multiplier: number
+  structure_resistance_multiplier: number
   baby_mature_speed_multiplier: number
   baby_food_consumption_multiplier: number
   baby_cuddle_loss_multiplier: number
+  baby_cuddle_interval_multiplier: number
+  baby_cuddle_grace_period_multiplier: number
+  baby_imprint_stat_scale_multiplier: number
   egg_hatch_speed_multiplier: number
   poops_interval_multiplier: number
   lay_egg_interval_multiplier: number
@@ -40,11 +134,13 @@ export interface MultipliersConfig {
   crafting_speed_multiplier: number
 }
 
+// Mods configuration
 export interface ModsConfig {
   active_mods: string[]
   mod_config: Record<string, string>
 }
 
+// Paths configuration
 export interface PathsConfig {
   steam_cmd_dir: string
   server_dir: string
@@ -53,6 +149,7 @@ export interface PathsConfig {
   gamesettings_ini_path: string
 }
 
+// Performance configuration (kept as-is for now)
 export interface PerformanceConfig {
   max_structure_in_range: number
   structure_prevention_radius: number
@@ -60,6 +157,7 @@ export interface PerformanceConfig {
   enable_debug_logging: boolean
 }
 
+// World configuration (expanded with spoiling/decomp/crop/resource fields)
 export interface WorldConfig {
   day_cycle_speed_scale: number
   night_time_speed_scale: number
@@ -67,8 +165,48 @@ export interface WorldConfig {
   overall_damage_multiplier: number
   player_character_health_multiplier: number
   dino_character_health_multiplier: number
+  global_spoiling_time_multiplier: number
+  global_item_decomposition_time_multiplier: number
+  global_corpse_decomposition_time_multiplier: number
+  resource_no_replenish_radius_players: number
+  resource_no_replenish_radius_structures: number
+  resource_respawn_period_multiplier: number
+  crop_growth_speed_multiplier: number
+  crop_decay_speed_multiplier: number
+  fuel_consumption_interval_multiplier: number
+  force_reset_wild_dinos: boolean
 }
 
+// PVE configuration (NEW)
+export interface PveConfig {
+  allow_cave_building: boolean
+  disable_structure_decay_pve: boolean
+  structure_decay_period_multiplier: number
+  disable_dino_decay_pve: boolean
+  dino_decay_period_multiplier: number
+  force_allow_cave_flyers: boolean
+  allow_flyer_carry: boolean
+  extra_structure_prevention_volumes: boolean
+  prevent_diseases: boolean
+  non_permanent_diseases: boolean
+  prevent_tribe_alliances: boolean
+  pve_allow_tribe_war: boolean
+  pve_allow_tribe_war_cancel: boolean
+}
+
+// PVP configuration (NEW)
+export interface PvpConfig {
+  pvp_dino_decay: boolean
+  override_structure_platform_prevention: boolean
+  increase_pvp_respawn_interval: boolean
+  increase_pvp_respawn_interval_check_period: number
+  increase_pvp_respawn_interval_multiplier: number
+  increase_pvp_respawn_interval_base_amount: number
+  pvp_zone_structure_damage_multiplier: number
+  structure_damage_repair_cooldown: number
+}
+
+// Advanced configuration (expanded with dino control, recipe, loot quality fields)
 export interface AdvancedConfig {
   allow_unlimited_respecs: boolean
   allow_flyer_carry: boolean
@@ -78,21 +216,49 @@ export interface AdvancedConfig {
   no_survivor_downloads: boolean
   no_dino_downloads: boolean
   no_item_downloads: boolean
+  disable_dino_riding: boolean
+  disable_dino_taming: boolean
+  disable_default_dino_taming: boolean
+  max_tamed_dinos: number
+  allow_raid_dino_feeding: boolean
+  passive_defenses_damage_riderless_dinos: boolean
+  allow_platform_saddle_multi_floors: boolean
+  disable_photo_mode: boolean
+  photo_mode_range_limit: number
+  allow_custom_recipes: boolean
+  custom_recipe_effectiveness_multiplier: number
+  custom_recipe_skill_multiplier: number
+  supply_crate_loot_quality_multiplier: number
+  fishing_loot_quality_multiplier: number
+  platform_structure_limit: number
+  force_gacha_unhappy_in_caves: boolean
+  disable_friendly_fire: boolean
+  disable_structure_placement_collision: boolean
+  only_allow_specific_engrams: boolean
+  auto_unlock_engrams: number[]
   custom_config: Record<string, string>
 }
 
+// Main server configuration
 export interface ServerConfig {
   identification: IdentificationConfig
   network: NetworkConfig
   gameplay: GameplayConfig
   multipliers: MultipliersConfig
+  xp_multipliers: XpMultipliersConfig
+  dino_wild_stats: DinoStatsPerLevel
+  dino_tamed_stats: DinoTamedStatsConfig
+  player_stats: PlayerStatsPerLevel
   mods: ModsConfig
   paths: PathsConfig
   performance: PerformanceConfig
   world: WorldConfig
+  pve: PveConfig
+  pvp: PvpConfig
   advanced: AdvancedConfig
 }
 
+// Validation types (unchanged)
 export interface ValidationError {
   field: string
   message: string
