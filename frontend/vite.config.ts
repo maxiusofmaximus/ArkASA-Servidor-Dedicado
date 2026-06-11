@@ -12,9 +12,6 @@ export default defineConfig({
     target: 'esnext',
     minify: 'esbuild',
     sourcemap: false,
-    rollupOptions: {
-      external: ['@tauri-apps/api', '@tauri-apps/api/tauri'],
-    },
   },
   resolve: {
     alias: {
@@ -22,6 +19,12 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['@tauri-apps/api'],
+    include: [
+      'react',
+      'react-dom',
+      'zustand',
+      'axios'
+    ],
+    exclude: ['@tauri-apps/api', '@tauri-apps/api/tauri', '@tauri-apps/cli']
   },
 })

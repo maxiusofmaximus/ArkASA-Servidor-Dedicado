@@ -20,7 +20,6 @@
     "resolveJsonModule": true,
     "moduleResolution": "bundler",
     "baseUrl": ".",
-    "skipLibCheck": true,
     "paths": {
       "@/*": ["./src/*"]
     },
