@@ -128,17 +128,17 @@ function App() {
           case 'pvp':
             return <PvpTab config={config} />
           case 'world':
-            return <WorldAdvancedTab />
+            return <WorldAdvancedTab config={config} />
           case 'wild_dino':
             return <WildDinoTab config={config} />
           case 'tamed_dino':
             return <TamedDinoTab config={config} />
           case 'player':
-            return <PlayerStatsTab />
+            return <PlayerStatsTab config={config} />
           case 'xp_multipliers':
             return <XpMultipliersTab config={config} />
           case 'misc':
-            return <MiscTab />
+            return <MiscTab config={config} />
         }
         break
       case 'engrams':
