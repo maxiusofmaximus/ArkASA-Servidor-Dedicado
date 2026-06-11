@@ -1,18 +1,218 @@
-# Servidor dedicado de ARK: Survival Ascended para jugar con amigos
+# ARK ASA Configuration Manager
 
-Esta carpeta es una guia paso a paso para montar un servidor dedicado de ARK: Survival Ascended en Windows usando SteamCMD. Esta pensado para alguien novato: primero lo hacemos funcionar localmente, luego lo hacemos visible para amigos.
+**Professional Server Configuration UI for ARK: Survival Ascended**
 
-## Que hago primero
+A modern, desktop application built with **Rust + Tauri + React** for managing ARK Survival Ascended dedicated servers with an intuitive, game-like interface inspired by the official ARK UI.
 
-Ejecuta este archivo:
+## ✨ Features
 
-```text
-DESPLEGAR.bat
+- **Modern Desktop UI** - Tauri-based application (5-15MB, ultra-lightweight)
+- **Cyan/Purple Theme** - Matches ARK Survival Ascended aesthetic
+- **Type-Safe Configuration** - Rust backend with full validation
+- **Hot Reload** - Changes apply without server restart (where possible)
+- **Config Export/Import** - TOML format, human-readable
+- **Automatic INI Generation** - Generates Game.ini & GameUserSettings.ini
+- **Extensible Architecture** - SOLID principles throughout
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+1. **Rust** (1.70+) - [Install](https://rustup.rs/)
+2. **Node.js** (18+) - [Install](https://nodejs.org/)
+
+### Installation
+
+```bash
+# Install dependencies
+npm install
+
+# Run in development mode
+npm run tauri:dev
+
+# Build for release
+npm run tauri:build
 ```
 
-El menu muestra que ya esta instalado y que falta. La opcion `1. Desplegar todo lo posible ahora` instala o actualiza el servidor, aplica configuracion, intenta crear reglas de firewall y te deja listo para iniciar.
+### First Time Setup
 
-En este PC ya se dejo instalado:
+1. Run the application
+2. Go to "General" tab
+3. Configure:
+   - Session Name
+   - Admin Password (REQUIRED - change from default)
+   - Network ports
+4. Click "Save Configuration"
+5. Server is ready to start
+
+## 📁 Project Structure
+
+```
+ark-asa-config/
+├── src/                          # Rust backend
+│   ├── config/                   # Configuration module
+│   │   ├── schema.rs            # Data structures
+│   │   ├── validator.rs         # Validation logic (OCP)
+│   │   ├── loader.rs            # Load from TOML/INI
+│   │   └── persister.rs         # Save to disk + INI generation
+│   ├── ark/                     # Server management (future)
+│   ├── storage/                 # Database (future)
+│   ├── error.rs                 # Error types
+│   ├── lib.rs                   # Tauri commands
+│   └── main.rs                  # Entry point
+│
+├── frontend/src/                # React + TypeScript frontend
+│   ├── components/              # Reusable components
+│   ├── pages/                   # Tab pages
+│   ├── stores/                  # Zustand global state
+│   ├── services/                # API calls to Tauri
+│   ├── types/                   # TypeScript types
+│   ├── styles/                  # CSS + Tailwind
+│   ├── App.tsx                  # Main app
+│   └── main.tsx                 # React entry
+│
+├── docs/                        # Documentation
+├── tests/                       # Integration tests
+├── migrations/                  # Database migrations
+├── Cargo.toml                   # Rust dependencies
+├── package.json                 # Node dependencies
+└── build.rs                     # Tauri build script
+```
+
+## 🏗️ Architecture
+
+### Backend (Rust)
+
+**SOLID Principles:**
+- **S**ingle Responsibility - Each module has one job
+- **O**pen/Closed - Validators are composable via traits
+- **L**iskov Substitution - All validators implement ConfigValidator
+- **I**nterface Segregation - Minimal, focused trait interfaces
+- **D**ependency Inversion - DI through constructor injection
+
+**Modules:**
+- `config` - Configuration loading, validation, persistence
+- `ark` - Server lifecycle management (future: installer, process mgmt)
+- `storage` - SQLite for audit logs and version history (future)
+- `error` - Typed error handling
+
+### Frontend (React + TypeScript)
+
+**Tech Stack:**
+- **React 19** - Modern, concurrent rendering
+- **TypeScript** - Full type safety
+- **Tailwind CSS** - Utility-first styling
+- **Zustand** - Lightweight state management
+- **Tauri** - Desktop integration
+
+**Design System:**
+- Colors: Cyan (#00d4ff), Purple (#9d4edd), Dark (#0a0e27)
+- Responsive grid layout
+- Keyboard-accessible components
+
+## 🔧 Configuration
+
+### TOML Format (Primary)
+
+```toml
+[identification]
+session_name = "My ARK Server"
+admin_password = "SecurePassword123"
+
+[network]
+port = 7777
+query_port = 27015
+
+[gameplay]
+server_pve = true
+max_players = 70
+dino_count_multiplier = 2.0
+
+[multipliers]
+xp_multiplier = 3.0
+taming_speed_multiplier = 15.0
+```
+
+### Generated INI Files
+
+The app auto-generates `Game.ini` and `GameUserSettings.ini` based on TOML config. These are placed at:
+- `C:\ASA\server\ShooterGame\Saved\Config\WindowsServer\Game.ini`
+- `C:\ASA\server\ShooterGame\Saved\Config\WindowsServer\GameUserSettings.ini`
+
+## ✅ Validation
+
+All configuration changes are validated before saving:
+
+1. **Port Validation** - Unique ports in valid range (1024-65535)
+2. **Password Validation** - Not default, minimum length 4
+3. **Mod Validation** - No empty IDs, no "0", numeric only
+4. **Multiplier Validation** - Positive numbers, sensible ranges
+5. **Path Validation** - Must point to accessible directories
+
+Add custom validators without modifying existing code (OCP principle).
+
+## 📝 Development
+
+### Running Tests
+
+```bash
+# Rust tests
+cargo test
+
+# Frontend tests
+npm run test
+```
+
+### Code Quality
+
+```bash
+# Lint Rust
+cargo clippy
+
+# Format code
+cargo fmt
+npm run lint
+```
+
+### Building for Release
+
+```bash
+npm run tauri:build
+# Generates MSI installer in src-tauri/target/release/bundle/msi/
+```
+
+## 🔄 Legacy Migration
+
+Old PowerShell scripts and documentation have been archived in `/archive/`.
+
+If you need the old files:
+- Scripts: `/archive/legacy-scripts/`
+- Docs: `/archive/legacy-docs/`
+- Config examples: `/archive/legacy-config/`
+
+## 📖 Documentation
+
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, principles, patterns
+- **[API.md](docs/API.md)** - Tauri command reference
+- **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
+
+## 🛠️ Roadmap
+
+- [ ] Server start/stop/restart integration
+- [ ] Real-time server status monitoring
+- [ ] Config version history
+- [ ] Mod management UI
+- [ ] Backup/restore functionality
+- [ ] Multi-server support
+- [ ] Web UI option (in addition to desktop)
+
+## 📄 License
+
+MIT
+
+---
+
+**Built with ❤️ using Rust, Tauri, and React**
 
 ```text
 C:\ASA\steamcmd

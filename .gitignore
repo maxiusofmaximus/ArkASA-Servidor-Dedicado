@@ -1,16 +1,53 @@
-# Configuracion personal con contrasenas reales.
-config/
+# ========== RUST ARTIFACTS ==========
+target/
+Cargo.lock
+*.rlib
+*.rmeta
+*.pdb
 
-# Backups o archivos temporales locales.
+# ========== NODE / NPM ==========
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnp
+dist/
+build/
+
+# ========== IDE / EDITOR ==========
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ========== ENVIRONMENT ==========
+.env
+.env.local
+config-personal/
+
+# ========== TAURI SPECIFIC ==========
+src-tauri/target/
+frontend/dist/
+
+# ========== OS FILES ==========
+Thumbs.db
+Desktop.ini
+
+# ========== LOGS & TEMP FILES ==========
 *.log
 *.tmp
 tmp-*.ini
+logs/
 
-# No guardar instalaciones pesadas si alguien cambia rutas dentro del repo.
+# ========== BACKUPS & CONFIG ==========
+*.backup
+*.backup_*
+config/
 steamcmd/
 server/
 backups/
 
-# Windows
-Thumbs.db
-Desktop.ini
+# ========== TEST COVERAGE ==========
+coverage/
+.nyc_output/

@@ -32,6 +32,19 @@ Marca cada paso cuando lo tengas hecho.
 - [ ] Dejar RCON desactivado al principio
 - [ ] Guardar backup de `Saved`
 
+## ✅ MODS (Nuevo - 2026-06-09)
+
+- [ ] Copiar `config-ejemplos\servidor.ps1` a `config\servidor.ps1`
+- [ ] Verificar que `ActiveMods=...` en `GameUserSettings.ini` **SIN espacios después de comas**
+- [ ] Verificar que `DinoCountMultiplier=2.0` en `GameUserSettings.ini`
+- [ ] Ejecutar `DESPLEGAR.ps1` opción 1 o 4 para aplicar configuración
+- [ ] Revisar log: `C:\ASA\server\ShooterGame\Saved\Logs\ShooterGame.log` 
+- [ ] Buscar en log: "LoadGameMods with 11 mods" (no "with 0 mods")
+- [ ] Confirmar que los 11 mods se cargan correctamente
+- [ ] En servidor, ejecutar: `cheat GetGameMode Config.CustomGameModeVariableValues`
+- [ ] Verificar que `DinoCountMultiplier=2.0` en salida anterior
+- [ ] Entrar al servidor y verificar spawn duplicado de dinos
+
 ## Red local
 
 - [ ] Entrar al servidor desde tu PC o desde otro PC de casa

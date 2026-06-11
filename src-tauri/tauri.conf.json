@@ -1,0 +1,67 @@
+{
+  "productName": "ARK ASA Config Manager",
+  "version": "2.0.0",
+  "identifier": "com.arkasa.configmanager",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:5173",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ARK ASA Configuration Manager",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "label": "main"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "wix",
+      "msi"
+    ],
+    "wix": {
+      "certificatePath": null,
+      "certificatePassword": null,
+      "dialogImagePath": "",
+      "bannerPath": "",
+      "language": "en-US"
+    },
+    "msi": {
+      "certificatePath": null,
+      "certificatePassword": null,
+      "upgradeCode": null,
+      "license": null,
+      "template": null,
+      "fragmentPath": null,
+      "componentGuid": null,
+      "installerLanguages": [
+        "en-US"
+      ]
+    },
+    "macOS": {
+      "signingIdentity": null,
+      "entitlements": null,
+      "provisioningProfile": null,
+      "minimumSystemVersion": null,
+      "exceptionDomain": ""
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      },
+      "rpm": {}
+    }
+  }
+}

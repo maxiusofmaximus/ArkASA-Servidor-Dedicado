@@ -288,6 +288,11 @@ function Apply-ServerConfig {
 
     MaxPlayers = $Config.MaxPlayers
     ActiveMods = $Config.ActiveMods
+    DinoCountMultiplier = $Config.DinoCountMultiplier
+    DifficultyOffset = $Config.DifficultyOffset
+    DisableCryopodFridgeRequirement = ConvertTo-ServerBool $Config.DisableCryopodFridgeRequirement
+    DisableCryopodEnemyCheck = ConvertTo-ServerBool $Config.DisableCryopodEnemyCheck
+    EnableCryoSicknessPVE = ConvertTo-ServerBool $Config.EnableCryoSicknessPVE
 
     XPMultiplier = $Config.XpMultiplier
     TamingSpeedMultiplier = $Config.TamingSpeedMultiplier
@@ -303,13 +308,13 @@ function Apply-ServerConfig {
     PlayerHarvestingDamageMultiplier = $Config.PlayerHarvestingDamageMultiplier
 
     # Criaturas
-    DinoCountMultiplier = $Config.DinoCountMultiplier
     DinoDamageMultiplier = $Config.DinoDamageMultiplier
     DinoResistanceMultiplier = $Config.DinoResistanceMultiplier
+    DinoCharacterFoodDrainMultiplier = $Config.DinoCharacterFoodDrainMultiplier
     TamedDinoCharacterFoodDrainMultiplier = $Config.TamedDinoCharacterFoodDrainMultiplier
+    DinoCharacterStaminaDrainMultiplier = $Config.DinoCharacterStaminaDrainMultiplier
     DinoCharacterHealthRecoveryMultiplier = $Config.DinoCharacterHealthRecoveryMultiplier
     DinoHarvestingDamageMultiplier = $Config.DinoHarvestingDamageMultiplier
-    TurretDamageMultiplier = $Config.TurretDamageMultiplier
   }
 
   # --- Bloque corregido para Game.ini ---
@@ -392,6 +397,7 @@ function Apply-ServerConfig {
         OverrideMaxExperiencePointsPlayer                = $Config.OverrideMaxExperiencePointsPlayer
         OverrideMaxExperiencePointsDino                  = $Config.OverrideMaxExperiencePointsDino
         MaxNumberOfPlayersInTribe                        = $Config.MaxNumberOfPlayersInTribe
+        OverrideOfficialDifficulty                       = $Config.OverrideOfficialDifficulty
     
         # Booleanos
         bDisablePhotoMode                                = $Config.bDisablePhotoMode

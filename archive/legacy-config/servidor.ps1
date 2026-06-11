@@ -27,16 +27,26 @@ $AsaConfig = @{
   ServerPve = $true
 
   # ===== MODS (IDs de CurseForge) =====
-  # Se separan con comas: '123456,234567,345678'
+  # IMPORTANTE: Sin espacios después de comas (955131,1102729,1306435 NO 955131, 1102729, 1306435)
+  # OFICIAL: Los mods deben estar en [ServerSettings] de GameUserSettings.ini como: ActiveMods=ID1,ID2,ID3
   ActiveMods = '955131,1102729,1306435,958001,1182795,932756,930494,1262693,928650,953154,947033'
+  
+  # ===== SPAWN DE DINOS (Multiplicador de spawn) =====
+  # 2.0 = doble spawn de dinos | 1.0 = normal | 0.5 = mitad
+  DinoCountMultiplier = 2.0
 
   # ===== CONFIGURACIÓN GENERAL =====
-  DifficultyOffset = 1
+  DifficultyOffset = 2
   MaxDifficulty = $false
   DayCycleSpeedScale = 0.50387001
   DayTimeSpeedScale = 1.57114995
   NightTimeSpeedScale = 1.45879996
   StartTimeHour = 10.0000095
+
+  # ===== CRYOPOD SETTINGS =====
+  DisableCryopodFridgeRequirement = $true
+  DisableCryopodEnemyCheck = $true
+  EnableCryoSicknessPVE = $false
 
   # ===== UI Y GAMEPLAY =====
   ShowMapPlayerLocation = $true
