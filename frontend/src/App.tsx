@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/tauri'
 import Navigation from './components/Navigation'
 import ConfigForm from './components/ConfigForm'
 import ServerStatus from './components/ServerStatus'
+import StatusPage from './pages/Status'
 import { useConfigStore } from './stores/configStore'
 import type { ServerConfig, Tab } from './types'
 
@@ -53,11 +54,17 @@ function App() {
 
         <main className="flex-1 p-8">
           {config && (
-            <ConfigForm
-              config={config}
-              activeTab={activeTab}
-              onConfigChange={setConfig}
-            />
+            <>
+              {activeTab === 'status' ? (
+                <StatusPage config={config} />
+              ) : (
+                <ConfigForm
+                  config={config}
+                  activeTab={activeTab}
+                  onConfigChange={setConfig}
+                />
+              )}
+            </>
           )}
         </main>
       </div>

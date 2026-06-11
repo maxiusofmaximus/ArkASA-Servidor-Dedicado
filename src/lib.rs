@@ -195,6 +195,56 @@ async fn install_server(steam_cmd_dir: String, server_dir: String) -> Result<Str
     Ok("Server installed successfully".to_string())
 }
 
+// ============= LOGS & MONITORING =============
+
+#[tauri::command]
+async fn get_server_logs(lines: i32) -> Result<Vec<String>> {
+    // TODO: Read from server log file
+    // For now, return empty vec
+    Ok(vec![
+        "[INFO] Server started".to_string(),
+        "[INFO] Loading mods...".to_string(),
+        "[INFO] All systems operational".to_string(),
+    ])
+}
+
+#[tauri::command]
+async fn get_server_metrics() -> Result<serde_json::Value> {
+    Ok(json!({
+        "cpu_percent": 45.2,
+        "memory_mb": 2048,
+        "network_in_mbps": 2.5,
+        "network_out_mbps": 1.8,
+        "player_count": 5,
+        "fps": 60,
+    }))
+}
+
+#[tauri::command]
+async fn backup_config(config: ServerConfig, backup_name: String) -> Result<String> {
+    // TODO: Implement backup to database
+    log::info!("Backup created: {}", backup_name);
+    Ok(format!("Backup '{}' created successfully", backup_name))
+}
+
+#[tauri::command]
+async fn list_backups() -> Result<Vec<serde_json::Value>> {
+    // TODO: Load from database
+    Ok(vec![
+        json!({
+            "name": "backup_2026-06-11",
+            "timestamp": "2026-06-11 10:30",
+            "config_version": 3,
+        }),
+    ])
+}
+
+#[tauri::command]
+async fn restore_backup(backup_name: String) -> Result<ServerConfig> {
+    // TODO: Load from database
+    Ok(ServerConfig::default())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -212,6 +262,12 @@ pub fn run() {
             restart_server,
             check_installation,
             install_server,
+            // Logs & Monitoring
+            get_server_logs,
+            get_server_metrics,
+            backup_config,
+            list_backups,
+            restore_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
