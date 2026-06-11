@@ -1,10 +1,23 @@
 pub mod config;
 pub mod error;
+pub mod ark;
+pub mod storage;
 
 use config::{ConfigLoader, ConfigPersister, ServerConfig, CompositeValidator};
 use error::Result;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::Arc;
+use once_cell::sync::Lazy;
+use tokio::sync::Mutex;
+
+use ark::server::ArkServer;
+use ark::{SteamCmdInstaller, ProcessManager, ArkServerImpl};
+use storage::db::Database;
+
+static CURRENT_SERVER: Lazy<Mutex<Option<Arc<dyn ArkServer>>>> = Lazy::new(|| Mutex::new(None));
+
+// ============= CONFIG COMMANDS =============
 
 #[tauri::command]
 async fn load_config(config_path: String) -> Result<ServerConfig> {
@@ -84,15 +97,121 @@ async fn get_config_schema() -> Result<serde_json::Value> {
     }))
 }
 
+// ============= SERVER COMMANDS =============
+
+#[tauri::command]
+async fn server_status() -> Result<serde_json::Value> {
+    let server = CURRENT_SERVER.lock().await;
+
+    match server.as_ref() {
+        Some(srv) => {
+            let status = srv.status().await?;
+            Ok(json!({
+                "running": status.running,
+                "process_id": status.process_id,
+                "uptime_seconds": status.uptime_seconds,
+            }))
+        }
+        None => Ok(json!({
+            "running": false,
+            "process_id": null,
+            "uptime_seconds": 0,
+        })),
+    }
+}
+
+#[tauri::command]
+async fn start_server(config: ServerConfig) -> Result<String> {
+    let validator = CompositeValidator::default();
+    let validation = validator.validate(&config).await?;
+
+    if !validation.valid {
+        return Err(error::Error::ValidationError(
+            format!("Configuration invalid: {} errors", validation.errors.len()),
+        ));
+    }
+
+    let installer = Arc::new(SteamCmdInstaller::new(
+        &config.paths.steam_cmd_dir,
+        &config.paths.server_dir,
+    ));
+    let process_mgr = Arc::new(ProcessManager::new());
+    let server = Arc::new(ArkServerImpl::new(installer, process_mgr));
+
+    // Verify installation
+    if !server.installer.is_installed().await? {
+        return Err(error::Error::ServerNotFound {
+            path: config.paths.server_dir.clone(),
+        });
+    }
+
+    let pid = server.start(&config).await?;
+
+    let mut current = CURRENT_SERVER.lock().await;
+    *current = Some(server);
+
+    Ok(format!("Server started with PID: {}", pid))
+}
+
+#[tauri::command]
+async fn stop_server() -> Result<String> {
+    let server = CURRENT_SERVER.lock().await;
+
+    match server.as_ref() {
+        Some(srv) => {
+            srv.stop().await?;
+            drop(server);
+            let mut current = CURRENT_SERVER.lock().await;
+            *current = None;
+            Ok("Server stopped".to_string())
+        }
+        None => Err(error::Error::ProcessError("Server is not running".to_string())),
+    }
+}
+
+#[tauri::command]
+async fn restart_server(config: ServerConfig) -> Result<String> {
+    let server = CURRENT_SERVER.lock().await;
+
+    match server.as_ref() {
+        Some(srv) => {
+            srv.restart(&config).await?;
+            Ok("Server restarted".to_string())
+        }
+        None => Err(error::Error::ProcessError("Server is not running".to_string())),
+    }
+}
+
+#[tauri::command]
+async fn check_installation(steam_cmd_dir: String, server_dir: String) -> Result<bool> {
+    let installer = SteamCmdInstaller::new(&steam_cmd_dir, &server_dir);
+    installer.is_installed().await
+}
+
+#[tauri::command]
+async fn install_server(steam_cmd_dir: String, server_dir: String) -> Result<String> {
+    let installer = SteamCmdInstaller::new(&steam_cmd_dir, &server_dir);
+    installer.install().await?;
+    Ok("Server installed successfully".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            // Config
             load_config,
             validate_config,
             save_config,
             get_default_config,
             get_config_schema,
+            // Server
+            server_status,
+            start_server,
+            stop_server,
+            restart_server,
+            check_installation,
+            install_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
