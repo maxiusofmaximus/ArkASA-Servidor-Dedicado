@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { initializeTauri, invoke, getTauriStatus } from './services/tauri'
 import { logger } from './services/logger'
 import ArkLayout from './components/ArkLayout'
 import PrimaryNav from './components/PrimaryNav'
 import SubNav from './components/SubNav'
 import ActionBar from './components/ActionBar'
+import DifficultyModal from './components/DifficultyModal'
 import LogsViewer from './components/LogsViewer'
 import { useConfigStore } from './stores/configStore'
 import { useUiStore } from './stores/uiStore'
@@ -33,13 +34,56 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [tauriStatus, setTauriStatus] = useState<string>('')
+  const [serverRunning, setServerRunning] = useState(false)
+  const [isServerStarting, setIsServerStarting] = useState(false)
+  const [isServerStopping, setIsServerStopping] = useState(false)
+  const [showDifficultyModal, setShowDifficultyModal] = useState(false)
   const { config, setConfig, isSaving, setSaving } = useConfigStore()
-  const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab } = useUiStore()
+  const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore()
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>()
+  // Keep a ref to the latest config so the close handler always sees current state
+  const configRef = useRef(config)
 
   useEffect(() => {
     logger.info('App component mounted')
     initAppAndConfig()
   }, [])
+
+  // Keep configRef in sync with latest config state
+  useEffect(() => { configRef.current = config }, [config])
+
+  // Auto-save config to TOML on every change (debounced 1.5s)
+  useEffect(() => {
+    if (!config) return
+    clearTimeout(autoSaveTimer.current)
+    autoSaveTimer.current = setTimeout(() => {
+      invoke('save_config', { config }).catch(err =>
+        logger.warn('Auto-save failed', err)
+      )
+    }, 1500)
+    return () => clearTimeout(autoSaveTimer.current)
+  }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save immediately when the window is closed (beats the 1.5s debounce race)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      const win = getCurrentWindow()
+      win.onCloseRequested(async (event) => {
+        event.preventDefault()
+        const cfg = configRef.current
+        if (cfg) {
+          try {
+            await invoke('save_config', { config: cfg })
+          } catch (err) {
+            logger.warn('Close-save failed', err)
+          }
+        }
+        await win.destroy()
+      }).then(fn => { unlisten = fn })
+    }).catch(() => { /* not in Tauri */ })
+    return () => { unlisten?.() }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const initAppAndConfig = async () => {
     try {
@@ -58,16 +102,23 @@ function App() {
 
   const loadConfig = async () => {
     try {
-      logger.info('Loading default config...')
+      logger.info('Loading saved config...')
       setLoading(true)
-      const defaultConfig: ServerConfig = await invoke('get_default_config')
-      logger.info('Config loaded successfully', defaultConfig)
-      setConfig(defaultConfig)
+
+      // If we already have a config in localStorage (from persist middleware), keep it
+      // but still try to load the latest from disk to stay in sync
+      const savedConfig: ServerConfig = await invoke('load_config_or_default')
+      logger.info('Config loaded successfully', savedConfig)
+      setConfig(savedConfig)
       setError(null)
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      logger.error('Failed to load config', err)
-      setError(`Failed to load config: ${errorMsg}`)
+      logger.warn('Failed to load saved config, keeping localStorage version', err)
+      // If Tauri load fails (e.g. web mode), the persist middleware already
+      // restored config from localStorage — so only set error if we have nothing
+      if (!config) {
+        setError(`Failed to load config: ${errorMsg}`)
+      }
     } finally {
       setLoading(false)
     }
@@ -79,13 +130,22 @@ function App() {
       setSaving(true)
       await invoke('save_config', { config })
       logger.info('Config saved successfully')
+      setError(null)
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       logger.error('Failed to save config', err)
       setError(`Failed to save: ${errorMsg}`)
+      throw err  // rethrow so ActionBar doesn't show false "GUARDADO ✓"
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleChooseDifficulty = () => setShowDifficultyModal(true)
+
+  const handleDifficultySelect = (value: number) => {
+    if (!config) return
+    setConfig({ ...config, gameplay: { ...config.gameplay, override_official_difficulty: value } })
   }
 
   const handleReset = async () => {
@@ -98,6 +158,81 @@ function App() {
       }
     }
   }
+
+  const handleStartServer = async () => {
+    if (!config || isServerStarting || serverRunning) return  // prevent double-click
+    try {
+      setIsServerStarting(true)
+      setError(null)
+
+      // Validate active mods before launching
+      const activeMods = config.mods?.active_mods ?? []
+      if (activeMods.length > 0) {
+        try {
+          const unavailable = await invoke<string[]>('check_mods_available', { modIds: activeMods })
+          if (unavailable.length > 0) {
+            const proceed = confirm(
+              `⚠️ Los siguientes mods no están disponibles en CurseForge y pueden crashear el servidor:\n\n${unavailable.join(', ')}\n\nSe recomienda eliminarlos de Mods Activos antes de lanzar.\n\n¿Continuar de todos modos?`
+            )
+            if (!proceed) return
+          }
+        } catch {
+          // Ignore validation errors — don't block launch
+        }
+      }
+
+      // Auto-save before launching so the INI files are up to date
+      setSaving(true)
+      await invoke('save_config', { config })
+      setSaving(false)
+      const msg = await invoke<string>('start_server', { config })
+      logger.info('Server start result', msg)
+      setServerRunning(true)
+      setError(null)
+    } catch (err) {
+      setSaving(false)
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      logger.error('Failed to start server', err)
+      setError(`Server start failed: ${errorMsg}`)
+    } finally {
+      setIsServerStarting(false)
+    }
+  }
+
+  const handleStopServer = async () => {
+    if (isServerStopping) return  // prevent double-click
+    try {
+      setIsServerStopping(true)
+      const msg = await invoke<string>('stop_server')
+      logger.info('Server stop result', msg)
+      setError(null)
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      logger.warn('stop_server error (treating as stopped)', err)
+      setError(`Server stop failed: ${errorMsg}`)
+    } finally {
+      setServerRunning(false)
+      setIsServerStopping(false)
+    }
+  }
+
+  // Poll server process every 5s while serverRunning is true — detect crashes
+  useEffect(() => {
+    if (!serverRunning) return
+    const interval = setInterval(async () => {
+      try {
+        const running = await invoke<boolean>('is_server_running')
+        if (!running) {
+          logger.info('Server process no longer detected — updating UI state')
+          setServerRunning(false)
+          setError('El servidor se detuvo inesperadamente')
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [serverRunning]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const renderPage = () => {
     if (!config) return null
@@ -179,7 +314,28 @@ function App() {
         </div>
       )}
 
-      <ActionBar onSave={handleSave} onReset={handleReset} isSaving={isSaving} />
+      <ActionBar
+        onSave={handleSave}
+        onReset={handleReset}
+        onBack={goBack}
+        onChooseDifficulty={handleChooseDifficulty}
+        onStartServer={handleStartServer}
+        onStopServer={handleStopServer}
+        isSaving={isSaving}
+        isServerRunning={serverRunning}
+        isServerStarting={isServerStarting}
+        isServerStopping={isServerStopping}
+        variant={primaryTab === 'mod_settings' ? 'mod_settings' : 'default'}
+      />
+
+      {showDifficultyModal && config && (
+        <DifficultyModal
+          currentValue={config.gameplay.override_official_difficulty}
+          onSelect={handleDifficultySelect}
+          onClose={() => setShowDifficultyModal(false)}
+        />
+      )}
+
       <LogsViewer />
     </ArkLayout>
   )

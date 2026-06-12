@@ -58,6 +58,8 @@ function createMockInvoke() {
 
     // Mock responses for development
     const mocks: Record<string, any> = {
+      // ── Config commands ───────────────────────────────────────────────────
+      load_config_or_default: null, // resolved below after get_default_config is defined
       get_default_config: {
         identification: {
           session_name: 'ARK Server',
@@ -302,10 +304,48 @@ function createMockInvoke() {
       },
       get_server_logs: ['[INFO] Mock server started', '[WARN] Mock warning'],
       get_server_metrics: { cpu: 5, memory: 256, fps: 60 },
+      start_ping: null,
+      stop_ping: null,
+      open_external_url: null,
+      // ── CurseForge commands ───────────────────────────────────────────────
+      get_curseforge_api_key: '',
+      set_curseforge_api_key: null,
+      clear_mods_cache: null,
+      get_curseforge_mod_by_id: (args: any) => {
+        const id = args?.modId ?? ''
+        const known: Record<string, any> = {
+          '955131': { id: '955131', name: 'ARK Omega', summary: '...', download_count: 6500000, categories: ['Creatures'], logo_url: null, slug: 'ark-omega' },
+          '895711': { id: '895711', name: 'Awesome SpyGlass!', summary: '...', download_count: 4100000, categories: ['Utility & QoL'], logo_url: null, slug: 'awesome-spyglass' },
+          '928988': { id: '928988', name: 'Structures Plus (S+)', summary: '...', download_count: 4800000, categories: ['Building'], logo_url: null, slug: 'structures-plus' },
+        }
+        return known[id] ?? null
+      },
+      fetch_curseforge_mods: (args: any) => {
+        const q = (args?.searchFilter ?? '').toLowerCase()
+        const all = [
+          { id: '955131', name: 'ARK Omega', summary: 'Adds Omega mutations, skill trees, random drops and huge progression overhaul', download_count: 6500000, categories: ['Creatures'], logo_url: null, slug: 'ark-omega' },
+          { id: '958001', name: 'Primal Fear', summary: 'New tiers of dinos (Alpha, Apex, Fabled, Primal) with unique abilities', download_count: 5200000, categories: ['Creatures'], logo_url: null, slug: 'primal-fear' },
+          { id: '928988', name: 'Structures Plus (S+)', summary: 'Advanced building with pull, auto-demolish, multi-snap and 300+ new structures', download_count: 4800000, categories: ['Building & Structures'], logo_url: null, slug: 'structures-plus' },
+          { id: '895711', name: 'Awesome SpyGlass!', summary: 'Enhanced spyglass showing creature wild stats, tame effectiveness and more', download_count: 4100000, categories: ['Utility & QoL'], logo_url: null, slug: 'awesome-spyglass' },
+          { id: '922975', name: 'Dino Storage v2', summary: 'Store dinos inside Soul Traps to reduce server load and simplify management', download_count: 3900000, categories: ['Dino Management'], logo_url: null, slug: 'dino-storage-v2' },
+          { id: '932756', name: 'Classic Flyers', summary: 'Restores old flyer behaviour — speed leveling and stat gains as in Legacy ARK', download_count: 3700000, categories: ['Gameplay'], logo_url: null, slug: 'classic-flyers' },
+          { id: '929801', name: 'HG Stacking Mod 10000-90', summary: 'Stack sizes up to 10 000 for resources, ammo and consumables', download_count: 3200000, categories: ['Utility & QoL'], logo_url: null, slug: 'hg-stacking-mod' },
+          { id: '930490', name: 'Upgrade Station', summary: 'Upgrade the quality of your gear from Primitive to Ascendant', download_count: 2900000, categories: ['Utility & QoL'], logo_url: null, slug: 'upgrade-station' },
+          { id: '947033', name: 'Automated Ark', summary: 'Automates feeding, crafting and transferring across dedicated storage', download_count: 2600000, categories: ['Utility & QoL'], logo_url: null, slug: 'automated-ark' },
+          { id: '930494', name: 'Dino Finder', summary: 'Locate all your dinos on the map with a tracking device', download_count: 2100000, categories: ['Dino Management'], logo_url: null, slug: 'dino-finder' },
+        ]
+        const mods = q ? all.filter(m => m.name.toLowerCase().includes(q) || m.summary.toLowerCase().includes(q)) : all
+        return { mods, total_count: q ? mods.length : 2500, from_cache: false }
+      },
     }
 
-    const response = mocks[command]
-    if (response) {
+    // Alias so load_config_or_default returns the same shape as get_default_config
+    mocks['load_config_or_default'] = mocks['get_default_config']
+
+    const raw = mocks[command]
+    // Support function mocks (for commands that vary by args)
+    const response = typeof raw === 'function' ? raw(args) : raw
+    if (response !== undefined) {
       logger.info(`Mock response for ${command}`, response)
       return response
     }
@@ -318,7 +358,7 @@ function createMockInvoke() {
 /**
  * Invoke a Tauri command
  */
-export async function invoke(command: string, args?: any): Promise<any> {
+export async function invoke<T = any>(command: string, args?: any): Promise<T> {
   if (!invokeFunction) {
     throw new Error('Tauri not initialized. Call initializeTauri() first.')
   }

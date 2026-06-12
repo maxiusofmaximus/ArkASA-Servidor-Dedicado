@@ -16,7 +16,7 @@ export default function TamedDinoTab({ config }: TamedDinoTabProps) {
   const stats = config.dino_tamed_stats
 
   return (
-    <SettingsPanel title="TAMED DINO STAT MULTIPLIERS">
+    <SettingsPanel wide>
       <div className="px-4 py-3 border-b border-ark-cyan/20 bg-ark-secondary/10">
         <div className="flex justify-between">
           <span className="text-ark-cyan/60 text-xs font-semibold tracking-widest w-32">STAT</span>

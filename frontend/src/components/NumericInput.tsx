@@ -61,7 +61,7 @@ export default function NumericInput({
       onClick={() => !disabled && setIsEditing(true)}
       className={`text-right text-ark-cyan cursor-pointer ${disabled ? 'opacity-50' : 'hover:text-ark-cyan/80'}`}
     >
-      {value.toFixed(step < 1 ? 2 : 0)}
+      {Number.isInteger(value) ? value.toString() : value.toFixed(2)}
     </div>
   )
 }

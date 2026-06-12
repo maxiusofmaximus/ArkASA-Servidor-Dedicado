@@ -30,70 +30,56 @@ const modSettingsTabs: { id: ModSettingsSubTab; label: string }[] = [
   { id: 'available_mods', label: 'AVAILABLE MODS' },
 ]
 
+function subTabClass(active: boolean): string {
+  return active
+    ? 'px-5 py-1.5 text-xs font-bold tracking-widest uppercase text-white bg-ark-secondary border border-ark-cyan/60 transition'
+    : 'px-5 py-1.5 text-xs font-bold tracking-widest uppercase text-ark-cyan/55 hover:text-ark-cyan/80 transition'
+}
+
+function SubNavBar({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-ark-dark/80 border-b border-ark-cyan/20 px-8 py-2">
+      <div className="flex gap-1">{children}</div>
+    </div>
+  )
+}
+
 export default function SubNav({ primaryTab }: SubNavProps) {
   const { gameRulesSubTab, setGameRulesSubTab, advancedSubTab, setAdvancedSubTab, modSettingsSubTab, setModSettingsSubTab } = useUiStore()
 
-  if (primaryTab !== 'game_rules' && primaryTab !== 'advanced' && primaryTab !== 'mod_settings') {
-    return null
-  }
-
   if (primaryTab === 'game_rules') {
     return (
-      <div className="border-b border-ark-cyan/20 bg-ark-dark/50 px-8 py-2">
-        <div className="flex gap-1">
-          {gameRulesTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setGameRulesSubTab(tab.id)}
-              className={`px-4 py-1 text-xs font-semibold tracking-widest uppercase transition ${
-                gameRulesSubTab === tab.id ? 'text-white bg-ark-secondary/50' : 'text-ark-cyan/60 hover:text-ark-cyan/80'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <SubNavBar>
+        {gameRulesTabs.map((tab) => (
+          <button key={tab.id} onClick={() => setGameRulesSubTab(tab.id)} className={subTabClass(gameRulesSubTab === tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </SubNavBar>
     )
   }
 
   if (primaryTab === 'advanced') {
     return (
-      <div className="border-b border-ark-cyan/20 bg-ark-dark/50 px-8 py-2">
-        <div className="flex gap-1">
-          {advancedTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setAdvancedSubTab(tab.id)}
-              className={`px-4 py-1 text-xs font-semibold tracking-widest uppercase transition ${
-                advancedSubTab === tab.id ? 'text-white bg-ark-secondary/50' : 'text-ark-cyan/60 hover:text-ark-cyan/80'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <SubNavBar>
+        {advancedTabs.map((tab) => (
+          <button key={tab.id} onClick={() => setAdvancedSubTab(tab.id)} className={subTabClass(advancedSubTab === tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </SubNavBar>
     )
   }
 
   if (primaryTab === 'mod_settings') {
     return (
-      <div className="border-b border-ark-cyan/20 bg-ark-dark/50 px-8 py-2">
-        <div className="flex gap-1">
-          {modSettingsTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setModSettingsSubTab(tab.id)}
-              className={`px-4 py-1 text-xs font-semibold tracking-widest uppercase transition ${
-                modSettingsSubTab === tab.id ? 'text-white bg-ark-secondary/50' : 'text-ark-cyan/60 hover:text-ark-cyan/80'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <SubNavBar>
+        {modSettingsTabs.map((tab) => (
+          <button key={tab.id} onClick={() => setModSettingsSubTab(tab.id)} className={subTabClass(modSettingsSubTab === tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </SubNavBar>
     )
   }
 

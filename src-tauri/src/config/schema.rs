@@ -294,10 +294,12 @@ impl Default for ServerConfig {
 impl Default for IdentificationConfig {
     fn default() -> Self {
         Self {
-            session_name: "ARK Server".to_string(),
-            server_password: "changeme".to_string(),
-            admin_password: "changeme".to_string(),
-            server_message_of_the_day: "Welcome to ARK!".to_string(),
+            session_name: "ServidorMax".to_string(),
+            server_password: "bhahyvdhavd9954485".to_string(),
+            // Note: the original GUS had this line corrupted with extra command-line args appended.
+            // The real admin password is the part before the first '?'.
+            admin_password: "Bafbv/aHdvhZ*w956545*".to_string(),
+            server_message_of_the_day: String::new(),
         }
     }
 }
@@ -320,22 +322,22 @@ impl Default for GameplayConfig {
             server_hardcore: false,
             max_players: 70,
             difficulty_offset: 2.0,
-            override_official_difficulty: 4.6,
-            dino_count_multiplier: 2.0,
-            enable_pvp_gamma_bypass: false,
+            override_official_difficulty: 6.0, // dino max level 180
+            dino_count_multiplier: 1.0,
+            enable_pvp_gamma_bypass: true,  // EnablePvPGamma=True
             disable_pvp_gamma: false,
             allow_third_person_player: true,
             allow_cryopod_nerf_removal: false,
-            allow_speed_leveling: true,
-            allow_flyer_speed_leveling: true,
+            allow_speed_leveling: false,
+            allow_flyer_speed_leveling: false,
             allow_unlimited_respecs: true,
             show_floating_damage_text: true,
             allow_hit_markers: true,
-            server_crosshair: false,
+            server_crosshair: true,
             force_no_hud: false,
-            proximity_chat: true,
-            global_voice_chat: true,
-            admin_logging: true,
+            proximity_chat: false,
+            global_voice_chat: false,
+            admin_logging: false,
             always_notify_player_left: false,
             dont_always_notify_player_joined: false,
             kick_idle_players_period: 3600,
@@ -350,30 +352,30 @@ impl Default for MultipliersConfig {
             taming_speed_multiplier: 15.0,
             harvest_amount_multiplier: 8.0,
             harvest_health_multiplier: 3.0,
-            player_damage_multiplier: 1.0,
+            player_damage_multiplier: 3.0,
             player_resistance_multiplier: 1.0,
-            player_character_water_drain_multiplier: 1.0,
-            player_character_food_drain_multiplier: 1.0,
-            player_character_stamina_drain_multiplier: 1.0,
-            player_character_health_recovery_multiplier: 1.0,
+            player_character_water_drain_multiplier: 0.252,
+            player_character_food_drain_multiplier: 0.246,
+            player_character_stamina_drain_multiplier: 1.254,
+            player_character_health_recovery_multiplier: 3.0,
             dino_damage_multiplier: 1.0,
             dino_resistance_multiplier: 1.0,
-            dino_character_health_multiplier: 1.0,
-            dino_character_food_drain_multiplier: 1.0,
-            dino_character_stamina_drain_multiplier: 1.0,
+            dino_character_health_multiplier: 3.0, // DinoCharacterHealthRecoveryMultiplier
+            dino_character_food_drain_multiplier: 5.0,
+            dino_character_stamina_drain_multiplier: 0.248,
             structure_damage_multiplier: 1.0,
-            structure_resistance_multiplier: 1.0,
+            structure_resistance_multiplier: 0.264,
             baby_mature_speed_multiplier: 40.0,
             baby_food_consumption_multiplier: 4.0,
-            baby_cuddle_loss_multiplier: 0.07,
-            baby_cuddle_interval_multiplier: 0.5,
+            baby_cuddle_loss_multiplier: 1.0,
+            baby_cuddle_interval_multiplier: 0.074,
             baby_cuddle_grace_period_multiplier: 1.0,
-            baby_imprint_stat_scale_multiplier: 1.0,
+            baby_imprint_stat_scale_multiplier: 2.033,
             egg_hatch_speed_multiplier: 20.0,
             poops_interval_multiplier: 1.0,
-            lay_egg_interval_multiplier: 5.04,
-            mating_interval_multiplier: 2.98,
-            crafting_skill_bonus_multiplier: 1.0,
+            lay_egg_interval_multiplier: 5.039,
+            mating_interval_multiplier: 2.975,
+            crafting_skill_bonus_multiplier: 3.0,
             crafting_speed_multiplier: 3.0,
         }
     }
@@ -382,12 +384,12 @@ impl Default for MultipliersConfig {
 impl Default for XpMultipliersConfig {
     fn default() -> Self {
         Self {
-            generic_xp_multiplier: 1.0,
-            kill_xp_multiplier: 1.0,
-            harvest_xp_multiplier: 1.0,
-            craft_xp_multiplier: 1.0,
-            special_xp_multiplier: 1.0,
-            explorer_note_xp_multiplier: 1.0,
+            generic_xp_multiplier: 3.0,
+            kill_xp_multiplier: 3.0,
+            harvest_xp_multiplier: 3.0,
+            craft_xp_multiplier: 3.0,
+            special_xp_multiplier: 3.0,
+            explorer_note_xp_multiplier: 2.0,
             boss_kill_xp_multiplier: 1.0,
             alpha_kill_xp_multiplier: 1.0,
             wild_kill_xp_multiplier: 1.0,
@@ -416,17 +418,18 @@ impl Default for DinoStatsPerLevel {
 
 impl Default for PlayerStatsPerLevel {
     fn default() -> Self {
+        // PerLevelStatsMultiplier_Player[i]: all 3x except crafting_speed (index 10) = 5x
         Self {
-            health: 1.0,
-            stamina: 1.0,
-            oxygen: 1.0,
-            food: 1.0,
-            water: 1.0,
-            weight: 1.0,
-            melee_damage: 1.0,
-            speed: 1.0,
-            fortitude: 1.0,
-            crafting_speed: 1.0,
+            health: 3.0,
+            stamina: 3.0,
+            oxygen: 3.0,
+            food: 3.0,
+            water: 3.0,
+            weight: 3.0,
+            melee_damage: 3.0,
+            speed: 3.0,
+            fortitude: 3.0,
+            crafting_speed: 5.0,
             torpidity: 1.0,
         }
     }
@@ -435,31 +438,45 @@ impl Default for PlayerStatsPerLevel {
 impl Default for DinoTamedStatsConfig {
     fn default() -> Self {
         Self {
+            // PerLevelStatsMultiplier_DinoTamed[i] — index mapping: 0=Health,1=Stamina,2=Torpidity,3=Oxygen,4=Food,5=Water,7=Weight,8=Melee,9=Speed
             per_level: DinoStatsPerLevel {
-                health: 0.2,
-                stamina: 0.1,
-                oxygen: 0.1,
-                food: 0.1,
-                water: 0.1,
-                weight: 0.1,
-                melee_damage: 0.1,
-                speed: 0.1,
-                fortitude: 0.1,
-                torpidity: 0.1,
+                health: 3.0,        // [0]
+                stamina: 6.0,       // [1]
+                torpidity: 3.0,     // [2]
+                oxygen: 5.0,        // [3]
+                food: 5.0,          // [4]
+                water: 3.0,         // [5]
+                weight: 6.0,        // [7]
+                melee_damage: 1.283, // [8]
+                speed: 2.0,         // [9]
+                fortitude: 1.0,
             },
+            // PerLevelStatsMultiplier_DinoTamed_Add[i]
             add_per_level: DinoStatsPerLevel {
-                health: 0.1,
-                stamina: 0.05,
-                oxygen: 0.05,
-                food: 0.05,
-                water: 0.05,
-                weight: 0.05,
-                melee_damage: 0.05,
-                speed: 0.05,
-                fortitude: 0.05,
-                torpidity: 0.05,
+                health: 3.0,        // [0]
+                stamina: 5.0,       // [1]
+                torpidity: 3.0,     // [2]
+                oxygen: 5.0,        // [3]
+                food: 5.0,          // [4]
+                water: 3.0,         // [5]
+                weight: 5.0,        // [7]
+                melee_damage: 2.016, // [8]
+                speed: 3.0,         // [9]
+                fortitude: 1.0,
             },
-            affinity: DinoStatsPerLevel::default(),
+            // PerLevelStatsMultiplier_DinoTamed_Affinity[i]
+            affinity: DinoStatsPerLevel {
+                health: 5.0,        // [0]
+                stamina: 6.0,       // [1]
+                torpidity: 6.0,     // [2]
+                oxygen: 6.0,        // [3]
+                food: 6.0,          // [4]
+                water: 6.0,         // [5]
+                weight: 6.0,        // [7]
+                melee_damage: 1.0,  // [8]
+                speed: 1.0,         // [9]
+                fortitude: 1.0,
+            },
         }
     }
 }
@@ -467,7 +484,20 @@ impl Default for DinoTamedStatsConfig {
 impl Default for ModsConfig {
     fn default() -> Self {
         Self {
-            active_mods: vec![],
+            // User's original active mods (CurseForge IDs)
+            active_mods: vec![
+                "955131".to_string(),
+                "1102729".to_string(),
+                "1306435".to_string(),
+                "958001".to_string(),
+                "1182795".to_string(),
+                "932756".to_string(),
+                "930494".to_string(),
+                "1262693".to_string(),
+                "928650".to_string(),
+                "953154".to_string(),
+                "947033".to_string(),
+            ],
             mod_config: HashMap::new(),
         }
     }
@@ -499,21 +529,21 @@ impl Default for PerformanceConfig {
 impl Default for WorldConfig {
     fn default() -> Self {
         Self {
-            day_cycle_speed_scale: 0.5,
-            night_time_speed_scale: 1.46,
-            day_time_speed_scale: 0.5,
+            day_cycle_speed_scale: 0.504,
+            night_time_speed_scale: 1.459,
+            day_time_speed_scale: 1.571,
             overall_damage_multiplier: 1.0,
-            player_character_health_multiplier: 3.0,
+            player_character_health_multiplier: 1.0,
             dino_character_health_multiplier: 1.0,
-            global_spoiling_time_multiplier: 1.0,
-            global_item_decomposition_time_multiplier: 1.0,
-            global_corpse_decomposition_time_multiplier: 1.0,
-            resource_no_replenish_radius_players: 1.0,
+            global_spoiling_time_multiplier: 0.0,     // items never spoil
+            global_item_decomposition_time_multiplier: 0.0, // items never decompose
+            global_corpse_decomposition_time_multiplier: 6.0,
+            resource_no_replenish_radius_players: 0.502,
             resource_no_replenish_radius_structures: 1.0,
-            resource_respawn_period_multiplier: 1.0,
-            crop_growth_speed_multiplier: 1.0,
-            crop_decay_speed_multiplier: 1.0,
-            fuel_consumption_interval_multiplier: 1.0,
+            resource_respawn_period_multiplier: 1.001,
+            crop_growth_speed_multiplier: 20.0,
+            crop_decay_speed_multiplier: 6.0,
+            fuel_consumption_interval_multiplier: 4.0,
             force_reset_wild_dinos: false,
         }
     }
@@ -528,12 +558,12 @@ impl Default for PveConfig {
             disable_dino_decay_pve: false,
             dino_decay_period_multiplier: 1.0,
             force_allow_cave_flyers: false,
-            allow_flyer_carry: true,
+            allow_flyer_carry: false, // AllowFlyerCarryPvE=False
             extra_structure_prevention_volumes: false,
             prevent_diseases: false,
             non_permanent_diseases: false,
             prevent_tribe_alliances: false,
-            pve_allow_tribe_war: false,
+            pve_allow_tribe_war: true,        // bPvEAllowTribeWar=True
             pve_allow_tribe_war_cancel: false,
         }
     }
@@ -544,24 +574,37 @@ impl Default for PvpConfig {
         Self {
             pvp_dino_decay: false,
             override_structure_platform_prevention: false,
-            increase_pvp_respawn_interval: false,
-            increase_pvp_respawn_interval_check_period: 0,
-            increase_pvp_respawn_interval_multiplier: 1.0,
-            increase_pvp_respawn_interval_base_amount: 0,
-            pvp_zone_structure_damage_multiplier: 1.0,
-            structure_damage_repair_cooldown: 0,
+            increase_pvp_respawn_interval: true,
+            increase_pvp_respawn_interval_check_period: 300,
+            increase_pvp_respawn_interval_multiplier: 2.0,
+            increase_pvp_respawn_interval_base_amount: 60,
+            pvp_zone_structure_damage_multiplier: 6.0,
+            structure_damage_repair_cooldown: 1,
         }
     }
 }
 
 impl Default for AdvancedConfig {
     fn default() -> Self {
+        let mut custom = HashMap::new();
+        // Keys present in user's Game.ini that don't have dedicated schema fields:
+        custom.insert("DinoHarvestingDamageMultiplier".to_string(), "5".to_string());
+        custom.insert("PlayerHarvestingDamageMultiplier".to_string(), "7".to_string());
+        custom.insert("DinoTurretDamageMultiplier".to_string(), "1".to_string());
+        custom.insert("bHardLimitTurretsInRange".to_string(), "True".to_string());
+        custom.insert("bUseCorpseLocator".to_string(), "True".to_string());
+        custom.insert("MaxNumberOfPlayersInTribe".to_string(), "0".to_string());
+        custom.insert("UnclaimedKillXPMultiplier".to_string(), "1".to_string());
+        custom.insert("OverrideMaxExperiencePointsPlayer".to_string(), "0".to_string());
+        custom.insert("OverrideMaxExperiencePointsDino".to_string(), "0".to_string());
+        custom.insert("bUseSingleplayerSettings".to_string(), "False".to_string());
+        custom.insert("MaxDifficulty".to_string(), "False".to_string());
         Self {
             allow_unlimited_respecs: true,
-            allow_flyer_carry: true,
+            allow_flyer_carry: false,
             allow_cryo_sick_pve: false,
             disable_structure_decay: false,
-            enable_cave_flyers: true,
+            enable_cave_flyers: false,
             no_survivor_downloads: false,
             no_dino_downloads: false,
             no_item_downloads: false,
@@ -569,23 +612,23 @@ impl Default for AdvancedConfig {
             disable_dino_taming: false,
             disable_default_dino_taming: false,
             max_tamed_dinos: 5000,
-            allow_raid_dino_feeding: false,
-            passive_defenses_damage_riderless_dinos: false,
+            allow_raid_dino_feeding: true,
+            passive_defenses_damage_riderless_dinos: true,
             allow_platform_saddle_multi_floors: false,
             disable_photo_mode: false,
-            photo_mode_range_limit: 16000.0,
-            allow_custom_recipes: false,
-            custom_recipe_effectiveness_multiplier: 1.0,
-            custom_recipe_skill_multiplier: 1.0,
-            supply_crate_loot_quality_multiplier: 1.0,
-            fishing_loot_quality_multiplier: 1.0,
+            photo_mode_range_limit: 3000.0,
+            allow_custom_recipes: true,
+            custom_recipe_effectiveness_multiplier: 3.0,
+            custom_recipe_skill_multiplier: 3.0,
+            supply_crate_loot_quality_multiplier: 2.0,
+            fishing_loot_quality_multiplier: 20.0,
             platform_structure_limit: 128,
             force_gacha_unhappy_in_caves: false,
-            disable_friendly_fire: false,
-            disable_structure_placement_collision: false,
+            disable_friendly_fire: true,
+            disable_structure_placement_collision: true,
             only_allow_specific_engrams: false,
             auto_unlock_engrams: vec![],
-            custom_config: HashMap::new(),
+            custom_config: custom,
         }
     }
 }
