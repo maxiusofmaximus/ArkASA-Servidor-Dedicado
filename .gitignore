@@ -12,6 +12,7 @@ yarn-error.log
 .pnp
 dist/
 build/
+.swc/
 
 # ========== IDE / EDITOR ==========
 .vscode/
@@ -20,15 +21,19 @@ build/
 *.swo
 *~
 .DS_Store
+*.sublime-project
+*.sublime-workspace
 
 # ========== ENVIRONMENT ==========
 .env
 .env.local
+.env.*.local
 config-personal/
 
 # ========== TAURI SPECIFIC ==========
 src-tauri/target/
 frontend/dist/
+src-tauri/tauri.conf.json.bak
 
 # ========== OS FILES ==========
 Thumbs.db
@@ -39,6 +44,7 @@ Desktop.ini
 *.tmp
 tmp-*.ini
 logs/
+debug-logs/
 
 # ========== BACKUPS & CONFIG ==========
 *.backup
@@ -49,6 +55,22 @@ steamcmd/
 server/
 backups/
 
-# ========== TEST COVERAGE ==========
+# ========== TEST COVERAGE & PLAYWRIGHT ==========
 coverage/
 .nyc_output/
+.playwright/
+playwright-report/
+playwright.config.ts
+
+# ========== BUILD ARTIFACTS & INSTALLERS ==========
+*.exe
+*.msi
+*.dmg
+*.app/
+
+# ========== OTHER ==========
+.cache/
+.temp/
+*.pem
+*.key
+chat.json
