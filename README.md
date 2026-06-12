@@ -2,6 +2,9 @@
 
 **Professional Server Configuration UI for ARK: Survival Ascended**
 
+[![Release](https://img.shields.io/github/v/release/maxiusofmaximus/ArkASA-Servidor-Dedicado)](https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A modern, desktop application built with **Rust + Tauri + React** for managing ARK Survival Ascended dedicated servers with an intuitive, game-like interface inspired by the official ARK UI.
 
 ## ✨ Features
@@ -16,12 +19,21 @@ A modern, desktop application built with **Rust + Tauri + React** for managing A
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Download Pre-Built Version
+
+Download the latest installer from [GitHub Releases](https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases):
+- **ARK ASA Config Manager v1.0** (Windows 64-bit installer)
+
+Simply run the `.exe` installer and follow the on-screen prompts.
+
+### Build from Source
+
+#### Prerequisites
 
 1. **Rust** (1.70+) - [Install](https://rustup.rs/)
 2. **Node.js** (18+) - [Install](https://nodejs.org/)
 
-### Installation
+#### Installation
 
 ```bash
 # Install dependencies
@@ -196,15 +208,26 @@ If you need the old files:
 - **[API.md](docs/API.md)** - Tauri command reference
 - **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
 
-## 🛠️ Roadmap
+## ✅ Current Status
+
+**v1.0 Release** - Core configuration management complete:
+- ✅ Desktop application with game-inspired UI
+- ✅ Configuration loading/saving (TOML format)
+- ✅ Automatic INI generation
+- ✅ Comprehensive validation
+- ✅ Type-safe Rust backend
+- ✅ Full documentation
+
+## 🛠️ Roadmap (Future Versions)
 
 - [ ] Server start/stop/restart integration
 - [ ] Real-time server status monitoring
-- [ ] Config version history
-- [ ] Mod management UI
+- [ ] Config version history and rollback
+- [ ] Mod management UI with validation
 - [ ] Backup/restore functionality
 - [ ] Multi-server support
 - [ ] Web UI option (in addition to desktop)
+- [ ] Performance monitoring and diagnostics
 
 ## 📄 License
 
