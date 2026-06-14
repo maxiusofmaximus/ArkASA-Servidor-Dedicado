@@ -19,12 +19,25 @@ A modern, desktop application built with **Rust + Tauri + React** for managing A
 
 ## 🚀 Quick Start
 
-### Download Pre-Built Version
+### ⚡ Super Quick (30 seconds)
 
-Download the latest installer from [GitHub Releases](https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases):
-- **ARK ASA Config Manager v1.0** (Windows 64-bit installer)
+1. Download installer from [GitHub Releases](https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases)
+2. Run the `.exe` file
+3. Follow on-screen prompts
+4. Open the app and start configuring!
 
-Simply run the `.exe` installer and follow the on-screen prompts.
+### 📚 Complete Guide
+
+**First time? Start here:**
+
+👉 **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Step-by-step guide for beginners (30+ pages, explains everything)
+
+**All documents at a glance:**
+- [📖 Documentation Index](docs/INDEX.md) - Choose your learning path
+- [🔗 Network & Connection Guide](docs/STEAM_A2S.md) - How to connect locally or remotely
+- [🎮 Complete User Guide](docs/USER_GUIDE.md) - All features explained
+- [❓ FAQ](docs/FAQ.md) - 50+ answered questions
+- [🔧 Troubleshooting](docs/TROUBLESHOOTING.md) - Solutions to common problems
 
 ### Build from Source
 
@@ -203,6 +216,17 @@ If you need the old files:
 - Config examples: `/archive/legacy-config/`
 
 ## 📖 Documentation
+
+### 🎯 User Documentation (Start Here!)
+
+- **[INDEX.md](docs/INDEX.md)** - Documentation hub & navigation guide
+- **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - Complete beginner's guide (installation, setup, first server)
+- **[STEAM_A2S.md](docs/STEAM_A2S.md)** - Network connectivity guide (local & remote, port forwarding, Tailscale)
+- **[USER_GUIDE.md](docs/USER_GUIDE.md)** - Complete feature reference (all tabs, settings, commands)
+- **[FAQ.md](docs/FAQ.md)** - Frequently asked questions (50+ Q&A)
+- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Problem solving guide (10+ common issues)
+
+### 🔧 Technical Documentation
 
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, principles, patterns
 - **[API.md](docs/API.md)** - Tauri command reference
