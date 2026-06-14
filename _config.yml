@@ -1,0 +1,58 @@
+# GitHub Pages Jekyll Configuration
+# For ARK ASA Configuration Manager Documentation
+
+title: "ARK ASA Configuration Manager"
+tagline: "Professional Server Configuration UI for ARK: Survival Ascended"
+description: "Complete documentation for setting up, configuring, and managing your own ARK Survival Ascended dedicated server."
+
+# Site URL
+url: "https://maxiusofmaximus.github.io/ArkASA-Servidor-Dedicado"
+baseurl: "/ArkASA-Servidor-Dedicado"
+
+# GitHub Pages settings
+remote_theme: pages-themes/minimal@v0.2.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-relative-links
+  - jekyll-titles-from-headings
+
+# Markdown processing
+markdown: kramdown
+kramdown:
+  parse_block_html: true
+  toc_levels: 2..3
+
+# Collections
+collections_dir: docs
+
+# Relative links
+relative-links:
+  collections: true
+
+# Titles from headings
+titles_from_headings:
+  enabled: true
+  levels: h2
+
+# Site configuration
+github:
+  owner_name: maxiusofmaximus
+  owner_url: https://github.com/maxiusofmaximus
+  repository_url: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado
+  issue_url: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/issues
+
+# Exclude from site
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+  - src-tauri/
+  - frontend/
+  - scripts/
+  - tests/
+  - .gitignore
+  - CLAUDE.md
