@@ -1,13 +1,16 @@
 pub mod config;
 pub mod error;
 pub mod cli;
+pub mod backup;
+pub mod stub;
 
 use config::{ConfigLoader, ConfigPersister, ServerConfig, CompositeValidator};
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Command;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Path helper — uses Tauri v2's proper path API so it works regardless of
@@ -37,6 +40,176 @@ fn get_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct PingState(Mutex<Option<tokio::task::JoinHandle<()>>>);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tray state — shared bool so the close handler knows whether to hide or exit
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct TrayState {
+    pub minimize_to_tray: AtomicBool,
+}
+
+#[tauri::command]
+fn set_minimize_to_tray(state: tauri::State<Arc<TrayState>>, enabled: bool) {
+    state.minimize_to_tray.store(enabled, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// On-demand server commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Start the UDP stub for one map so it appears in the ARK browser while
+/// ARK itself is not running.  When a player connects, the stub wakes ARK.
+#[tauri::command]
+fn enable_on_demand(
+    config: ServerConfig,
+    map_index: usize,
+    auto_shutdown_min: u64,
+    state: tauri::State<Arc<stub::OnDemandState>>,
+) -> std::result::Result<String, String> {
+    let maps: Vec<String> = if config.cluster_maps.is_empty() {
+        vec!["TheIsland_WP".to_string()]
+    } else {
+        config.cluster_maps.clone()
+    };
+
+    let map = maps.get(map_index)
+        .cloned()
+        .unwrap_or_else(|| "TheIsland_WP".to_string());
+
+    let is_cluster = maps.len() > 1;
+    let cluster_id: String = config.identification.session_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect::<String>()
+        .to_lowercase();
+    let cluster_id = if cluster_id.is_empty() { "ark_cluster".to_string() } else { cluster_id };
+
+    let server_dir = config.paths.server_dir.trim_end_matches('\\');
+    let exe = format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", server_dir);
+    let cluster_dir = format!("{}\\clusters", server_dir);
+
+    let game_port  = config.network.port       + (map_index as u16) * 2;
+    let query_port = config.network.query_port + map_index as u16;
+    let rcon_port  = config.network.rcon_port  + map_index as u16;
+
+    let map_label = map.trim_end_matches("_WP");
+    let session_name = if is_cluster && map_index > 0 {
+        format!("{} · {}", config.identification.session_name, map_label)
+    } else {
+        config.identification.session_name.clone()
+    };
+
+    let mut launch_params = format!(
+        "{}?listen?SessionName={}?ServerAdminPassword={}",
+        map, session_name, config.identification.admin_password,
+    );
+    if !config.identification.server_password.is_empty() {
+        launch_params.push_str(&format!("?ServerPassword={}", config.identification.server_password));
+    }
+    launch_params.push_str(&format!(
+        "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}",
+        config.gameplay.max_players, game_port, query_port, rcon_port,
+    ));
+
+    let mut extra_args = vec![
+        "-NoBattlEye".to_string(),
+        "-server".to_string(),
+        "-log".to_string(),
+        "-servergamelog".to_string(),
+        "-NoTransferFromFiltering".to_string(),
+        format!("-WinLiveMaxPlayers={}", config.gameplay.max_players),
+    ];
+    if is_cluster {
+        extra_args.push(format!("-clusterid={}", cluster_id));
+        extra_args.push(format!("-ClusterDirOverride={}", cluster_dir));
+    }
+    if !config.mods.active_mods.is_empty() {
+        extra_args.push(format!("-mods={}", config.mods.active_mods.join(",")));
+    }
+
+    let params = stub::MapLaunchParams {
+        map: map.clone(),
+        exe,
+        launch_params,
+        extra_args,
+        game_port,
+        query_port,
+        auto_shutdown_min,
+    };
+
+    // Stop any existing stub for the same game_port
+    {
+        let mut handles = state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(pos) = handles.iter().position(|h| h.game_port == game_port) {
+            let old = handles.remove(pos);
+            let _ = old.shutdown_tx.send(true);
+            old.task.abort();
+        }
+    }
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(stub::run_stub(params, shutdown_rx));
+
+    state.0.lock().map_err(|e| e.to_string())?.push(stub::OnDemandHandle {
+        map: map.clone(),
+        game_port,
+        query_port,
+        shutdown_tx,
+        task,
+    });
+
+    Ok(format!("Stub started for {} (game={} query={})", map, game_port, query_port))
+}
+
+/// Stop the on-demand stub for the given game_port.
+#[tauri::command]
+fn disable_on_demand(
+    game_port: u16,
+    state: tauri::State<Arc<stub::OnDemandState>>,
+) -> std::result::Result<(), String> {
+    let mut handles = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(pos) = handles.iter().position(|h| h.game_port == game_port) {
+        let handle = handles.remove(pos);
+        let _ = handle.shutdown_tx.send(true);
+        handle.task.abort();
+        log::info!("On-demand stub stopped for game_port={}", game_port);
+    }
+    Ok(())
+}
+
+/// Stop ALL on-demand stubs.
+#[tauri::command]
+fn disable_all_on_demand(
+    state: tauri::State<Arc<stub::OnDemandState>>,
+) -> std::result::Result<(), String> {
+    let mut handles = state.0.lock().map_err(|e| e.to_string())?;
+    for h in handles.drain(..) {
+        let _ = h.shutdown_tx.send(true);
+        h.task.abort();
+    }
+    Ok(())
+}
+
+/// Return the list of active stub statuses.
+#[tauri::command]
+fn get_on_demand_status(
+    state: tauri::State<Arc<stub::OnDemandState>>,
+) -> std::result::Result<Vec<stub::StubStatus>, String> {
+    let handles = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(handles.iter().map(|h| stub::StubStatus {
+        map: h.map.clone(),
+        state: if h.task.is_finished() { "stopped".to_string() } else { "dormant".to_string() },
+        game_port: h.game_port,
+        query_port: h.query_port,
+        players: 0,
+    }).collect())
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CurseForge types
@@ -574,48 +747,104 @@ fn server_status() -> std::result::Result<serde_json::Value, String> {
 fn start_server(config: ServerConfig) -> std::result::Result<String, String> {
     use std::process::Command;
 
-    let exe = format!(
-        "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
-        config.paths.server_dir.trim_end_matches('\\')
-    );
+    let maps: Vec<String> = if config.cluster_maps.is_empty() {
+        vec!["TheIsland_WP".to_string()]
+    } else {
+        config.cluster_maps.clone()
+    };
 
-    let mut params = format!(
-        "TheIsland_WP?listen?SessionName={}?ServerAdminPassword={}",
-        config.identification.session_name,
-        config.identification.admin_password,
-    );
-    if !config.identification.server_password.is_empty() {
-        params.push_str(&format!("?ServerPassword={}", config.identification.server_password));
+    let is_cluster = maps.len() > 1;
+
+    // Cluster ID derived from session name (alphanumeric only)
+    let cluster_id: String = config.identification.session_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect::<String>()
+        .to_lowercase();
+    let cluster_id = if cluster_id.is_empty() { "ark_cluster".to_string() } else { cluster_id };
+
+    let server_dir = config.paths.server_dir.trim_end_matches('\\');
+    let exe = format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", server_dir);
+    let cluster_dir = format!("{}\\clusters", server_dir);
+
+    let mut launched: Vec<String> = Vec::new();
+
+    for (i, raw_map) in maps.iter().enumerate() {
+        let map = if raw_map.trim().is_empty() { "TheIsland_WP".to_string() } else { raw_map.trim().to_string() };
+
+        // Each cluster instance gets offset ports to avoid conflicts:
+        //   game port:  base + i*2  (ARK uses port & port+1 internally)
+        //   query port: base + i
+        //   rcon port:  base + i
+        let game_port  = config.network.port       + (i as u16) * 2;
+        let query_port = config.network.query_port + i as u16;
+        let rcon_port  = config.network.rcon_port  + i as u16;
+
+        // In cluster mode each instance gets a map suffix so players can
+        // distinguish them in the ARK browser (e.g. "ServidorMax · Ragnarok").
+        // The primary map (index 0) keeps the bare session name.
+        let map_label = map.trim_end_matches("_WP");
+        let session_name = if is_cluster && i > 0 {
+            format!("{} · {}", config.identification.session_name, map_label)
+        } else {
+            config.identification.session_name.clone()
+        };
+
+        let mut params = format!(
+            "{}?listen?SessionName={}?ServerAdminPassword={}",
+            map,
+            session_name,
+            config.identification.admin_password,
+        );
+        if !config.identification.server_password.is_empty() {
+            params.push_str(&format!("?ServerPassword={}", config.identification.server_password));
+        }
+        params.push_str(&format!(
+            "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}",
+            config.gameplay.max_players,
+            game_port,
+            query_port,
+            rcon_port,
+        ));
+
+        let mut cmd = Command::new(&exe);
+        cmd.arg(&params);
+        cmd.arg("-NoBattlEye");
+        cmd.arg("-server");
+        cmd.arg("-log");
+        cmd.arg("-servergamelog");
+        cmd.arg("-NoTransferFromFiltering");
+        cmd.arg(format!("-WinLiveMaxPlayers={}", config.gameplay.max_players));
+
+        if is_cluster {
+            cmd.arg(format!("-clusterid={}", cluster_id));
+            cmd.arg(format!("-ClusterDirOverride={}", cluster_dir));
+        }
+
+        if !config.mods.active_mods.is_empty() {
+            cmd.arg(format!("-mods={}", config.mods.active_mods.join(",")));
+        }
+
+        log::info!("Launching ARK {} (cluster={}) port={}", map, is_cluster, game_port);
+
+        match cmd.spawn() {
+            Ok(child) => launched.push(format!("{} PID {}", map, child.id())),
+            Err(e) => return Err(format!(
+                "Failed to start {}: {}. Check server at: {}",
+                map, e, exe
+            )),
+        }
+
+        // Brief stagger between cluster instances to avoid resource contention
+        if is_cluster && i < maps.len() - 1 {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
     }
-    params.push_str(&format!(
-        "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}",
-        config.gameplay.max_players,
-        config.network.port,
-        config.network.query_port,
-        config.network.rcon_port,
-    ));
 
-    let mut cmd = Command::new(&exe);
-    cmd.arg(&params);
-    cmd.arg("-NoBattlEye");
-    cmd.arg("-server");
-    cmd.arg("-log");
-    cmd.arg("-servergamelog");
-    cmd.arg("-NoTransferFromFiltering");
-    cmd.arg(format!("-WinLiveMaxPlayers={}", config.gameplay.max_players));
-
-    if !config.mods.active_mods.is_empty() {
-        cmd.arg(format!("-mods={}", config.mods.active_mods.join(",")));
-    }
-
-    log::info!("Launching ARK server: {} {}", exe, params);
-
-    match cmd.spawn() {
-        Ok(child) => Ok(format!("Server started (PID {})", child.id())),
-        Err(e) => Err(format!(
-            "Failed to start server: {}. Check that the server is installed at: {}",
-            e, exe
-        )),
+    if is_cluster {
+        Ok(format!("Cluster iniciado [{} instancias]: {}", launched.len(), launched.join(" | ")))
+    } else {
+        Ok(format!("Server started ({})", launched[0]))
     }
 }
 
@@ -756,8 +985,65 @@ fn stop_ping(state: tauri::State<'_, PingState>) -> std::result::Result<(), Stri
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let tray_state = Arc::new(TrayState {
+        minimize_to_tray: AtomicBool::new(true),
+    });
+    let on_demand_state = Arc::new(stub::OnDemandState::new());
+
     tauri::Builder::default()
         .manage(PingState(Mutex::new(None)))
+        .manage(tray_state)
+        .manage(on_demand_state)
+        .setup(|app| {
+            use tauri::menu::{MenuBuilder, MenuItemBuilder};
+            use tauri::tray::TrayIconBuilder;
+
+            // Build tray context menu
+            let show_item = MenuItemBuilder::with_id("show", "Mostrar").build(app)?;
+            let sep      = tauri::menu::PredefinedMenuItem::separator(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Salir").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&show_item, &sep, &quit_item])
+                .build()?;
+
+            // Build tray icon
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("ARK ASA Server Manager")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        // Tell frontend to save config, then exit after a short grace period
+                        let _ = app.emit("tray-quit", ());
+                        let app2 = app.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(600));
+                            app2.exit(0);
+                        });
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    use tauri::tray::TrayIconEvent;
+                    if matches!(event, TrayIconEvent::Click { .. }) {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Config
             load_config,
@@ -785,11 +1071,29 @@ pub fn run() {
             backup_config,
             list_backups,
             restore_backup,
+            // Cloud backup
+            backup::backup_saves,
+            backup::read_server_log,
+            backup::start_gdrive_oauth,
+            backup::start_onedrive_oauth,
+            backup::refresh_gdrive_token,
+            backup::refresh_onedrive_token,
+            backup::test_s3_connection,
+            backup::list_cloud_backups,
+            backup::restore_backup_from_cloud,
             // Ping / Tailscale
             start_ping,
             stop_ping,
             // Utilities
             open_external_url,
+            // Tray
+            set_minimize_to_tray,
+            quit_app,
+            // On-demand stubs
+            enable_on_demand,
+            disable_on_demand,
+            disable_all_on_demand,
+            get_on_demand_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

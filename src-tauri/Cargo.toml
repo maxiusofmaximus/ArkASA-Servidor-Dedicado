@@ -11,7 +11,7 @@ default-run = "ark-asa-config"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["custom-protocol", "devtools"] }
+tauri = { version = "2.0", features = ["custom-protocol", "devtools", "tray-icon"] }
 tauri-plugin-store = "2.0"
 tauri-plugin-shell = "2.0"
 tokio = { version = "1.40", features = ["full"] }
@@ -32,6 +32,12 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 lazy_static = "1.4"
 walkdir = "2.4"
 mockall = "0.12"
+zip = "2"
+base64 = { version = "0.22", features = ["std"] }
+rand = "0.8"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

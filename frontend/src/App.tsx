@@ -6,9 +6,12 @@ import PrimaryNav from './components/PrimaryNav'
 import SubNav from './components/SubNav'
 import ActionBar from './components/ActionBar'
 import DifficultyModal from './components/DifficultyModal'
+import OptionsModal from './components/OptionsModal'
+import ServerLogsPanel from './components/ServerLogsPanel'
 import LogsViewer from './components/LogsViewer'
 import { useConfigStore } from './stores/configStore'
 import { useUiStore } from './stores/uiStore'
+import { useBackupStore } from './stores/backupStore'
 import type { ServerConfig, PrimaryTab } from './types'
 
 // Tab page imports
@@ -35,26 +38,73 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [tauriStatus, setTauriStatus] = useState<string>('')
   const [serverRunning, setServerRunning] = useState(false)
+  const [stubsRunning, setStubsRunning] = useState(false)  // on-demand stubs active (no ARK process yet)
   const [isServerStarting, setIsServerStarting] = useState(false)
   const [isServerStopping, setIsServerStopping] = useState(false)
   const [showDifficultyModal, setShowDifficultyModal] = useState(false)
+  const [showOptionsModal, setShowOptionsModal] = useState(false)
+  const [showLogsPanel, setShowLogsPanel] = useState(false)
   const { config, setConfig, isSaving, setSaving } = useConfigStore()
   const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore()
+  const { logsEnabled, minimizeToTray, manualSave, onDemandEnabled, onDemandMaps, autoShutdownMin } = useBackupStore()
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const errorDismissTimer = useRef<ReturnType<typeof setTimeout>>()
   // Keep a ref to the latest config so the close handler always sees current state
   const configRef = useRef(config)
+  // Keep a ref to minimizeToTray so the close handler always sees current value
+  const minimizeToTrayRef = useRef(minimizeToTray)
+
+  const setErrorAutoDismiss = (msg: string | null) => {
+    setError(msg)
+    clearTimeout(errorDismissTimer.current)
+    if (msg !== null) {
+      errorDismissTimer.current = setTimeout(() => setError(null), 3000)
+    }
+  }
 
   useEffect(() => {
     logger.info('App component mounted')
     initAppAndConfig()
   }, [])
 
-  // Keep configRef in sync with latest config state
-  useEffect(() => { configRef.current = config }, [config])
-
-  // Auto-save config to TOML on every change (debounced 1.5s)
+  // Escape key → toggle Options modal (unless another modal is open)
   useEffect(() => {
-    if (!config) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (showDifficultyModal) return // let DifficultyModal handle it
+      setShowOptionsModal((prev) => !prev)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [showDifficultyModal])
+
+  // Keep refs in sync
+  useEffect(() => { configRef.current = config }, [config])
+  useEffect(() => { minimizeToTrayRef.current = minimizeToTray }, [minimizeToTray])
+
+  // Sync minimizeToTray to Rust whenever it changes
+  useEffect(() => {
+    invoke('set_minimize_to_tray', { enabled: minimizeToTray }).catch(() => {})
+  }, [minimizeToTray])
+
+  // Listen for tray "Salir" — save config before the process exits
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen('tray-quit', async () => {
+        const cfg = configRef.current
+        if (cfg) {
+          try { await invoke('save_config', { config: cfg }) } catch {}
+        }
+        await invoke('quit_app')
+      }).then((fn) => { unlisten = fn })
+    }).catch(() => {})
+    return () => { unlisten?.() }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save config to TOML on every change (debounced 1.5s) — disabled in manual save mode
+  useEffect(() => {
+    if (!config || manualSave) return
     clearTimeout(autoSaveTimer.current)
     autoSaveTimer.current = setTimeout(() => {
       invoke('save_config', { config }).catch(err =>
@@ -79,7 +129,11 @@ function App() {
             logger.warn('Close-save failed', err)
           }
         }
-        await win.destroy()
+        if (minimizeToTrayRef.current) {
+          await win.hide()
+        } else {
+          await win.destroy()
+        }
       }).then(fn => { unlisten = fn })
     }).catch(() => { /* not in Tauri */ })
     return () => { unlisten?.() }
@@ -95,7 +149,7 @@ function App() {
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       logger.error('App initialization failed', err)
-      setError(`Failed to initialize: ${errorMsg}`)
+      setErrorAutoDismiss(`Failed to initialize: ${errorMsg}`)
       setLoading(false)
     }
   }
@@ -117,7 +171,7 @@ function App() {
       // If Tauri load fails (e.g. web mode), the persist middleware already
       // restored config from localStorage — so only set error if we have nothing
       if (!config) {
-        setError(`Failed to load config: ${errorMsg}`)
+        setErrorAutoDismiss(`Failed to load config: ${errorMsg}`)
       }
     } finally {
       setLoading(false)
@@ -134,7 +188,7 @@ function App() {
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       logger.error('Failed to save config', err)
-      setError(`Failed to save: ${errorMsg}`)
+      setErrorAutoDismiss(`Failed to save: ${errorMsg}`)
       throw err  // rethrow so ActionBar doesn't show false "GUARDADO ✓"
     } finally {
       setSaving(false)
@@ -154,7 +208,7 @@ function App() {
         const defaults = await invoke('get_default_config')
         setConfig(defaults)
       } catch (err) {
-        setError(`Failed to load defaults: ${err}`)
+        setErrorAutoDismiss(`Failed to load defaults: ${err}`)
       }
     }
   }
@@ -185,15 +239,54 @@ function App() {
       setSaving(true)
       await invoke('save_config', { config })
       setSaving(false)
-      const msg = await invoke<string>('start_server', { config })
-      logger.info('Server start result', msg)
-      setServerRunning(true)
+
+      const maps: string[] = config.cluster_maps?.length ? config.cluster_maps : ['TheIsland_WP']
+
+      // Split maps into always-on vs on-demand (dormant stubs)
+      const normalIndices: number[] = []
+      const dormantIndices: number[] = []
+      maps.forEach((mapId, i) => {
+        if (onDemandEnabled && onDemandMaps.includes(mapId)) dormantIndices.push(i)
+        else normalIndices.push(i)
+      })
+
+      // Start on-demand stubs (non-blocking — they just bind ports)
+      for (const idx of dormantIndices) {
+        try {
+          await invoke('enable_on_demand', {
+            config,
+            mapIndex: idx,
+            autoShutdownMin,
+          })
+          logger.info(`On-demand stub started for map index ${idx}`)
+        } catch (err) {
+          logger.warn(`Failed to start stub for map index ${idx}`, err)
+        }
+      }
+
+      // Launch always-on maps via normal start_server (only if there are any)
+      if (normalIndices.length > 0) {
+        // Build a config slice with only the always-on maps
+        const normalConfig = {
+          ...config,
+          cluster_maps: normalIndices.map((i) => maps[i]),
+        }
+        const msg = await invoke<string>('start_server', { config: normalConfig })
+        logger.info('Server start result', msg)
+        setServerRunning(true)
+      }
+
+      // If only stubs (no always-on ARK), track via stubsRunning instead
+      if (dormantIndices.length > 0 && normalIndices.length === 0) {
+        setStubsRunning(true)
+      }
+
       setError(null)
     } catch (err) {
       setSaving(false)
       const errorMsg = err instanceof Error ? err.message : String(err)
       logger.error('Failed to start server', err)
-      setError(`Server start failed: ${errorMsg}`)
+      setErrorAutoDismiss(`Server start failed: ${errorMsg}`)
     } finally {
       setIsServerStarting(false)
     }
@@ -203,15 +296,18 @@ function App() {
     if (isServerStopping) return  // prevent double-click
     try {
       setIsServerStopping(true)
+      // Stop all on-demand stubs first
+      invoke('disable_all_on_demand').catch(() => {})
       const msg = await invoke<string>('stop_server')
       logger.info('Server stop result', msg)
       setError(null)
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       logger.warn('stop_server error (treating as stopped)', err)
-      setError(`Server stop failed: ${errorMsg}`)
+      setErrorAutoDismiss(`Server stop failed: ${errorMsg}`)
     } finally {
       setServerRunning(false)
+      setStubsRunning(false)
       setIsServerStopping(false)
     }
   }
@@ -225,7 +321,7 @@ function App() {
         if (!running) {
           logger.info('Server process no longer detected — updating UI state')
           setServerRunning(false)
-          setError('El servidor se detuvo inesperadamente')
+          setErrorAutoDismiss('El servidor se detuvo inesperadamente')
         }
       } catch {
         // ignore transient poll errors
@@ -321,10 +417,15 @@ function App() {
         onChooseDifficulty={handleChooseDifficulty}
         onStartServer={handleStartServer}
         onStopServer={handleStopServer}
+        onOpenOptions={() => setShowOptionsModal(true)}
+        onToggleLogs={() => setShowLogsPanel((p) => !p)}
         isSaving={isSaving}
-        isServerRunning={serverRunning}
+        autoSave={!manualSave}
+        isServerRunning={serverRunning || stubsRunning}
         isServerStarting={isServerStarting}
         isServerStopping={isServerStopping}
+        showLogsButton={logsEnabled}
+        isLogsOpen={showLogsPanel}
         variant={primaryTab === 'mod_settings' ? 'mod_settings' : 'default'}
       />
 
@@ -333,6 +434,17 @@ function App() {
           currentValue={config.gameplay.override_official_difficulty}
           onSelect={handleDifficultySelect}
           onClose={() => setShowDifficultyModal(false)}
+        />
+      )}
+
+      {showOptionsModal && (
+        <OptionsModal onClose={() => setShowOptionsModal(false)} />
+      )}
+
+      {showLogsPanel && config && (
+        <ServerLogsPanel
+          serverDir={config.paths.server_dir}
+          onClose={() => setShowLogsPanel(false)}
         />
       )}
 

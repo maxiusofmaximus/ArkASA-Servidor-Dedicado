@@ -61,6 +61,7 @@ function createMockInvoke() {
       // ── Config commands ───────────────────────────────────────────────────
       load_config_or_default: null, // resolved below after get_default_config is defined
       get_default_config: {
+        cluster_maps: ['TheIsland_WP'],
         identification: {
           session_name: 'ARK Server',
           server_password: 'changeme',
@@ -307,6 +308,12 @@ function createMockInvoke() {
       start_ping: null,
       stop_ping: null,
       open_external_url: null,
+      set_minimize_to_tray: null,
+      quit_app: null,
+      enable_on_demand: null,
+      disable_on_demand: null,
+      disable_all_on_demand: null,
+      get_on_demand_status: () => [],
       // ── CurseForge commands ───────────────────────────────────────────────
       get_curseforge_api_key: '',
       set_curseforge_api_key: null,
@@ -341,6 +348,27 @@ function createMockInvoke() {
 
     // Alias so load_config_or_default returns the same shape as get_default_config
     mocks['load_config_or_default'] = mocks['get_default_config']
+
+    // Backup mocks
+    mocks['backup_saves'] = () => `ark_backup_TheIsland_WP_${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}.zip`
+    mocks['read_server_log'] = () => [
+      '[2026.06.13-10.00.01:000][  0]ARK Version: 39.12',
+      '[2026.06.13-10.00.05:123][  0]Starting ArkGameMode...',
+      '[2026.06.13-10.00.10:456][  1]Loaded mods: 9',
+      '[2026.06.13-10.00.15:789][  2]Server ready on port 7777',
+    ]
+    mocks['start_gdrive_oauth'] = async () => ({ access_token: 'mock-access', refresh_token: 'mock-refresh' })
+    mocks['start_onedrive_oauth'] = async () => ({ access_token: 'mock-access', refresh_token: 'mock-refresh' })
+    mocks['test_s3_connection'] = async () => 'Conectado — HTTP 200 (mock)'
+    mocks['refresh_gdrive_token'] = async () => 'mock-access-refreshed'
+    mocks['refresh_onedrive_token'] = async () => 'mock-access-refreshed'
+    mocks['list_cloud_backups'] = async () => [
+      { key: 'ark_backup_TheIsland_WP_20260613_120000.zip', name: 'ark_backup_TheIsland_WP_20260613_120000.zip', size_bytes: 312_450_000, created_at: '2026-06-13T12:00:00Z' },
+      { key: 'ark_backup_TheIsland_WP_20260612_080000.zip', name: 'ark_backup_TheIsland_WP_20260612_080000.zip', size_bytes: 298_100_000, created_at: '2026-06-12T08:00:00Z' },
+      { key: 'ark_backup_TheIsland_WP_20260611_200000.zip', name: 'ark_backup_TheIsland_WP_20260611_200000.zip', size_bytes: 301_000_000, created_at: '2026-06-11T20:00:00Z' },
+    ]
+    mocks['restore_backup_from_cloud'] = async (_args: any) =>
+      `Restaurado '${_args?.backupName || 'backup'}' — 42 archivos extraídos. Snapshot previo guardado como SavedArks_preRestore_*`
 
     const raw = mocks[command]
     // Support function mocks (for commands that vary by args)

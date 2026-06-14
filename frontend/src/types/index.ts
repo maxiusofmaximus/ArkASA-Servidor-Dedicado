@@ -241,6 +241,7 @@ export interface AdvancedConfig {
 
 // Main server configuration
 export interface ServerConfig {
+  cluster_maps: string[]
   identification: IdentificationConfig
   network: NetworkConfig
   gameplay: GameplayConfig

@@ -4,6 +4,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// List of maps to run. 1 map = single server, 2+ maps = cluster mode.
+    /// Old configs with `map = "..."` will silently default to ["TheIsland_WP"].
+    pub cluster_maps: Vec<String>,
     pub identification: IdentificationConfig,
     pub network: NetworkConfig,
     pub gameplay: GameplayConfig,
@@ -272,6 +275,7 @@ pub struct AdvancedConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            cluster_maps: vec!["TheIsland_WP".to_string()],
             identification: IdentificationConfig::default(),
             network: NetworkConfig::default(),
             gameplay: GameplayConfig::default(),

@@ -7,10 +7,15 @@ interface ActionBarProps {
   onChooseDifficulty?: () => void
   onStartServer?: () => void
   onStopServer?: () => void
+  onOpenOptions?: () => void
+  onToggleLogs?: () => void
   isSaving?: boolean
+  autoSave?: boolean
   isServerRunning?: boolean
   isServerStarting?: boolean
   isServerStopping?: boolean
+  showLogsButton?: boolean
+  isLogsOpen?: boolean
   variant?: 'default' | 'mod_settings'
 }
 
@@ -21,10 +26,15 @@ export default function ActionBar({
   onChooseDifficulty,
   onStartServer,
   onStopServer,
+  onOpenOptions,
+  onToggleLogs,
   isSaving = false,
+  autoSave = true,
   isServerRunning = false,
   isServerStarting = false,
   isServerStopping = false,
+  showLogsButton = false,
+  isLogsOpen = false,
   variant = 'default',
 }: ActionBarProps) {
   const [saveOk, setSaveOk] = useState(false)
@@ -38,9 +48,7 @@ export default function ActionBar({
     } catch { /* error shown elsewhere */ }
   }
 
-  // Start button: disabled while starting OR already running
   const startDisabled = isServerStarting || isServerRunning
-  // Stop button: disabled while stopping
   const stopDisabled = isServerStopping
 
   return (
@@ -65,12 +73,50 @@ export default function ActionBar({
             )}
             <button onClick={onChooseDifficulty} className="ark-action-btn">CHOOSE DIFFICULTY</button>
             {onSave && (
-              <button onClick={handleSave} disabled={isSaving} className="ark-action-btn disabled:opacity-40"
-                style={saveOk ? { color: 'rgba(74,222,128,0.9)', outlineColor: 'rgba(74,222,128,0.4)' } : undefined}>
-                {isSaving ? 'SAVING...' : saveOk ? 'GUARDADO ✓' : 'SAVE SETTINGS'}
-              </button>
+              autoSave ? (
+                <span
+                  className="ark-action-btn text-[10px] cursor-default"
+                  style={{ color: 'rgba(0,200,255,0.3)', outlineColor: 'transparent' }}
+                  title="Autoguardado activo — cambia en Opciones"
+                >
+                  ✦ AUTOGUARDADO
+                </span>
+              ) : (
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="ark-action-btn disabled:opacity-40"
+                  style={saveOk ? { color: 'rgba(74,222,128,0.9)', outlineColor: 'rgba(74,222,128,0.4)' } : undefined}
+                >
+                  {isSaving ? 'SAVING...' : saveOk ? 'GUARDADO ✓' : 'SAVE SETTINGS'}
+                </button>
+              )
             )}
           </>
+        )}
+
+        {/* Options button */}
+        <button
+          onClick={onOpenOptions}
+          className="ark-action-btn text-[10px] px-3"
+          title="Opciones (Escape)"
+          style={{ color: 'rgba(0,200,255,0.5)' }}
+        >
+          ⚙ OPCIONES
+        </button>
+
+        {/* Logs button — only when enabled in options */}
+        {showLogsButton && (
+          <button
+            onClick={onToggleLogs}
+            className="ark-action-btn text-[10px] px-3"
+            style={{
+              color: isLogsOpen ? 'rgba(74,222,128,0.8)' : 'rgba(0,200,255,0.5)',
+              outlineColor: isLogsOpen ? 'rgba(74,222,128,0.4)' : undefined,
+            }}
+          >
+            📋 LOGS
+          </button>
         )}
       </div>
 
@@ -81,7 +127,6 @@ export default function ActionBar({
         </span>
 
         {isServerRunning || isServerStopping ? (
-          /* STOP SERVER button — red when server is running */
           <button
             onClick={onStopServer}
             disabled={stopDisabled}
@@ -96,7 +141,6 @@ export default function ActionBar({
             {isServerStopping ? '■ DETENIENDO...' : '■ STOP SERVER'}
           </button>
         ) : (
-          /* DEDICATED SERVER / START button — amber/gold */
           <button
             onClick={onStartServer}
             disabled={startDisabled}
