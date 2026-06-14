@@ -1,63 +1,74 @@
-ARK ASA Configuration Manager - Términos de Uso para Servidor Comunitario
-=========================================================================
+ARK ASA Configuration Manager - Terms of Use for Community Servers
+==================================================================
 
-AVISO IMPORTANTE: Al instalar este software y operar un servidor dedicado de
-ARK: Survival Ascended, usted acepta los siguientes términos:
+IMPORTANT NOTICE: By installing this software and operating a dedicated
+ARK: Survival Ascended server, you agree to the following terms:
 
-1. USO NO COMERCIAL
-   Este software es gratuito y de código abierto (licencia MIT).
-   El servidor que configure debe ser de uso personal o comunitario,
-   sin cobro de acceso, cuotas de membresía ni ningún tipo de pago a cambio
-   de jugar en él.
+1. NON-COMMERCIAL USE
+   This software is free and open source (MIT License).
+   The server you configure must be for personal or community use only.
+   Charging players for access, membership fees, or any payment in
+   exchange for playing on the server is strictly prohibited.
 
-2. SERVIDOR COMUNITARIO (NO COMPETITIVO)
-   El servidor está destinado exclusivamente para juego informal entre
-   amigos o una comunidad abierta. No está permitido su uso en torneos
-   con premios en dinero ni en competencias organizadas con fines de lucro.
+2. COMMUNITY SERVER (NON-COMPETITIVE)
+   This server is intended exclusively for casual play among friends or
+   an open community. Use in tournaments with cash prizes or organized
+   competitions for profit is not permitted.
 
-3. TÉRMINOS DE STUDIO WILDCARD
-   Al operar un servidor dedicado de ARK: Survival Ascended, usted se
-   compromete a cumplir con los Términos de Servicio de Studio Wildcard /
-   Snail Games, incluyendo:
-   - No modificar el servidor para obtener ventajas desleales.
-   - No distribuir contenido protegido por derechos de autor del juego.
-   - No hacer uso abusivo de las APIs ni de los sistemas de Steam.
+3. STUDIO WILDCARD TERMS OF SERVICE
+   By operating a dedicated ARK: Survival Ascended server, you agree to
+   comply with the Terms of Service of Studio Wildcard / Snail Games,
+   including:
+   - Do not modify the server to gain unfair advantages.
+   - Do not distribute copyrighted game content.
+   - Do not abuse Steam APIs or Steam systems.
 
-4. TÉRMINOS DE STEAM / VALVE
-   El acceso a SteamCMD y a la descarga del servidor dedicado se rige por
-   los Subscriber Agreement de Steam. El servidor de ARK: Survival Ascended
-   Dedicated se descarga gratuitamente vía Steam App ID 2430930 bajo
-   acuerdo con Valve Corporation.
+4. STEAM / VALVE TERMS OF SERVICE
+   Access to SteamCMD and the dedicated server download is governed by
+   the Steam Subscriber Agreement. The ARK: Survival Ascended Dedicated
+   Server is downloaded free of charge via Steam App ID 2430930 under
+   agreement with Valve Corporation.
 
-5. EXENCIÓN DE RESPONSABILIDAD
-   Este instalador automatiza la descarga y configuración del servidor, pero
-   el operador es el único responsable de:
-   - El contenido y conducta dentro del servidor.
-   - La seguridad de la red y los datos de los jugadores.
-   - El cumplimiento de las leyes locales aplicables.
-   - Los costos de ancho de banda e infraestructura derivados de operar
-     el servidor.
+5. DISCLAIMER OF LIABILITY
+   This installer automates the download and setup of the server, but
+   the operator is solely responsible for:
+   - The content and conduct within the server.
+   - Network security and the protection of player data.
+   - Compliance with applicable local laws.
+   - Bandwidth and infrastructure costs incurred by operating the server.
 
-6. DATOS DE JUGADORES
-   Si recolectas datos de usuarios (nombres de usuario de Steam, posiciones
-   en el mundo, estadísticas), eres responsable de gestionar dichos datos
-   conforme a la legislación de privacidad aplicable en tu país.
+6. PLAYER DATA
+   If you collect user data (Steam usernames, in-game positions,
+   statistics), you are responsible for managing such data in accordance
+   with the privacy laws applicable in your country.
 
-7. ACTUALIZACIONES DEL SOFTWARE
-   Este instalador descarga software de terceros (SteamCMD, Visual C++
-   Redistributable). Cada uno se rige por su propia licencia y no está
-   cubierto por la licencia MIT de este proyecto.
+7. THIRD-PARTY SOFTWARE
+   This installer downloads third-party software (SteamCMD,
+   Visual C++ Redistributable). Each is governed by its own license
+   and is not covered by the MIT License of this project.
 
-8. LICENCIA MIT DEL PROYECTO
+8. MIT LICENSE
    Copyright (c) 2026 - ARK ASA Configuration Manager Contributors
 
-   Por la presente se otorga permiso, libre de cargos, a cualquier persona
-   que obtenga una copia de este software y de los archivos de documentación
-   asociados (el "Software"), para utilizar el Software sin restricción,
-   incluyendo sin limitación los derechos a usar, copiar, modificar, fusionar,
-   publicar, distribuir, sublicenciar y/o vender copias del Software.
+   Permission is hereby granted, free of charge, to any person obtaining
+   a copy of this software and associated documentation files (the
+   "Software"), to deal in the Software without restriction, including
+   without limitation the rights to use, copy, modify, merge, publish,
+   distribute, sublicense, and/or sell copies of the Software, and to
+   permit persons to whom the Software is furnished to do so, subject to
+   the following conditions:
 
-   EL SOFTWARE SE PROPORCIONA "COMO ESTÁ", SIN GARANTÍA DE NINGÚN TIPO.
+   The above copyright notice and this permission notice shall be
+   included in all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+   BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
 
 
-Al hacer clic en "Acepto", confirmas que has leído y aceptas estos términos.
+By clicking "I Agree", you confirm that you have read and accept these terms.
