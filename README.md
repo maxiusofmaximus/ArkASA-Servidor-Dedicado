@@ -117,8 +117,9 @@ ark-asa-config/
 
 **Modules:**
 - `config` - Configuration loading, validation, persistence
-- `ark` - Server lifecycle management (future: installer, process mgmt)
-- `storage` - SQLite for audit logs and version history (future)
+- `ark` - Server lifecycle management (start/stop/restart, RCON, process monitoring, logs, metrics, on-demand stubs)
+- `backup` - Cloud backup system (S3, Google Drive, OneDrive, iCloud)
+- `storage` - SQLite for audit logs and version history
 - `error` - Typed error handling
 
 ### Frontend (React + TypeScript)
@@ -242,16 +243,43 @@ If you need the old files:
 - ✅ Type-safe Rust backend
 - ✅ Full documentation
 
+## ✅ v1.1 Complete Feature Set
+
+**Server Management:**
+- ✅ Server start/stop/restart with graceful RCON shutdown
+- ✅ Real-time server status monitoring & log streaming
+- ✅ Server crash detection & auto-recovery
+- ✅ On-demand server stubs (dormant servers)
+
+**Configuration:**
+- ✅ Config version history ready
+- ✅ AutoSave configuration feature
+- ✅ Full validation pipeline
+- ✅ TOML config format
+
+**Mods & Content:**
+- ✅ Mod management UI with CurseForge integration
+- ✅ PC-only mod detection
+- ✅ Duplicate mod prevention
+
+**Backup & Cloud:**
+- ✅ Multi-provider cloud backup (S3, Google Drive, OneDrive, iCloud)
+- ✅ Backup/restore functionality
+- ✅ Multiple backup scopes
+
+**Documentation:**
+- ✅ 150+ pages of user guides
+- ✅ GitHub Pages documentation site
+- ✅ 50+ FAQ answers
+- ✅ Comprehensive troubleshooting
+
 ## 🛠️ Roadmap (Future Versions)
 
-- [ ] Server start/stop/restart integration
-- [ ] Real-time server status monitoring
-- [ ] Config version history and rollback
-- [ ] Mod management UI with validation
-- [ ] Backup/restore functionality
-- [ ] Multi-server support
 - [ ] Web UI option (in addition to desktop)
-- [ ] Performance monitoring and diagnostics
+- [ ] Advanced performance analytics dashboard
+- [ ] Custom plugin system for validators
+- [ ] Mobile companion app
+- [ ] Server fleet management (multiple instances)
 
 ## 📄 License
 

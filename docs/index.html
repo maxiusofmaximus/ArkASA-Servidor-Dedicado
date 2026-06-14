@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ARK ASA Configuration Manager - Documentación</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -11,239 +12,525 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --primary: #00d4ff;
+            --primary-dark: #0099cc;
+            --secondary: #9d4edd;
+            --secondary-dark: #7c3aad;
+            --dark: #0a0e27;
+            --darker: #050812;
+            --light: #f5f7fa;
+            --text: #1a202c;
+            --text-light: #718096;
+            --border: #e2e8f0;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             line-height: 1.6;
-            color: #333;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: var(--text);
+            background: linear-gradient(135deg, var(--dark) 0%, var(--darker) 100%);
             min-height: 100vh;
-            padding: 20px;
+            overflow-x: hidden;
         }
 
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
-        }
-
+        /* Header/Navigation */
         header {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            background: linear-gradient(180deg, rgba(10, 14, 39, 0.95) 0%, rgba(5, 8, 18, 0.95) 100%);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+            padding: 20px 40px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.4em;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 30px;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-light);
+            text-decoration: none;
+            font-size: 0.95em;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: var(--primary);
+        }
+
+        .github-btn {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
             color: white;
-            padding: 40px 20px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            font-size: 0.95em;
+        }
+
+        .github-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0, 212, 255, 0.3);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 100px 40px 60px;
+            text-align: center;
+            background: linear-gradient(180deg, transparent 0%, rgba(157, 78, 221, 0.05) 100%);
+        }
+
+        .hero-content {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.5em, 8vw, 4em);
+            font-weight: 800;
+            margin-bottom: 20px;
+            color: white;
+            line-height: 1.1;
+        }
+
+        .hero-accent {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero p {
+            font-size: 1.3em;
+            color: var(--text-light);
+            margin-bottom: 40px;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 14px 32px;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 1em;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 212, 255, 0.1);
+            transform: translateY(-3px);
+        }
+
+        /* Main Content */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 40px;
+        }
+
+        .section {
+            padding: 80px 0;
+        }
+
+        .section-title {
+            font-size: 2.5em;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 50px;
             text-align: center;
         }
 
-        header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        .section-title .emoji {
+            margin-right: 15px;
+            font-size: 1.2em;
         }
 
-        header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
-
-        .content {
-            padding: 40px 20px;
-        }
-
-        .intro {
-            background: #f0f4ff;
-            padding: 20px;
-            border-left: 4px solid #667eea;
-            margin-bottom: 30px;
-            border-radius: 5px;
-        }
-
+        /* Guide Cards */
         .guides-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 30px;
             margin-bottom: 40px;
         }
 
         .guide-card {
-            background: white;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 20px;
-            transition: all 0.3s ease;
-            cursor: pointer;
+            background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(157,78,221,0.05) 100%);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 30px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .guide-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+            opacity: 0;
+            transition: opacity 0.3s;
         }
 
         .guide-card:hover {
-            border-color: #667eea;
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
-            transform: translateY(-5px);
+            border-color: var(--primary);
+            background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(157,78,221,0.08) 100%);
+            transform: translateY(-8px);
+            box-shadow: 0 20px 40px rgba(0, 212, 255, 0.15);
+        }
+
+        .guide-card:hover::before {
+            opacity: 1;
         }
 
         .guide-card h3 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 1.3em;
-        }
-
-        .guide-card p {
-            color: #666;
-            font-size: 0.95em;
-            margin-bottom: 15px;
-        }
-
-        .guide-card a {
-            display: inline-block;
-            background: #667eea;
+            font-size: 1.4em;
+            font-weight: 700;
             color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
-            text-decoration: none;
-            transition: background 0.3s;
-            font-weight: bold;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .guide-card a:hover {
-            background: #764ba2;
+        .guide-card .subtitle {
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .guide-card > p {
+            color: var(--text-light);
+            margin-bottom: 20px;
+            line-height: 1.6;
         }
 
         .guide-list {
             list-style: none;
+            margin-bottom: 25px;
         }
 
         .guide-list li {
-            padding: 5px 0;
-            font-size: 0.9em;
-            color: #666;
+            padding: 8px 0;
+            color: var(--text-light);
+            font-size: 0.95em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .guide-list li:before {
-            content: "✓ ";
-            color: #667eea;
+        .guide-list li::before {
+            content: '▸';
+            color: var(--primary);
             font-weight: bold;
-            margin-right: 8px;
+            font-size: 1.2em;
         }
 
-        .quick-links {
-            background: #f9f9f9;
-            padding: 30px 20px;
-            border-top: 2px solid #e0e0e0;
+        .guide-card a {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.2) 0%, rgba(157, 78, 221, 0.2) 100%);
+            color: var(--primary);
+            padding: 12px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: 1px solid rgba(0, 212, 255, 0.3);
         }
 
-        .quick-links h2 {
-            color: #333;
-            margin-bottom: 20px;
+        .guide-card a:hover {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            color: white;
+            border-color: transparent;
+        }
+
+        /* Quick Links */
+        .quick-links-section {
+            background: linear-gradient(135deg, rgba(10,14,39,0.5) 0%, rgba(157,78,221,0.05) 100%);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 60px 40px;
         }
 
         .links-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 25px;
         }
 
         .quick-link {
-            background: white;
-            padding: 15px;
-            border-radius: 5px;
-            border-left: 4px solid #667eea;
+            background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            padding: 25px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            transition: all 0.3s;
+        }
+
+        .quick-link:hover {
+            border-color: var(--primary);
+            background: linear-gradient(135deg, rgba(0,212,255,0.05) 0%, rgba(157,78,221,0.05) 100%);
+            transform: translateY(-4px);
+        }
+
+        .quick-link h4 {
+            color: white;
+            margin-bottom: 12px;
+            font-size: 1.1em;
         }
 
         .quick-link a {
-            color: #667eea;
+            color: var(--primary);
             text-decoration: none;
-            font-weight: bold;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: gap 0.3s;
         }
 
         .quick-link a:hover {
-            text-decoration: underline;
+            gap: 12px;
         }
 
+        /* Footer */
         footer {
-            background: #f0f0f0;
-            padding: 20px;
+            background: linear-gradient(180deg, rgba(10,14,39,0.8) 0%, rgba(5,8,18,0.95) 100%);
+            border-top: 1px solid rgba(0, 212, 255, 0.1);
+            padding: 50px 40px;
             text-align: center;
-            color: #666;
-            border-top: 1px solid #e0e0e0;
+            margin-top: 80px;
         }
 
-        .emoji {
-            font-size: 1.5em;
-            margin-right: 8px;
+        footer p {
+            color: var(--text-light);
+            margin: 8px 0;
         }
 
-        @media (max-width: 600px) {
-            header h1 {
+        footer strong {
+            color: white;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            header {
+                padding: 15px 20px;
+            }
+
+            .header-content {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            .nav-links {
+                flex-direction: column;
+                gap: 15px;
+                width: 100%;
+            }
+
+            .hero {
+                padding: 60px 20px 40px;
+            }
+
+            .hero h1 {
+                font-size: 2em;
+            }
+
+            .hero p {
+                font-size: 1.1em;
+            }
+
+            .container {
+                padding: 0 20px;
+            }
+
+            .section {
+                padding: 50px 0;
+            }
+
+            .section-title {
                 font-size: 1.8em;
             }
 
             .guides-grid {
                 grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .cta-buttons {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
             }
         }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .guide-card {
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .guide-card:nth-child(1) { animation-delay: 0.1s; }
+        .guide-card:nth-child(2) { animation-delay: 0.2s; }
+        .guide-card:nth-child(3) { animation-delay: 0.3s; }
+        .guide-card:nth-child(4) { animation-delay: 0.4s; }
+        .guide-card:nth-child(5) { animation-delay: 0.5s; }
+        .guide-card:nth-child(6) { animation-delay: 0.6s; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1><span class="emoji">🎮</span>ARK ASA Configuration Manager</h1>
-            <p>Documentación Completa - Guías para Cualquiera</p>
-        </header>
+    <!-- Navigation -->
+    <header>
+        <div class="header-content">
+            <div class="logo">🎮 ARK Config Manager</div>
+            <nav>
+                <ul class="nav-links">
+                    <li><a href="#guides">Guías</a></li>
+                    <li><a href="#links">Enlaces</a></li>
+                    <li><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado" class="github-btn">★ GitHub</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
 
-        <div class="content">
-            <div class="intro">
-                <h2><span class="emoji">📚</span>Bienvenido a la Documentación</h2>
-                <p>Aquí encontrarás <strong>guías detalladas explicadas en lenguaje simple</strong>, sin importar si eres completamente principiante o usuario avanzado.</p>
-                <p><strong>Elige tu punto de partida abajo:</strong></p>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <h1>ARK ASA <span class="hero-accent">Configuration Manager</span></h1>
+            <p>Documentación profesional para crear y administrar tu servidor de ARK: Survival Ascended</p>
+            <div class="cta-buttons">
+                <a href="GETTING_STARTED.md" class="btn btn-primary">📖 Comenzar Ahora</a>
+                <a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases" class="btn btn-secondary">⬇️ Descargar</a>
             </div>
+        </div>
+    </section>
 
+    <!-- Main Content -->
+    <div class="container">
+        <!-- Guides Section -->
+        <section class="section" id="guides">
+            <h2 class="section-title"><span class="emoji">📚</span>Documentación Completa</h2>
             <div class="guides-grid">
                 <div class="guide-card">
-                    <h3><span class="emoji">🚀</span>Para Principiantes</h3>
-                    <p><strong>GETTING_STARTED.md</strong></p>
-                    <p>Instalación paso a paso, configuración inicial y tu primer servidor.</p>
+                    <h3>🚀 Para Principiantes</h3>
+                    <div class="subtitle">GETTING_STARTED</div>
+                    <p>Instalación, configuración y tu primer servidor en simples pasos.</p>
                     <ul class="guide-list">
-                        <li>Instalación del instalador</li>
+                        <li>Instalación del programa</li>
                         <li>Descarga del servidor</li>
                         <li>Configuración básica</li>
-                        <li>Arrancar servidor</li>
-                        <li>Conectarse localmente</li>
+                        <li>Arrancar tu servidor</li>
+                        <li>Primeras conexiones</li>
                     </ul>
                     <a href="GETTING_STARTED.md">Leer Guía →</a>
                 </div>
 
                 <div class="guide-card">
-                    <h3><span class="emoji">🔗</span>Conectar Amigos</h3>
-                    <p><strong>STEAM_A2S.md</strong></p>
-                    <p>Cómo conectarse localmente y desde internet (con o sin port forwarding).</p>
+                    <h3>🔗 Conectar Amigos</h3>
+                    <div class="subtitle">STEAM_A2S</div>
+                    <p>Conexión local, remota, port forwarding y Tailscale VPN.</p>
                     <ul class="guide-list">
-                        <li>Conexión WiFi local</li>
-                        <li>Conexión remota</li>
-                        <li>Port forwarding</li>
-                        <li>Tailscale VPN</li>
-                        <li>Troubleshooting</li>
+                        <li>WiFi local (más fácil)</li>
+                        <li>Internet remota</li>
+                        <li>Port forwarding paso a paso</li>
+                        <li>Tailscale (alternativa)</li>
+                        <li>Solución de problemas</li>
                     </ul>
                     <a href="STEAM_A2S.md">Leer Guía →</a>
                 </div>
 
                 <div class="guide-card">
-                    <h3><span class="emoji">📖</span>Todas las Opciones</h3>
-                    <p><strong>USER_GUIDE.md</strong></p>
-                    <p>Referencia completa de cada pestaña y configuración disponible.</p>
+                    <h3>⚙️ Todas las Opciones</h3>
+                    <div class="subtitle">USER_GUIDE</div>
+                    <p>Referencia completa de cada pestaña, ajuste y característica.</p>
                     <ul class="guide-list">
                         <li>Interface explicada</li>
-                        <li>Todas las pestañas</li>
-                        <li>Cada ajuste detallado</li>
-                        <li>Comandos de admin</li>
-                        <li>Pro tips</li>
+                        <li>5 pestañas principales</li>
+                        <li>Cada configuración</li>
+                        <li>Comandos admin</li>
+                        <li>Tips profesionales</li>
                     </ul>
                     <a href="USER_GUIDE.md">Leer Guía →</a>
                 </div>
 
                 <div class="guide-card">
-                    <h3><span class="emoji">❓</span>Preguntas Frecuentes</h3>
-                    <p><strong>FAQ.md</strong></p>
-                    <p>50+ respuestas a las preguntas más comunes de usuarios.</p>
+                    <h3>❓ Preguntas Frecuentes</h3>
+                    <div class="subtitle">FAQ</div>
+                    <p>50+ respuestas sobre requisitos, límites, backups y más.</p>
                     <ul class="guide-list">
                         <li>Requisitos del sistema</li>
                         <li>Límites de jugadores</li>
@@ -251,74 +538,78 @@
                         <li>Backups y seguridad</li>
                         <li>Glosario técnico</li>
                     </ul>
-                    <a href="FAQ.md">Leer FAQ →</a>
+                    <a href="FAQ.md">Ver FAQ →</a>
                 </div>
 
                 <div class="guide-card">
-                    <h3><span class="emoji">🔧</span>Problemas y Soluciones</h3>
-                    <p><strong>TROUBLESHOOTING.md</strong></p>
-                    <p>10+ problemas comunes con procedimientos paso a paso para resolverlos.</p>
+                    <h3>🔧 Solución de Problemas</h3>
+                    <div class="subtitle">TROUBLESHOOTING</div>
+                    <p>10+ problemas comunes con soluciones paso a paso.</p>
                     <ul class="guide-list">
                         <li>La app no abre</li>
                         <li>Servidor no arranca</li>
                         <li>Amigos no conectan</li>
-                        <li>Lag/rendimiento</li>
-                        <li>Y más...</li>
+                        <li>Lag y rendimiento</li>
+                        <li>Mods y crashes</li>
                     </ul>
                     <a href="TROUBLESHOOTING.md">Ver Soluciones →</a>
                 </div>
 
                 <div class="guide-card">
-                    <h3><span class="emoji">📚</span>Mapa de Contenido</h3>
-                    <p><strong>INDEX.md</strong></p>
-                    <p>Navegación completa con rutas de aprendizaje y búsqueda rápida.</p>
+                    <h3>📍 Índice y Navegación</h3>
+                    <div class="subtitle">INDEX</div>
+                    <p>Mapa completo con búsqueda rápida y rutas de aprendizaje.</p>
                     <ul class="guide-list">
                         <li>Rutas por nivel</li>
                         <li>Búsqueda por tema</li>
-                        <li>Estimaciones tiempo</li>
+                        <li>Estimaciones de tiempo</li>
                         <li>Dificultad de temas</li>
-                        <li>Enlaces útiles</li>
+                        <li>Todos los enlaces</li>
                     </ul>
                     <a href="INDEX.md">Ver Índice →</a>
                 </div>
             </div>
+        </section>
 
-            <div class="quick-links">
-                <h2><span class="emoji">⚡</span>Enlaces Rápidos</h2>
+        <!-- Quick Links Section -->
+        <section class="section" id="links">
+            <div class="quick-links-section">
+                <h2 class="section-title"><span class="emoji">⚡</span>Enlaces Útiles</h2>
                 <div class="links-grid">
                     <div class="quick-link">
-                        <strong>Descargar App</strong>
-                        <p><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases">GitHub Releases →</a></p>
+                        <h4>📥 Descargar</h4>
+                        <a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases">GitHub Releases →</a>
                     </div>
                     <div class="quick-link">
-                        <strong>Código Fuente</strong>
-                        <p><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado">GitHub Repositorio →</a></p>
+                        <h4>💻 Código Fuente</h4>
+                        <a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado">GitHub Repo →</a>
                     </div>
                     <div class="quick-link">
-                        <strong>Reportar Problemas</strong>
-                        <p><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/issues">GitHub Issues →</a></p>
+                        <h4>🐛 Reportar Bugs</h4>
+                        <a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/issues">GitHub Issues →</a>
                     </div>
                     <div class="quick-link">
-                        <strong>Mods CurseForge</strong>
-                        <p><a href="https://www.curseforge.com/ark-survival-ascended/mods">Buscar Mods →</a></p>
+                        <h4>🎮 Mods</h4>
+                        <a href="https://www.curseforge.com/ark-survival-ascended/mods">CurseForge →</a>
                     </div>
                     <div class="quick-link">
-                        <strong>ARK Wiki Oficial</strong>
-                        <p><a href="https://ark.wiki.gg/">Documentación ARK →</a></p>
+                        <h4>📚 ARK Wiki</h4>
+                        <a href="https://ark.wiki.gg/">ark.wiki.gg →</a>
                     </div>
                     <div class="quick-link">
-                        <strong>Tailscale VPN</strong>
-                        <p><a href="https://tailscale.com/">Descargar Tailscale →</a></p>
+                        <h4>🔐 VPN</h4>
+                        <a href="https://tailscale.com/">Tailscale →</a>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <footer>
-            <p><strong>ARK ASA Configuration Manager v1.1</strong></p>
-            <p>Documentación completa para alojar tu propio servidor de ARK: Survival Ascended</p>
-            <p style="margin-top: 10px; font-size: 0.9em;">Hecho con ❤️ para la comunidad de ARK</p>
-        </footer>
+        </section>
     </div>
+
+    <!-- Footer -->
+    <footer>
+        <p><strong>ARK ASA Configuration Manager v1.1</strong></p>
+        <p>Documentación profesional para alojar tu servidor de ARK: Survival Ascended</p>
+        <p style="margin-top: 15px; font-size: 0.9em; color: var(--primary);">Hecho con ❤️ para la comunidad de ARK</p>
+    </footer>
 </body>
 </html>
