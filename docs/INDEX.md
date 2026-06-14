@@ -1,3 +1,9 @@
+---
+layout: default
+title: ARK ASA Configuration Manager - Documentación Completa
+description: Guías completas explicadas para cualquiera, sin importar el nivel técnico
+---
+
 # 📚 Documentación Completa - ARK ASA Configuration Manager
 
 > **Una guía exhaustiva explicada para cualquiera, sin importar el nivel técnico**
