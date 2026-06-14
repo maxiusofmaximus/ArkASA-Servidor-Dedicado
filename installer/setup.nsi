@@ -9,9 +9,13 @@
 Unicode True
 SetCompressor /SOLID lzma
 
+!addplugindir /x86-unicode "plugins\x86-unicode"
+!addplugindir /amd64-unicode "plugins\amd64-unicode"
+
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
+!include "WinVer.nsh"
 !include "Sections.nsh"
 !include "WinMessages.nsh"
 
@@ -244,13 +248,7 @@ Section "SteamCMD (necesario para el servidor)" SEC_STEAMCMD
 
         ${If} $0 == "OK"
             DetailPrint "Extrayendo SteamCMD en C:\ASA\steamcmd\..."
-            nsisunz::UnzipToLog "$TEMP\steamcmd.zip" "C:\ASA\steamcmd"
-            Pop $0
-            ${If} $0 != "success"
-                ; Fallback: usar PowerShell para descomprimir
-                DetailPrint "Usando PowerShell para extraer..."
-                nsExec::ExecToLog 'powershell -Command "Expand-Archive -Path \"$TEMP\steamcmd.zip\" -DestinationPath \"C:\ASA\steamcmd\" -Force"'
-            ${EndIf}
+            nsExec::ExecToLog 'powershell -Command "Expand-Archive -Path \"$TEMP\steamcmd.zip\" -DestinationPath \"C:\ASA\steamcmd\" -Force"'
             Delete "$TEMP\steamcmd.zip"
 
             ${If} ${FileExists} "C:\ASA\steamcmd\steamcmd.exe"
