@@ -1,0 +1,63 @@
+ARK ASA Configuration Manager - Términos de Uso para Servidor Comunitario
+=========================================================================
+
+AVISO IMPORTANTE: Al instalar este software y operar un servidor dedicado de
+ARK: Survival Ascended, usted acepta los siguientes términos:
+
+1. USO NO COMERCIAL
+   Este software es gratuito y de código abierto (licencia MIT).
+   El servidor que configure debe ser de uso personal o comunitario,
+   sin cobro de acceso, cuotas de membresía ni ningún tipo de pago a cambio
+   de jugar en él.
+
+2. SERVIDOR COMUNITARIO (NO COMPETITIVO)
+   El servidor está destinado exclusivamente para juego informal entre
+   amigos o una comunidad abierta. No está permitido su uso en torneos
+   con premios en dinero ni en competencias organizadas con fines de lucro.
+
+3. TÉRMINOS DE STUDIO WILDCARD
+   Al operar un servidor dedicado de ARK: Survival Ascended, usted se
+   compromete a cumplir con los Términos de Servicio de Studio Wildcard /
+   Snail Games, incluyendo:
+   - No modificar el servidor para obtener ventajas desleales.
+   - No distribuir contenido protegido por derechos de autor del juego.
+   - No hacer uso abusivo de las APIs ni de los sistemas de Steam.
+
+4. TÉRMINOS DE STEAM / VALVE
+   El acceso a SteamCMD y a la descarga del servidor dedicado se rige por
+   los Subscriber Agreement de Steam. El servidor de ARK: Survival Ascended
+   Dedicated se descarga gratuitamente vía Steam App ID 2430930 bajo
+   acuerdo con Valve Corporation.
+
+5. EXENCIÓN DE RESPONSABILIDAD
+   Este instalador automatiza la descarga y configuración del servidor, pero
+   el operador es el único responsable de:
+   - El contenido y conducta dentro del servidor.
+   - La seguridad de la red y los datos de los jugadores.
+   - El cumplimiento de las leyes locales aplicables.
+   - Los costos de ancho de banda e infraestructura derivados de operar
+     el servidor.
+
+6. DATOS DE JUGADORES
+   Si recolectas datos de usuarios (nombres de usuario de Steam, posiciones
+   en el mundo, estadísticas), eres responsable de gestionar dichos datos
+   conforme a la legislación de privacidad aplicable en tu país.
+
+7. ACTUALIZACIONES DEL SOFTWARE
+   Este instalador descarga software de terceros (SteamCMD, Visual C++
+   Redistributable). Cada uno se rige por su propia licencia y no está
+   cubierto por la licencia MIT de este proyecto.
+
+8. LICENCIA MIT DEL PROYECTO
+   Copyright (c) 2026 - ARK ASA Configuration Manager Contributors
+
+   Por la presente se otorga permiso, libre de cargos, a cualquier persona
+   que obtenga una copia de este software y de los archivos de documentación
+   asociados (el "Software"), para utilizar el Software sin restricción,
+   incluyendo sin limitación los derechos a usar, copiar, modificar, fusionar,
+   publicar, distribuir, sublicenciar y/o vender copias del Software.
+
+   EL SOFTWARE SE PROPORCIONA "COMO ESTÁ", SIN GARANTÍA DE NINGÚN TIPO.
+
+
+Al hacer clic en "Acepto", confirmas que has leído y aceptas estos términos.
