@@ -72,6 +72,7 @@ export interface NetworkConfig {
   query_port: number
   rcon_port: number
   server_platform: string
+  server_ip: string
 }
 
 // Gameplay settings (expanded with ~20 new boolean/number fields)

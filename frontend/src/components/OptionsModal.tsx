@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { invoke } from '../services/tauri'
 import { useBackupStore, type CloudProvider, type BackupScope } from '../stores/backupStore'
 import { useConfigStore } from '../stores/configStore'
+import RawConfigViewer from './RawConfigViewer'
 
 interface BackupListEntry {
   key: string
@@ -14,7 +15,7 @@ interface OptionsModalProps {
   onClose: () => void
 }
 
-type OptionsTab = 'general' | 'backup'
+type OptionsTab = 'general' | 'backup' | 'config'
 
 const SCOPE_OPTIONS: { value: BackupScope; label: string; desc: string }[] = [
   { value: 'map', label: 'Solo mapa', desc: 'Archivo .ark del mundo (más rápido)' },
@@ -22,12 +23,26 @@ const SCOPE_OPTIONS: { value: BackupScope; label: string; desc: string }[] = [
   { value: 'full', label: 'Directorio Saved/ completo', desc: 'Todo incluyendo configs del servidor' },
 ]
 
-const PROVIDERS: { value: CloudProvider; label: string; color: string }[] = [
-  { value: 'none', label: 'Sin proveedor', color: '#6b7280' },
-  { value: 's3', label: 'S3-compatible', color: '#f97316' },
-  { value: 'gdrive', label: 'Google Drive', color: '#4ade80' },
-  { value: 'onedrive', label: 'OneDrive', color: '#3b82f6' },
-  { value: 'icloud', label: 'iCloud', color: '#a78bfa' },
+const PROVIDERS: { value: CloudProvider; label: string; color: string; desc: string }[] = [
+  { value: 'none',         label: 'Sin proveedor',  color: '#6b7280', desc: '' },
+  { value: 's3',           label: 'S3-compatible',  color: '#f97316', desc: 'AWS S3, Backblaze B2, Wasabi, R2…' },
+  { value: 'gdrive',       label: 'Google Drive',   color: '#4ade80', desc: 'OAuth 2.0 — requiere app en GCP' },
+  { value: 'onedrive',     label: 'OneDrive',        color: '#3b82f6', desc: 'OAuth 2.0 — requiere app en Azure' },
+  { value: 'icloud',       label: 'iCloud',          color: '#a78bfa', desc: 'Carpeta local de iCloud for Windows' },
+  { value: 'local_folder', label: 'Carpeta local',  color: '#22d3ee', desc: 'Sin cuenta — sincroniza con OneDrive/GDrive local' },
+]
+
+const LANGUAGES: { code: string; label: string; native: string }[] = [
+  { code: 'es', label: 'Español',            native: 'Español' },
+  { code: 'en', label: 'English',            native: 'English' },
+  { code: 'fr', label: 'Français',           native: 'Français' },
+  { code: 'zh', label: 'Simplified Chinese', native: '简体中文' },
+  { code: 'ja', label: 'Japanese',           native: '日本語' },
+  { code: 'ko', label: 'Korean',             native: '한국어' },
+  { code: 'pt', label: 'Português',          native: 'Português' },
+  { code: 'de', label: 'Deutsch',            native: 'Deutsch' },
+  { code: 'it', label: 'Italiano',           native: 'Italiano' },
+  { code: 'ru', label: 'Russian',            native: 'Русский' },
 ]
 
 export default function OptionsModal({ onClose }: OptionsModalProps) {
@@ -43,7 +58,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
   const [cloudList, setCloudList] = useState<BackupListEntry[]>([])
   const [isListing, setIsListing] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
-  const [restoring, setRestoring] = useState<string | null>(null) // key being restored
+  const [restoring, setRestoring] = useState<string | null>(null)
   const [restoreStatus, setRestoreStatus] = useState<string | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
 
@@ -61,9 +76,10 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
       : store.provider === 'onedrive' ? store.onedriveAccessToken
       : null) || null,
     icloudPath: store.icloudPath || null,
+    localFolderPath: store.localFolderPath || null,
   }), [store])
 
-  // ── List cloud backups ───────────────────────────────────
+  // ── List cloud backups ───────────────────────────────────────────────────────
   const handleListBackups = async () => {
     setIsListing(true)
     setListError(null)
@@ -80,12 +96,12 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     }
   }
 
-  // ── Restore a backup ─────────────────────────────────────
+  // ── Restore a backup ─────────────────────────────────────────────────────────
   const handleRestore = async (entry: BackupListEntry) => {
     if (!config) return
     const confirmed = window.confirm(
       `¿Restaurar "${entry.name}"?\n\n` +
-      `Los saves actuales se renombrarán a SavedArks_preRestore_* como snapshot de seguridad antes de extraer el backup.\n\n` +
+      `Los saves actuales se renombrarán a SavedArks_preRestore_* como snapshot de seguridad.\n\n` +
       `Asegúrate de que el servidor NO esté en ejecución.`
     )
     if (!confirmed) return
@@ -108,7 +124,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     }
   }
 
-  // ── Backup now ───────────────────────────────────────────
+  // ── Backup now ───────────────────────────────────────────────────────────────
   const handleBackupNow = async () => {
     if (!config) return
     setIsBacking(true)
@@ -131,6 +147,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         s3Region: store.s3Region || null,
         accessToken: token || null,
         icloudPath: store.icloudPath || null,
+        localFolderPath: store.localFolderPath || null,
       })
 
       store.addBackupEntry({
@@ -147,7 +164,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     }
   }
 
-  // ── Test S3 connection ───────────────────────────────────
+  // ── Test S3 connection ───────────────────────────────────────────────────────
   const handleTestS3 = async () => {
     setIsTesting(true)
     setTestStatus(null)
@@ -167,7 +184,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     }
   }
 
-  // ── OAuth flows ──────────────────────────────────────────
+  // ── OAuth flows ──────────────────────────────────────────────────────────────
   const handleGDriveAuth = async () => {
     setIsAuthing(true)
     setAuthStatus(null)
@@ -205,13 +222,17 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
 
   const isConfigured = () => {
     switch (store.provider) {
-      case 's3': return !!(store.s3Endpoint && store.s3Bucket && store.s3AccessKey && store.s3SecretKey)
-      case 'gdrive': return !!store.gdriveAccessToken
-      case 'onedrive': return !!store.onedriveAccessToken
-      case 'icloud': return !!store.icloudPath
-      default: return false
+      case 's3':           return !!(store.s3Endpoint && store.s3Bucket && store.s3AccessKey && store.s3SecretKey)
+      case 'gdrive':       return !!store.gdriveAccessToken
+      case 'onedrive':     return !!store.onedriveAccessToken
+      case 'icloud':       return !!store.icloudPath
+      case 'local_folder': return !!store.localFolderPath
+      default:             return false
     }
   }
+
+  // local_folder and icloud don't need cloud list/restore (files are already local)
+  const isCloudProvider = !['none', 'local_folder', 'icloud'].includes(store.provider)
 
   return (
     <div
@@ -220,7 +241,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className="ark-panel rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+        className={`ark-panel rounded-xl w-full max-h-[90vh] flex flex-col transition-all ${tab === 'config' ? 'max-w-4xl' : 'max-w-2xl'}`}
         style={{ border: '1px solid rgba(0,200,255,0.3)', boxShadow: '0 0 40px rgba(0,200,255,0.1)' }}
       >
         {/* Header */}
@@ -236,7 +257,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
 
         {/* Tab bar */}
         <div className="flex border-b border-ark-cyan/20 flex-shrink-0">
-          {(['general', 'backup'] as OptionsTab[]).map((t) => (
+          {(['general', 'backup', 'config'] as OptionsTab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -246,7 +267,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                 borderBottom: tab === t ? '2px solid rgba(0,200,255,0.8)' : '2px solid transparent',
               }}
             >
-              {t === 'general' ? 'General' : 'Backup en la Nube'}
+              {t === 'general' ? 'General' : t === 'backup' ? 'Backup' : 'Config INI'}
             </button>
           ))}
         </div>
@@ -254,8 +275,38 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
 
+          {/* ── GENERAL TAB ── */}
           {tab === 'general' && (
             <>
+              {/* Language selector */}
+              <Section title="Idioma / Language">
+                <div className="grid grid-cols-2 gap-2">
+                  {LANGUAGES.map((lang) => (
+                    <button
+                      key={lang.code}
+                      onClick={() => store.setLanguage(lang.code)}
+                      className="rounded-md p-2.5 text-left transition-all flex items-center gap-2"
+                      style={{
+                        background: store.language === lang.code ? 'rgba(0,200,255,0.1)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${store.language === lang.code ? 'rgba(0,200,255,0.5)' : 'rgba(255,255,255,0.07)'}`,
+                      }}
+                    >
+                      <span className="text-xs font-semibold" style={{ color: store.language === lang.code ? 'rgba(0,200,255,0.9)' : 'rgba(255,255,255,0.45)' }}>
+                        {lang.native}
+                      </span>
+                      {lang.native !== lang.label && (
+                        <span className="text-[10px]" style={{ color: store.language === lang.code ? 'rgba(0,200,255,0.5)' : 'rgba(255,255,255,0.2)' }}>
+                          {lang.label}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-ark-cyan/30 text-[10px] mt-1">
+                  La preferencia se guarda. Las traducciones se aplicarán progresivamente en próximas versiones.
+                </p>
+              </Section>
+
               {/* On-demand servers */}
               <Section title="Servidor Bajo Demanda">
                 <div className="flex items-center justify-between">
@@ -277,8 +328,8 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                   <div>
                     <p className="text-ark-cyan/80 text-sm">Minimizar a la bandeja del sistema</p>
                     <p className="text-ark-cyan/40 text-xs mt-0.5">
-                      Al cerrar la ventana, el manager se oculta en la barra de tareas (como Discord).
-                      Haz clic en el icono de bandeja para volver a abrirlo o usa "Salir" para cerrarlo del todo.
+                      Al cerrar la ventana, la app se minimiza a la bandeja del sistema.
+                      Haz clic en el icono de la bandeja para restaurarla, o elige "Salir" para cerrarla completamente.
                     </p>
                   </div>
                   <Toggle value={store.minimizeToTray} onChange={store.setMinimizeToTray} />
@@ -357,28 +408,54 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
             </>
           )}
 
+          {/* ── BACKUP TAB ── */}
           {tab === 'backup' && (
             <>
               {/* Provider selector */}
-              <Section title="Proveedor de la Nube">
+              <Section title="Destino del Backup">
                 <div className="grid grid-cols-2 gap-2">
                   {PROVIDERS.map((p) => (
                     <button
                       key={p.value}
                       onClick={() => store.setProvider(p.value)}
-                      className="rounded-md p-3 text-left text-sm font-semibold transition-all"
+                      className="rounded-md p-3 text-left transition-all"
                       style={{
                         background: store.provider === p.value ? `${p.color}18` : 'rgba(255,255,255,0.03)',
                         border: `1px solid ${store.provider === p.value ? `${p.color}60` : 'rgba(255,255,255,0.08)'}`,
-                        color: store.provider === p.value ? p.color : 'rgba(255,255,255,0.45)',
                         boxShadow: store.provider === p.value ? `0 0 12px ${p.color}20` : 'none',
                       }}
                     >
-                      {p.label}
+                      <p className="text-sm font-semibold" style={{ color: store.provider === p.value ? p.color : 'rgba(255,255,255,0.45)' }}>
+                        {p.label}
+                      </p>
+                      {p.desc && (
+                        <p className="text-[10px] mt-0.5" style={{ color: store.provider === p.value ? `${p.color}99` : 'rgba(255,255,255,0.2)' }}>
+                          {p.desc}
+                        </p>
+                      )}
                     </button>
                   ))}
                 </div>
               </Section>
+
+              {/* Local folder config */}
+              {store.provider === 'local_folder' && (
+                <Section title="Carpeta Local">
+                  <p className="text-ark-cyan/40 text-xs mb-3">
+                    Copia el backup como .zip a esta carpeta. Ponla dentro de tu carpeta sincronizada de
+                    <span className="text-ark-cyan/60"> OneDrive</span>,
+                    <span className="text-ark-cyan/60"> Google Drive</span> o
+                    <span className="text-ark-cyan/60"> Dropbox</span> para tener respaldo automático en la nube
+                    sin configurar OAuth. Ejemplo: <span className="font-mono text-ark-cyan/60">C:\Users\Max\OneDrive\ARKBackups</span>
+                  </p>
+                  <Field
+                    label="Ruta de destino"
+                    value={store.localFolderPath}
+                    onChange={store.setLocalFolderPath}
+                    placeholder="C:\Users\Max\OneDrive\ARKBackups"
+                  />
+                </Section>
+              )}
 
               {/* S3 config */}
               {store.provider === 's3' && (
@@ -496,12 +573,8 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     )}
                   </div>
 
-                  {backupStatus && (
-                    <p className="text-green-400/80 text-xs">{backupStatus}</p>
-                  )}
-                  {backupError && (
-                    <p className="text-red-400/80 text-xs">{backupError}</p>
-                  )}
+                  {backupStatus && <p className="text-green-400/80 text-xs">{backupStatus}</p>}
+                  {backupError && <p className="text-red-400/80 text-xs">{backupError}</p>}
 
                   {store.backupHistory.length > 0 && (
                     <Section title="Historial de Backups">
@@ -522,71 +595,76 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     </Section>
                   )}
 
-                  {/* ── Restore from cloud ── */}
-                  <Section title="Restaurar desde la Nube">
-                    <p className="text-ark-cyan/40 text-xs">
-                      Lista los backups disponibles en tu proveedor y restaura cualquiera de ellos. Los saves actuales se guardan automáticamente como snapshot de seguridad antes de restaurar.
-                    </p>
-
-                    <div className="flex items-center gap-3 pt-1">
-                      <button
-                        onClick={handleListBackups}
-                        disabled={isListing || !isConfigured()}
-                        className="ark-action-btn text-xs px-4 py-1.5"
-                        style={{ opacity: isConfigured() ? 1 : 0.4 }}
-                      >
-                        {isListing ? '⏳ Buscando...' : '🔍 Listar backups disponibles'}
-                      </button>
-                    </div>
-
-                    {listError && (
-                      <p className="text-red-400/80 text-xs">{listError}</p>
-                    )}
-
-                    {cloudList.length > 0 && (
-                      <div className="space-y-1.5 max-h-52 overflow-y-auto mt-2">
-                        {cloudList.map((entry) => {
-                          const isRestoring = restoring === entry.key
-                          const sizeMB = (entry.size_bytes / 1024 / 1024).toFixed(1)
-                          const date = new Date(entry.created_at).toLocaleString()
-                          return (
-                            <div
-                              key={entry.key}
-                              className="flex items-center justify-between px-3 py-2 rounded gap-2"
-                              style={{
-                                background: isRestoring ? 'rgba(0,200,255,0.06)' : 'rgba(255,255,255,0.03)',
-                                border: `1px solid ${isRestoring ? 'rgba(0,200,255,0.35)' : 'rgba(255,255,255,0.07)'}`,
-                              }}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="text-ark-cyan/80 text-xs font-mono truncate">{entry.name}</p>
-                                <p className="text-ark-cyan/30 text-[10px]">{date} · {sizeMB} MB</p>
-                              </div>
-                              <button
-                                onClick={() => handleRestore(entry)}
-                                disabled={!!restoring}
-                                className="flex-shrink-0 ark-action-btn text-[10px] px-3 py-1"
-                                style={{ opacity: restoring ? 0.4 : 1 }}
-                              >
-                                {isRestoring ? '⏳' : '⏪ Restaurar'}
-                              </button>
-                            </div>
-                          )
-                        })}
+                  {/* Restore — only for remote cloud providers */}
+                  {isCloudProvider && (
+                    <Section title="Restaurar desde la Nube">
+                      <p className="text-ark-cyan/40 text-xs">
+                        Lista los backups disponibles en tu proveedor y restaura cualquiera. Los saves actuales se guardan como snapshot de seguridad antes de restaurar.
+                      </p>
+                      <div className="flex items-center gap-3 pt-1">
+                        <button
+                          onClick={handleListBackups}
+                          disabled={isListing || !isConfigured()}
+                          className="ark-action-btn text-xs px-4 py-1.5"
+                          style={{ opacity: isConfigured() ? 1 : 0.4 }}
+                        >
+                          {isListing ? '⏳ Buscando...' : '🔍 Listar backups disponibles'}
+                        </button>
                       </div>
-                    )}
 
-                    {restoreStatus && (
-                      <p className="text-green-400/80 text-xs">{restoreStatus}</p>
-                    )}
-                    {restoreError && (
-                      <p className="text-red-400/80 text-xs">{restoreError}</p>
-                    )}
-                  </Section>
+                      {listError && <p className="text-red-400/80 text-xs">{listError}</p>}
+
+                      {cloudList.length > 0 && (
+                        <div className="space-y-1.5 max-h-52 overflow-y-auto mt-2">
+                          {cloudList.map((entry) => {
+                            const isRestoring = restoring === entry.key
+                            const sizeMB = (entry.size_bytes / 1024 / 1024).toFixed(1)
+                            const date = new Date(entry.created_at).toLocaleString()
+                            return (
+                              <div
+                                key={entry.key}
+                                className="flex items-center justify-between px-3 py-2 rounded gap-2"
+                                style={{
+                                  background: isRestoring ? 'rgba(0,200,255,0.06)' : 'rgba(255,255,255,0.03)',
+                                  border: `1px solid ${isRestoring ? 'rgba(0,200,255,0.35)' : 'rgba(255,255,255,0.07)'}`,
+                                }}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-ark-cyan/80 text-xs font-mono truncate">{entry.name}</p>
+                                  <p className="text-ark-cyan/30 text-[10px]">{date} · {sizeMB} MB</p>
+                                </div>
+                                <button
+                                  onClick={() => handleRestore(entry)}
+                                  disabled={!!restoring}
+                                  className="flex-shrink-0 ark-action-btn text-[10px] px-3 py-1"
+                                  style={{ opacity: restoring ? 0.4 : 1 }}
+                                >
+                                  {isRestoring ? '⏳' : '⏪ Restaurar'}
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {restoreStatus && <p className="text-green-400/80 text-xs">{restoreStatus}</p>}
+                      {restoreError && <p className="text-red-400/80 text-xs">{restoreError}</p>}
+                    </Section>
+                  )}
                 </>
               )}
             </>
           )}
+          {/* ── CONFIG TAB ── */}
+          {tab === 'config' && config && (
+            <RawConfigViewer config={config} />
+          )}
+          {tab === 'config' && !config && (
+            <p className="text-ark-cyan/40 text-sm text-center py-8">
+              Carga la configuración del servidor primero.
+            </p>
+          )}
+
         </div>
 
         {/* Footer */}
@@ -600,7 +678,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
   )
 }
 
-// ─── Small helpers ───────────────────────────────────────────
+// ─── Small helpers ────────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

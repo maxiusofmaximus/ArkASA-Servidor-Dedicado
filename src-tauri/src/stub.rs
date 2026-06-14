@@ -5,21 +5,29 @@
 //!
 //! Lifecycle for one map:
 //!   1. Stub binds both ports, responds to A2S_INFO queries.
-//!   2. First UDP packet on game_port → stub drops both sockets (releases ports).
-//!   3. After a short OS-level delay, ARK is launched.
-//!   4. Stub polls query_port until ARK responds → server is ready.
-//!   5. Every 60 s stub queries the player count.
-//!      If players = 0 for `auto_shutdown_min` minutes → kill ARK → goto 1.
-//!   6. If the shutdown_tx fires (user clicked Stop) → kill ARK if running → exit.
+//!   2. First UDP packet on game_port → drop game_sock, launch ARK.
+//!   3. While ARK loads (takes 3-5 min), stub continues serving A2S on
+//!      query_port in burst-bind windows so the obelisk keeps seeing the server.
+//!   4. Once ARK is fully running (RCON accepts connections), drop query_sock.
+//!   5. Every 60 s monitor player count.
+//!      If players = 0 for `auto_shutdown_min` minutes → RCON saveworld+doexit → goto 1.
+//!   6. Shutdown signal fires → RCON saveworld+doexit (falls back to kill if RCON fails).
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::watch;
 use tokio::time::sleep;
 
 // ARK: Survival Ascended Steam AppID
 const ARK_ASA_APP_ID: u32 = 2_399_830;
+
+/// Timeout constants for RCON in the stub (independent of ark/rcon.rs).
+const RCON_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const RCON_AUTH_TIMEOUT:    Duration = Duration::from_secs(4);
+const RCON_CMD_TIMEOUT:     Duration = Duration::from_secs(8);
+const SAVE_GRACE_SECS:      u64      = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -38,6 +46,8 @@ pub struct MapLaunchParams {
     pub extra_args: Vec<String>,
     pub game_port: u16,
     pub query_port: u16,
+    pub rcon_port: u16,
+    pub admin_password: String,
     /// Minutes of zero players before ARK is shut down (0 = never)
     pub auto_shutdown_min: u64,
 }
@@ -148,7 +158,7 @@ fn spawn_ark(params: &MapLaunchParams) -> Result<u32, String> {
     Ok(pid)
 }
 
-/// Kill ARK by PID (Windows).
+/// Kill ARK by PID.
 fn kill_ark_pid(pid: u32) {
     #[cfg(windows)]
     {
@@ -166,8 +176,78 @@ fn kill_ark_pid(pid: u32) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RCON helpers (standalone — no dependency on ark/rcon.rs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a Source RCON framed packet.
+fn rcon_packet(id: i32, ptype: i32, body: &str) -> Vec<u8> {
+    let body_bytes = body.as_bytes();
+    let size = 4 + 4 + body_bytes.len() + 2;
+    let mut pkt = Vec::with_capacity(4 + size);
+    pkt.extend_from_slice(&(size as i32).to_le_bytes());
+    pkt.extend_from_slice(&id.to_le_bytes());
+    pkt.extend_from_slice(&ptype.to_le_bytes());
+    pkt.extend_from_slice(body_bytes);
+    pkt.push(0);
+    pkt.push(0);
+    pkt
+}
+
+/// Send one RCON command. Returns Err if auth fails or connection times out.
+async fn rcon_exec(rcon_port: u16, password: &str, command: &str) -> Result<(), String> {
+    let addr = format!("127.0.0.1:{}", rcon_port);
+    let mut stream = tokio::time::timeout(RCON_CONNECT_TIMEOUT, TcpStream::connect(&addr))
+        .await
+        .map_err(|_| format!("RCON connect timeout (port {})", rcon_port))?
+        .map_err(|e| format!("RCON connect failed: {}", e))?;
+
+    // Authenticate
+    stream.write_all(&rcon_packet(1, 3, password)).await.map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 4096];
+    let _ = tokio::time::timeout(RCON_AUTH_TIMEOUT, stream.read(&mut buf))
+        .await
+        .map_err(|_| "RCON auth timeout")?
+        .map_err(|e| e.to_string())?;
+
+    if buf.len() >= 8 {
+        let resp_id = i32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        if resp_id == -1 {
+            return Err("RCON auth rejected".to_string());
+        }
+    }
+
+    // Send command
+    stream.write_all(&rcon_packet(2, 2, command)).await.map_err(|e| e.to_string())?;
+    let _ = tokio::time::timeout(RCON_CMD_TIMEOUT, stream.read(&mut buf))
+        .await
+        .unwrap_or(Ok(0));
+
+    Ok(())
+}
+
+/// Graceful shutdown: saveworld → wait → doexit.
+/// Falls back silently — caller should kill_ark_pid if this returns Err.
+async fn rcon_graceful_shutdown(rcon_port: u16, password: &str) -> Result<(), String> {
+    rcon_exec(rcon_port, password, "saveworld").await?;
+    sleep(Duration::from_secs(SAVE_GRACE_SECS)).await;
+    // doexit causes the server to close the TCP connection before responding — that's OK
+    let _ = rcon_exec(rcon_port, password, "doexit").await;
+    Ok(())
+}
+
+/// Returns true if ARK's RCON port is accepting TCP connections (ARK fully loaded).
+async fn is_rcon_accepting(rcon_port: u16) -> bool {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        TcpStream::connect(format!("127.0.0.1:{}", rcon_port)),
+    )
+    .await
+    .is_ok_and(|r| r.is_ok())
+}
+
 /// Send one A2S_INFO query to `127.0.0.1:query_port` and parse the player count.
-/// Returns `None` on timeout or parse failure (ARK not ready / not responding).
+/// Returns `None` on timeout or parse failure.
 async fn query_ark_players(query_port: u16) -> Option<u8> {
     let sock = UdpSocket::bind("0.0.0.0:0").await.ok()?;
     let addr = format!("127.0.0.1:{}", query_port);
@@ -175,22 +255,14 @@ async fn query_ark_players(query_port: u16) -> Option<u8> {
     sock.send_to(query, &addr).await.ok()?;
 
     let mut buf = [0u8; 1400];
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        sock.recv_from(&mut buf),
-    )
-    .await;
-
+    let result = tokio::time::timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await;
     let (n, _) = result.ok()?.ok()?;
 
-    // A2S_INFO response: [4×FF][49='I'][protocol][name\0][map\0][folder\0][game\0][appid 2B][players] ...
-    if n < 6 || buf[4] != b'I' {
-        return None;
-    }
-    let mut pos = 6usize; // skip 4-byte header + 'I' + protocol byte
-    for _ in 0..4 {       // skip 4 null-terminated strings
+    if n < 6 || buf[4] != b'I' { return None; }
+    let mut pos = 6usize;
+    for _ in 0..4 {
         while pos < n && buf[pos] != 0 { pos += 1; }
-        pos += 1;          // skip the null itself
+        pos += 1;
     }
     pos += 2; // skip 2-byte AppID
     if pos < n { Some(buf[pos]) } else { None }
@@ -200,10 +272,9 @@ async fn query_ark_players(query_port: u16) -> Option<u8> {
 // Main stub task
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Run the full on-demand lifecycle for one map.  Loops until shutdown fires.
+/// Run the full on-demand lifecycle for one map. Loops until shutdown fires.
 pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) {
     let display_name = {
-        // Extract SessionName from launch_params string, append " [DORMIDO]"
         let s = &params.launch_params;
         let start = s.find("SessionName=").map(|i| i + 12).unwrap_or(0);
         let end = s[start..].find('?').map(|i| start + i).unwrap_or(s.len());
@@ -211,7 +282,7 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
     };
 
     'lifecycle: loop {
-        // ── Phase 1: Stub dormant — bind ports, serve A2S queries ─────────────
+        // ── Phase 1: Stub dormant — bind both ports, serve A2S queries ─────────
         let query_sock = match UdpSocket::bind(format!("0.0.0.0:{}", params.query_port)).await {
             Ok(s) => s,
             Err(e) => {
@@ -230,24 +301,20 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
         };
 
         let a2s_resp = build_a2s_info(&display_name, &params.map, params.game_port);
-        let mut qbuf = [0u8; 2048]; // query socket buffer
-        let mut gbuf = [0u8; 2048]; // game socket buffer
-        let mut shutdown_rx = shutdown.clone();
+        let mut qbuf = [0u8; 2048];
+        let mut gbuf = [0u8; 2048];
 
         log::info!("[Stub {}] DORMANT (query={} game={})", params.map, params.query_port, params.game_port);
 
-        let player_tried = loop {
-            let mut player_connecting = false;
-
+        // Phase 1 dormant loop: serve A2S on query_port, watch for game_port trigger.
+        // Check shutdown level at top of each iteration (watch::Receiver::changed()
+        // is edge-triggered, so we use borrow() for level-triggered check).
+        loop {
+            if *shutdown.borrow() {
+                log::info!("[Stub {}] shutdown signal while dormant", params.map);
+                return;
+            }
             tokio::select! {
-                // Shutdown requested
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        log::info!("[Stub {}] shutdown signal — exiting", params.map);
-                        return;
-                    }
-                }
-                // A2S query on query_port → respond
                 result = query_sock.recv_from(&mut qbuf) => {
                     if let Ok((n, src)) = result {
                         if is_a2s_query(&qbuf[..n]) {
@@ -255,28 +322,21 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
                         }
                     }
                 }
-                // Any UDP packet on game_port → player connecting
                 result = game_sock.recv_from(&mut gbuf) => {
                     if let Ok((_n, src)) = result {
                         log::info!("[Stub {}] connection attempt from {} — waking ARK", params.map, src);
-                        player_connecting = true;
+                        break;
                     }
                 }
+                // Wake up every 2s to recheck shutdown level
+                _ = sleep(Duration::from_secs(2)) => {}
             }
-
-            if player_connecting {
-                break true;
-            }
-        };
-
-        if !player_tried {
-            return; // shutdown fired inside the loop
         }
 
-        // Drop sockets so the OS releases the ports before ARK binds them
-        drop(query_sock);
+        // Release ONLY game_sock so the OS gives game_port to ARK.
+        // query_sock stays so we can keep serving A2S while ARK loads.
         drop(game_sock);
-        sleep(Duration::from_millis(400)).await;
+        sleep(Duration::from_millis(200)).await;
 
         // ── Phase 2: Launch ARK ───────────────────────────────────────────────
         let ark_pid = match spawn_ark(&params) {
@@ -286,38 +346,127 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
             }
             Err(e) => {
                 log::error!("[Stub {}] failed to launch ARK: {}", params.map, e);
+                drop(query_sock);
                 sleep(Duration::from_secs(10)).await;
                 continue 'lifecycle;
             }
         };
 
-        // ── Phase 3: Wait for ARK to become ready (up to 10 min) ─────────────
-        log::info!("[Stub {}] waiting for ARK query port {}…", params.map, params.query_port);
-        let mut ready = false;
-        for _ in 0..120u32 {
-            let mut sd = shutdown.clone();
+        // ── Phase 3: Keep serving A2S on query_port while ARK starts ──────────
+        //
+        // ARK will try to bind query_port shortly after start. The moment it
+        // does, our bind fails and we yield that port. We detect ARK fully ready
+        // via RCON (which becomes available only after the map finishes loading),
+        // then stop trying to rebind query_port.
+        //
+        // Strategy: hold query_sock open, serve A2S until ARK tries to bind
+        // query_port (our recv will fail or sock will be taken). Once ARK is
+        // responding via RCON, we're done.
+        //
+        // Since ARK on Windows might fail to bind our held port and keep
+        // retrying, we flip between "hold + serve" and "yield" in 5-second
+        // windows so ARK can grab the port when it's ready.
+        //
+        log::info!("[Stub {}] serving A2S on query_port {} while ARK loads…", params.map, params.query_port);
+
+        // Phase 3a: Hold query_sock and keep serving A2S for up to 60s.
+        // ARK typically doesn't try to bind query_port until after ~30-60s of load.
+        // We check every 10s if ARK's RCON port is accepting (= fully loaded).
+        let mut ark_ready = false;
+        let hold_until = tokio::time::Instant::now() + Duration::from_secs(60);
+        let mut tbuf = [0u8; 2048];
+
+        'hold: loop {
+            if *shutdown.borrow() {
+                log::info!("[Stub {}] shutdown while starting — RCON then kill", params.map);
+                drop(query_sock);
+                let _ = rcon_graceful_shutdown(params.rcon_port, &params.admin_password).await;
+                kill_ark_pid(ark_pid);
+                return;
+            }
+            if tokio::time::Instant::now() >= hold_until { break 'hold; }
+
             tokio::select! {
-                _ = sd.changed() => {
-                    if *sd.borrow() {
-                        kill_ark_pid(ark_pid);
-                        return;
+                result = query_sock.recv_from(&mut tbuf) => {
+                    if let Ok((n, src)) = result {
+                        if is_a2s_query(&tbuf[..n]) {
+                            let _ = query_sock.send_to(&a2s_resp, src).await;
+                        }
                     }
                 }
-                _ = sleep(Duration::from_secs(5)) => {}
-            }
-            if query_ark_players(params.query_port).await.is_some() {
-                ready = true;
-                break;
+                _ = sleep(Duration::from_secs(10)) => {
+                    // Check if ARK RCON is up (= map fully loaded)
+                    if is_rcon_accepting(params.rcon_port).await {
+                        log::info!("[Stub {}] ARK RCON up — releasing query_port", params.map);
+                        ark_ready = true;
+                        break 'hold;
+                    }
+                }
             }
         }
 
-        if !ready {
-            log::warn!("[Stub {}] ARK did not become ready — restarting stub", params.map);
-            kill_ark_pid(ark_pid);
-            sleep(Duration::from_secs(5)).await;
-            continue 'lifecycle;
+        // Release query_sock so ARK can own it (if it hasn't already taken it)
+        drop(query_sock);
+
+        if ark_ready {
+            log::info!("[Stub {}] ARK is READY", params.map);
+        } else {
+            // Phase 3b: burst-bind windows.
+            // Alternate between "hold query_port and serve A2S" and "yield it to ARK",
+            // so the server keeps appearing in the obelisk/browser during the long load.
+            log::info!("[Stub {}] burst-bind phase for query_port {}", params.map, params.query_port);
+            let mut burst_iter = 0u32;
+
+            while burst_iter < 120 && !ark_ready {
+                if *shutdown.borrow() {
+                    log::info!("[Stub {}] shutdown in burst phase — RCON then kill", params.map);
+                    let _ = rcon_graceful_shutdown(params.rcon_port, &params.admin_password).await;
+                    kill_ark_pid(ark_pid);
+                    return;
+                }
+
+                // Try to grab query_port for a 4-second serving window
+                match UdpSocket::bind(format!("0.0.0.0:{}", params.query_port)).await {
+                    Ok(temp_sock) => {
+                        // Got it — ARK hasn't bound query_port yet. Serve A2S briefly.
+                        let end = tokio::time::Instant::now() + Duration::from_secs(4);
+                        loop {
+                            let remaining = end.saturating_duration_since(tokio::time::Instant::now());
+                            if remaining.is_zero() { break; }
+                            let mut bbuf = [0u8; 2048];
+                            match tokio::time::timeout(remaining, temp_sock.recv_from(&mut bbuf)).await {
+                                Ok(Ok((n, src))) => {
+                                    if is_a2s_query(&bbuf[..n]) {
+                                        let _ = temp_sock.send_to(&a2s_resp, &src).await;
+                                    }
+                                }
+                                _ => break,
+                            }
+                        }
+                        drop(temp_sock); // Release so ARK can grab it
+                        sleep(Duration::from_millis(500)).await; // brief gap for ARK
+                    }
+                    Err(_) => {
+                        // ARK has query_port — check if it's actually responding (RCON up)
+                        if is_rcon_accepting(params.rcon_port).await {
+                            log::info!("[Stub {}] ARK RCON up in burst phase — ready", params.map);
+                            ark_ready = true;
+                        } else {
+                            sleep(Duration::from_secs(5)).await;
+                        }
+                    }
+                }
+                burst_iter += 1;
+            }
+
+            if !ark_ready {
+                log::warn!("[Stub {}] ARK did not become ready in time — restarting stub", params.map);
+                kill_ark_pid(ark_pid);
+                sleep(Duration::from_secs(5)).await;
+                continue 'lifecycle;
+            }
+            log::info!("[Stub {}] ARK is READY", params.map);
         }
-        log::info!("[Stub {}] ARK is READY", params.map);
 
         // ── Phase 4: Monitor player count, auto-shutdown ──────────────────────
         let auto_shutdown_dur = if params.auto_shutdown_min > 0 {
@@ -328,21 +477,22 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
         let mut empty_since: Option<Instant> = None;
 
         loop {
-            let mut sd = shutdown.clone();
-            tokio::select! {
-                _ = sd.changed() => {
-                    if *sd.borrow() {
-                        log::info!("[Stub {}] shutdown — killing ARK (PID {})", params.map, ark_pid);
-                        kill_ark_pid(ark_pid);
-                        return;
-                    }
+            // Level-triggered shutdown check — catches signals sent before we entered this loop
+            if *shutdown.borrow() {
+                log::info!("[Stub {}] shutdown signal — graceful RCON shutdown", params.map);
+                if let Err(e) = rcon_graceful_shutdown(params.rcon_port, &params.admin_password).await {
+                    log::warn!("[Stub {}] RCON graceful shutdown failed ({}), killing PID {}", params.map, e, ark_pid);
+                    kill_ark_pid(ark_pid);
+                } else {
+                    log::info!("[Stub {}] RCON graceful shutdown complete", params.map);
                 }
-                _ = sleep(Duration::from_secs(60)) => {}
+                return;
             }
+
+            sleep(Duration::from_secs(60)).await;
 
             match query_ark_players(params.query_port).await {
                 None => {
-                    // ARK stopped responding (crash or external stop)
                     log::info!("[Stub {}] ARK stopped responding — restarting stub", params.map);
                     continue 'lifecycle;
                 }
@@ -351,12 +501,14 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
                     if let Some(limit) = auto_shutdown_dur {
                         if since.elapsed() >= limit {
                             log::info!(
-                                "[Stub {}] auto-shutdown after {}min empty",
-                                params.map,
-                                params.auto_shutdown_min
+                                "[Stub {}] auto-shutdown after {}min empty — RCON graceful",
+                                params.map, params.auto_shutdown_min
                             );
-                            kill_ark_pid(ark_pid);
-                            sleep(Duration::from_secs(3)).await;
+                            if let Err(e) = rcon_graceful_shutdown(params.rcon_port, &params.admin_password).await {
+                                log::warn!("[Stub {}] RCON auto-shutdown failed ({}), killing", params.map, e);
+                                kill_ark_pid(ark_pid);
+                            }
+                            sleep(Duration::from_secs(5)).await;
                             continue 'lifecycle;
                         }
                     }

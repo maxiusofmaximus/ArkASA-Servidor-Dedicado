@@ -4,22 +4,50 @@ pub mod cli;
 pub mod backup;
 pub mod stub;
 
+// Re-export ark sub-modules used in commands
+mod ark;
+
 use config::{ConfigLoader, ConfigPersister, ServerConfig, CompositeValidator};
+use ark::{build_launch_args, RconClient};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Command;
 use tauri::{Manager, Emitter};
+use once_cell::sync::Lazy;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Path helper — uses Tauri v2's proper path API so it works regardless of
-// how the process is launched (avoids relying on APPDATA env var).
+// Local mods DB — parsed once at startup, not on every search/lookup.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LOCAL_MODS_JSON: &str = include_str!("mods_db.json");
+
+static LOCAL_MODS_DB: Lazy<Vec<CurseForgeMod>> = Lazy::new(|| {
+    serde_json::from_str(LOCAL_MODS_JSON).unwrap_or_default()
+});
+
+fn search_local_db(query: &str) -> Vec<CurseForgeMod> {
+    let q = query.to_lowercase();
+    LOCAL_MODS_DB.iter()
+        .filter(|m| {
+            m.name.to_lowercase().contains(&q)
+                || m.summary.to_lowercase().contains(&q)
+                || m.slug.to_lowercase().contains(&q)
+        })
+        .cloned()
+        .collect()
+}
+
+fn get_local_mod_by_id(mod_id: &str) -> Option<CurseForgeMod> {
+    LOCAL_MODS_DB.iter().find(|m| m.id == mod_id).cloned()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Path helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn get_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // On Windows, prefer APPDATA env var (always set in interactive user sessions).
-    // Fall back to Tauri's data_dir() API for non-Windows or edge cases.
     let base = if cfg!(target_os = "windows") {
         match std::env::var("APPDATA") {
             Ok(p) if !p.is_empty() => PathBuf::from(p),
@@ -35,14 +63,36 @@ fn get_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("ARK ASA Config Manager"))
 }
 
+/// Read the stored CurseForge API key, returning an empty string if absent.
+async fn read_api_key(config_dir: &PathBuf) -> String {
+    tokio::fs::read_to_string(config_dir.join("curseforge_api_key.txt"))
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Ping state (for Tailscale keep-alive)
+// Shared reqwest client — reuse across all CurseForge calls.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ARK_ASA_GAME_ID:      u32 = 1_172_434;
+const CACHE_VALIDITY_SECS:  u64 = 3_600; // 1 hour
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ping state (Tailscale keep-alive)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct PingState(Mutex<Option<tokio::task::JoinHandle<()>>>);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tray state — shared bool so the close handler knows whether to hide or exit
+// Tray state
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct TrayState {
@@ -63,87 +113,34 @@ fn quit_app(app: tauri::AppHandle) {
 // On-demand server commands
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Start the UDP stub for one map so it appears in the ARK browser while
-/// ARK itself is not running.  When a player connects, the stub wakes ARK.
 #[tauri::command]
-fn enable_on_demand(
+async fn enable_on_demand(
     config: ServerConfig,
     map_index: usize,
     auto_shutdown_min: u64,
-    state: tauri::State<Arc<stub::OnDemandState>>,
+    state: tauri::State<'_, Arc<stub::OnDemandState>>,
 ) -> std::result::Result<String, String> {
-    let maps: Vec<String> = if config.cluster_maps.is_empty() {
-        vec!["TheIsland_WP".to_string()]
-    } else {
-        config.cluster_maps.clone()
-    };
-
-    let map = maps.get(map_index)
+    let maps = config.effective_maps();
+    let map  = maps.get(map_index)
         .cloned()
         .unwrap_or_else(|| "TheIsland_WP".to_string());
 
-    let is_cluster = maps.len() > 1;
-    let cluster_id: String = config.identification.session_name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<String>()
-        .to_lowercase();
-    let cluster_id = if cluster_id.is_empty() { "ark_cluster".to_string() } else { cluster_id };
-
-    let server_dir = config.paths.server_dir.trim_end_matches('\\');
-    let exe = format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", server_dir);
-    let cluster_dir = format!("{}\\clusters", server_dir);
-
-    let game_port  = config.network.port       + (map_index as u16) * 2;
-    let query_port = config.network.query_port + map_index as u16;
-    let rcon_port  = config.network.rcon_port  + map_index as u16;
-
-    let map_label = map.trim_end_matches("_WP");
-    let session_name = if is_cluster && map_index > 0 {
-        format!("{} · {}", config.identification.session_name, map_label)
-    } else {
-        config.identification.session_name.clone()
-    };
-
-    let mut launch_params = format!(
-        "{}?listen?SessionName={}?ServerAdminPassword={}",
-        map, session_name, config.identification.admin_password,
-    );
-    if !config.identification.server_password.is_empty() {
-        launch_params.push_str(&format!("?ServerPassword={}", config.identification.server_password));
-    }
-    launch_params.push_str(&format!(
-        "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}",
-        config.gameplay.max_players, game_port, query_port, rcon_port,
-    ));
-
-    let mut extra_args = vec![
-        "-NoBattlEye".to_string(),
-        "-server".to_string(),
-        "-log".to_string(),
-        "-servergamelog".to_string(),
-        "-NoTransferFromFiltering".to_string(),
-        format!("-WinLiveMaxPlayers={}", config.gameplay.max_players),
-    ];
-    if is_cluster {
-        extra_args.push(format!("-clusterid={}", cluster_id));
-        extra_args.push(format!("-ClusterDirOverride={}", cluster_dir));
-    }
-    if !config.mods.active_mods.is_empty() {
-        extra_args.push(format!("-mods={}", config.mods.active_mods.join(",")));
-    }
+    let (game_port, query_port, rcon_port) = config.network.ports_for_index(map_index);
+    let args = build_launch_args(&config, &map, map_index);
 
     let params = stub::MapLaunchParams {
-        map: map.clone(),
-        exe,
-        launch_params,
-        extra_args,
+        map:            map.clone(),
+        exe:            config.paths.ark_exe(),
+        launch_params:  args.url_params,
+        extra_args:     args.flags,
         game_port,
         query_port,
+        rcon_port,
+        admin_password: config.identification.admin_password.clone(),
         auto_shutdown_min,
     };
 
-    // Stop any existing stub for the same game_port
+    // Replace any existing stub on the same port
     {
         let mut handles = state.0.lock().map_err(|e| e.to_string())?;
         if let Some(pos) = handles.iter().position(|h| h.game_port == game_port) {
@@ -167,47 +164,48 @@ fn enable_on_demand(
     Ok(format!("Stub started for {} (game={} query={})", map, game_port, query_port))
 }
 
-/// Stop the on-demand stub for the given game_port.
 #[tauri::command]
-fn disable_on_demand(
+async fn disable_on_demand(
     game_port: u16,
-    state: tauri::State<Arc<stub::OnDemandState>>,
+    state: tauri::State<'_, Arc<stub::OnDemandState>>,
 ) -> std::result::Result<(), String> {
     let mut handles = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(pos) = handles.iter().position(|h| h.game_port == game_port) {
         let handle = handles.remove(pos);
+        // Signal the task — it will RCON saveworld+doexit before exiting
         let _ = handle.shutdown_tx.send(true);
-        handle.task.abort();
-        log::info!("On-demand stub stopped for game_port={}", game_port);
+        log::info!("On-demand stub graceful shutdown signaled for game_port={}", game_port);
     }
     Ok(())
 }
 
-/// Stop ALL on-demand stubs.
 #[tauri::command]
-fn disable_all_on_demand(
-    state: tauri::State<Arc<stub::OnDemandState>>,
+async fn disable_all_on_demand(
+    state: tauri::State<'_, Arc<stub::OnDemandState>>,
 ) -> std::result::Result<(), String> {
     let mut handles = state.0.lock().map_err(|e| e.to_string())?;
     for h in handles.drain(..) {
+        // Send shutdown signal — the stub task handles RCON saveworld+doexit
+        // gracefully before killing the process. Do NOT .abort() here because
+        // that would cut the task before it can run the RCON shutdown sequence.
         let _ = h.shutdown_tx.send(true);
-        h.task.abort();
+        // We intentionally don't await or abort — the task will exit on its own
+        // after completing the graceful shutdown (a few seconds at most).
     }
     Ok(())
 }
 
-/// Return the list of active stub statuses.
 #[tauri::command]
-fn get_on_demand_status(
-    state: tauri::State<Arc<stub::OnDemandState>>,
+async fn get_on_demand_status(
+    state: tauri::State<'_, Arc<stub::OnDemandState>>,
 ) -> std::result::Result<Vec<stub::StubStatus>, String> {
     let handles = state.0.lock().map_err(|e| e.to_string())?;
     Ok(handles.iter().map(|h| stub::StubStatus {
-        map: h.map.clone(),
-        state: if h.task.is_finished() { "stopped".to_string() } else { "dormant".to_string() },
-        game_port: h.game_port,
+        map:        h.map.clone(),
+        state:      if h.task.is_finished() { "stopped".to_string() } else { "dormant".to_string() },
+        game_port:  h.game_port,
         query_port: h.query_port,
-        players: 0,
+        players:    0,
     }).collect())
 }
 
@@ -215,52 +213,21 @@ fn get_on_demand_status(
 // CurseForge types
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ARK_ASA_GAME_ID: u32 = 1172434;
-const CACHE_VALIDITY_SECS: u64 = 3600; // 1 hour
-
-/// Embedded local mods database — used as fallback when the CurseForge API
-/// doesn't return results (no key, 404, or search miss).
-const LOCAL_MODS_DB: &str = include_str!("mods_db.json");
-
-/// Search the embedded local DB by name / summary / slug (case-insensitive).
-fn search_local_db(query: &str) -> Vec<CurseForgeMod> {
-    let q = query.to_lowercase();
-    let db: Vec<CurseForgeMod> = serde_json::from_str(LOCAL_MODS_DB).unwrap_or_default();
-    db.into_iter()
-        .filter(|m| {
-            m.name.to_lowercase().contains(&q)
-                || m.summary.to_lowercase().contains(&q)
-                || m.slug.to_lowercase().contains(&q)
-        })
-        .collect()
-}
-
-/// Look up a single mod by CurseForge ID in the embedded local DB.
-fn get_local_mod_by_id(mod_id: &str) -> Option<CurseForgeMod> {
-    let db: Vec<CurseForgeMod> = serde_json::from_str(LOCAL_MODS_DB).unwrap_or_default();
-    db.into_iter().find(|m| m.id == mod_id)
-}
-
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct CurseForgeMod {
-    pub id: String,
-    pub name: String,
-    pub summary: String,
+    pub id:             String,
+    pub name:           String,
+    pub summary:        String,
     pub download_count: u64,
-    pub categories: Vec<String>,
-    pub logo_url: Option<String>,
-    pub slug: String,
+    pub categories:     Vec<String>,
+    pub logo_url:       Option<String>,
+    pub slug:           String,
     #[serde(default)]
-    pub client_only: bool,
+    pub client_only:    bool,
 }
 
-/// Detect if a CurseForge mod is PC-only / client-only.
-///
-/// ARK SA mods on CurseForge do NOT use OS strings (like "WindowsServer") in
-/// gameVersions — they use game-version numbers (e.g. "0.88.14"). The only
-/// reliable indicator of PC-only mods is the "Custom Cosmetics" category, which
-/// ARK's own CFCore explicitly rejects on cross-platform servers.
-fn detect_client_only(categories: &[CfCategory], _latest_files: &Option<Vec<CfLatestFile>>) -> bool {
+/// Detect PC-only / client-only mods by category.
+fn detect_client_only(categories: &[CfCategory]) -> bool {
     categories.iter().any(|c| {
         let n = c.name.to_lowercase();
         n.contains("custom cosmetic") || n == "cosmetics"
@@ -269,41 +236,38 @@ fn detect_client_only(categories: &[CfCategory], _latest_files: &Option<Vec<CfLa
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ModsCacheFile {
-    mods: Vec<CurseForgeMod>,
-    cached_at: u64,
+    mods:        Vec<CurseForgeMod>,
+    cached_at:   u64,
     total_count: u64,
 }
 
-// CurseForge API response deserialization structs
+// CurseForge API response types
 #[derive(serde::Deserialize)]
 struct CfResponse {
-    data: Vec<CfMod>,
+    data:       Vec<CfMod>,
     pagination: CfPagination,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CfMod {
-    id: u64,
-    name: String,
-    summary: Option<String>,
+    id:             u64,
+    name:           String,
+    summary:        Option<String>,
     download_count: Option<u64>,
-    categories: Option<Vec<CfCategory>>,
-    logo: Option<CfLogo>,
-    slug: Option<String>,
-    latest_files: Option<Vec<CfLatestFile>>,
+    categories:     Option<Vec<CfCategory>>,
+    logo:           Option<CfLogo>,
+    slug:           Option<String>,
+    #[allow(dead_code)]
+    latest_files:   Option<Vec<CfLatestFile>>,
 }
 
 #[derive(serde::Deserialize)]
-struct CfCategory {
-    name: String,
-}
+struct CfCategory { name: String }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CfLogo {
-    thumbnail_url: Option<String>,
-}
+struct CfLogo { thumbnail_url: Option<String> }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -314,8 +278,21 @@ struct CfLatestFile {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CfPagination {
-    total_count: u64,
+struct CfPagination { total_count: u64 }
+
+fn cf_mod_to_domain(m: CfMod) -> CurseForgeMod {
+    let cats       = m.categories.unwrap_or_default();
+    let client_only = detect_client_only(&cats);
+    CurseForgeMod {
+        id:             m.id.to_string(),
+        name:           m.name,
+        summary:        m.summary.unwrap_or_default(),
+        download_count: m.download_count.unwrap_or(0),
+        categories:     cats.into_iter().map(|c| c.name).collect(),
+        logo_url:       m.logo.and_then(|l| l.thumbnail_url),
+        slug:           m.slug.unwrap_or_default(),
+        client_only,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -324,12 +301,11 @@ struct CfPagination {
 
 #[tauri::command]
 async fn load_config(config_path: String) -> std::result::Result<ServerConfig, String> {
-    let path = PathBuf::from(&config_path);
-    ConfigLoader::load_or_default(&path).await.map_err(|e| e.to_string())
+    ConfigLoader::load_or_default(&PathBuf::from(config_path))
+        .await
+        .map_err(|e| e.to_string())
 }
 
-/// Load from the standard TOML path in %APPDATA%, fallback to defaults.
-/// This is the preferred startup command — it restores all saved settings.
 #[tauri::command]
 async fn load_config_or_default(app: tauri::AppHandle) -> std::result::Result<ServerConfig, String> {
     let config_dir = get_config_dir(&app)?;
@@ -341,8 +317,10 @@ async fn load_config_or_default(app: tauri::AppHandle) -> std::result::Result<Se
 
 #[tauri::command]
 async fn validate_config(config: ServerConfig) -> std::result::Result<serde_json::Value, String> {
-    let validator = CompositeValidator::default();
-    let result = validator.validate(&config).await.map_err(|e| e.to_string())?;
+    let result = CompositeValidator::default()
+        .validate(&config)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "valid": result.valid, "errors": result.errors }))
 }
 
@@ -351,7 +329,9 @@ async fn save_config(app: tauri::AppHandle, config: ServerConfig) -> std::result
     use tokio::fs;
 
     let config_dir = get_config_dir(&app)?;
-    std::fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
     let toml_path = config_dir.join("server-config.toml");
     log::info!("Saving config to {:?}", toml_path);
     ConfigPersister::save_toml(&config, &toml_path).await.map_err(|e| e.to_string())?;
@@ -373,9 +353,6 @@ async fn save_config(app: tauri::AppHandle, config: ServerConfig) -> std::result
         fs::copy(&gus_ini, backup_dir.join(format!("GameUserSettings.ini.{}.bak", ts))).await.ok();
     }
 
-    // Generate fresh INI files from the current config.
-    // Non-fatal: if the server path doesn't exist yet, TOML is already saved above — the user
-    // can configure the server dir first and the INIs will be generated on the next save.
     if let Err(e) = ConfigPersister::generate_game_ini(&config, &game_ini).await {
         log::warn!("Could not write Game.ini (path may not exist yet): {}", e);
     }
@@ -394,9 +371,9 @@ fn get_default_config() -> std::result::Result<ServerConfig, String> {
 fn get_config_schema() -> std::result::Result<serde_json::Value, String> {
     Ok(json!({
         "identification": { "session_name": { "type": "string" }, "admin_password": { "type": "string" } },
-        "network": { "port": { "type": "number", "min": 1024, "max": 65535 } },
-        "gameplay": { "max_players": { "type": "number" } },
-        "multipliers": { "xp_multiplier": { "type": "number" } }
+        "network":        { "port": { "type": "number", "min": 1024, "max": 65535 } },
+        "gameplay":       { "max_players": { "type": "number" } },
+        "multipliers":    { "xp_multiplier": { "type": "number" } }
     }))
 }
 
@@ -406,46 +383,30 @@ fn get_config_schema() -> std::result::Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn get_curseforge_api_key(app: tauri::AppHandle) -> std::result::Result<String, String> {
-    let config_dir = get_config_dir(&app)?;
-    let key_path = config_dir.join("curseforge_api_key.txt");
-    Ok(tokio::fs::read_to_string(&key_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string())
+    Ok(read_api_key(&get_config_dir(&app)?).await)
 }
 
 #[tauri::command]
 async fn set_curseforge_api_key(app: tauri::AppHandle, api_key: String) -> std::result::Result<(), String> {
     let config_dir = get_config_dir(&app)?;
     std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-    let key_path = config_dir.join("curseforge_api_key.txt");
-    tokio::fs::write(&key_path, api_key.trim())
+    tokio::fs::write(config_dir.join("curseforge_api_key.txt"), api_key.trim())
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Fetch a single mod by its CurseForge numeric ID.
-/// Returns None if the mod ID is not found (404).
 #[tauri::command]
-async fn get_curseforge_mod_by_id(app: tauri::AppHandle, mod_id: String) -> std::result::Result<Option<CurseForgeMod>, String> {
-    let config_dir = get_config_dir(&app)?;
-    let key_path = config_dir.join("curseforge_api_key.txt");
-    let api_key = tokio::fs::read_to_string(&key_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-
+async fn get_curseforge_mod_by_id(
+    app: tauri::AppHandle,
+    mod_id: String,
+) -> std::result::Result<Option<CurseForgeMod>, String> {
+    let api_key = read_api_key(&get_config_dir(&app)?).await;
     if api_key.is_empty() {
-        // No API key — check local DB before giving up
         return Ok(get_local_mod_by_id(&mod_id));
     }
 
-    let client = reqwest::Client::new();
     let url = format!("https://api.curseforge.com/v1/mods/{}", mod_id.trim());
-
-    let resp = client
+    let resp = HTTP_CLIENT
         .get(&url)
         .header("x-api-key", &api_key)
         .header("Accept", "application/json")
@@ -454,7 +415,6 @@ async fn get_curseforge_mod_by_id(app: tauri::AppHandle, mod_id: String) -> std:
         .map_err(|e| format!("Network error: {}", e))?;
 
     if resp.status().as_u16() == 404 {
-        // Not in CurseForge API — try local DB
         return Ok(get_local_mod_by_id(&mod_id));
     }
     if !resp.status().is_success() {
@@ -462,100 +422,55 @@ async fn get_curseforge_mod_by_id(app: tauri::AppHandle, mod_id: String) -> std:
     }
 
     #[derive(serde::Deserialize)]
-    struct SingleModResp {
-        data: CfMod,
-    }
+    struct SingleModResp { data: CfMod }
 
-    let body: SingleModResp = resp
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {}", e))?;
-
-    let m = body.data;
-    let cats = m.categories.unwrap_or_default();
-    let client_only = detect_client_only(&cats, &m.latest_files);
-    Ok(Some(CurseForgeMod {
-        id: m.id.to_string(),
-        name: m.name,
-        summary: m.summary.unwrap_or_default(),
-        download_count: m.download_count.unwrap_or(0),
-        categories: cats.into_iter().map(|c| c.name).collect(),
-        logo_url: m.logo.and_then(|l| l.thumbnail_url),
-        slug: m.slug.unwrap_or_default(),
-        client_only,
-    }))
+    let body: SingleModResp = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    Ok(Some(cf_mod_to_domain(body.data)))
 }
 
-/// Check which mod IDs from the provided list are NOT available on CurseForge.
-/// Returns the list of unavailable IDs. Skips check if no API key is configured.
 #[tauri::command]
 async fn check_mods_available(
     app: tauri::AppHandle,
     mod_ids: Vec<String>,
 ) -> std::result::Result<Vec<String>, String> {
-    if mod_ids.is_empty() {
-        return Ok(vec![]);
-    }
-    let config_dir = get_config_dir(&app)?;
-    let key_path = config_dir.join("curseforge_api_key.txt");
-    let api_key = tokio::fs::read_to_string(&key_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if api_key.is_empty() {
-        return Ok(vec![]); // Can't check without key — skip validation
-    }
-    let client = reqwest::Client::new();
+    if mod_ids.is_empty() { return Ok(vec![]); }
+    let api_key = read_api_key(&get_config_dir(&app)?).await;
+    if api_key.is_empty() { return Ok(vec![]); }
+
     let mut unavailable = vec![];
     for mod_id in &mod_ids {
         let url = format!("https://api.curseforge.com/v1/mods/{}", mod_id.trim());
-        match client
+        if let Ok(resp) = HTTP_CLIENT
             .get(&url)
             .header("x-api-key", &api_key)
             .header("Accept", "application/json")
             .send()
             .await
         {
-            Ok(resp) if resp.status().as_u16() == 404 => {
+            if resp.status().as_u16() == 404 {
                 unavailable.push(mod_id.clone());
             }
-            Err(_) => {} // Network error — skip, let the server try
-            _ => {}      // 200 or other — treat as available
         }
     }
     Ok(unavailable)
 }
 
-/// Check which mod IDs are PC-only (client-only) and will not work on a cross-platform server.
-/// Returns the list of client-only IDs. Skips check if no API key is configured.
 #[tauri::command]
 async fn check_client_only_mods(
     app: tauri::AppHandle,
     mod_ids: Vec<String>,
 ) -> std::result::Result<Vec<String>, String> {
-    if mod_ids.is_empty() {
-        return Ok(vec![]);
-    }
-    let config_dir = get_config_dir(&app)?;
-    let key_path = config_dir.join("curseforge_api_key.txt");
-    let api_key = tokio::fs::read_to_string(&key_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if api_key.is_empty() {
-        return Ok(vec![]);
-    }
+    if mod_ids.is_empty() { return Ok(vec![]); }
+    let api_key = read_api_key(&get_config_dir(&app)?).await;
+    if api_key.is_empty() { return Ok(vec![]); }
 
     #[derive(serde::Deserialize)]
     struct SingleModResp { data: CfMod }
 
-    let client = reqwest::Client::new();
     let mut client_only = vec![];
     for mod_id in &mod_ids {
         let url = format!("https://api.curseforge.com/v1/mods/{}", mod_id.trim());
-        if let Ok(resp) = client
+        if let Ok(resp) = HTTP_CLIENT
             .get(&url)
             .header("x-api-key", &api_key)
             .header("Accept", "application/json")
@@ -565,7 +480,7 @@ async fn check_client_only_mods(
             if resp.status().is_success() {
                 if let Ok(body) = resp.json::<SingleModResp>().await {
                     let cats = body.data.categories.unwrap_or_default();
-                    if detect_client_only(&cats, &body.data.latest_files) {
+                    if detect_client_only(&cats) {
                         client_only.push(mod_id.clone());
                     }
                 }
@@ -575,41 +490,24 @@ async fn check_client_only_mods(
     Ok(client_only)
 }
 
-/// Invalidate the mod cache so the next fetch_curseforge_mods call hits the API.
 #[tauri::command]
 async fn clear_mods_cache(app: tauri::AppHandle) -> std::result::Result<(), String> {
-    let config_dir = get_config_dir(&app)?;
-    let cache_path = config_dir.join("mods_cache.json");
-    tokio::fs::remove_file(&cache_path).await.ok();
+    tokio::fs::remove_file(get_config_dir(&app)?.join("mods_cache.json"))
+        .await
+        .ok();
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CurseForge mod browser
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Fetch ARK SA mods from CurseForge.
-/// - Checks a 1-hour JSON file cache for index=0 requests.
-/// - Returns `{ mods, total_count, from_cache }`.
-/// - Returns error string "NO_API_KEY" if no key is configured.
-/// - Returns error string "INVALID_API_KEY" if the key is rejected (403).
 #[tauri::command]
 async fn fetch_curseforge_mods(
     app: tauri::AppHandle,
-    page_size: Option<u32>,
-    index: Option<u32>,
+    page_size:     Option<u32>,
+    index:         Option<u32>,
     search_filter: Option<String>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let config_dir = get_config_dir(&app)?;
-    let key_path = config_dir.join("curseforge_api_key.txt");
-    let cache_path = config_dir.join("mods_cache.json");
-
-    // Read API key
-    let api_key = tokio::fs::read_to_string(&key_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let config_dir  = get_config_dir(&app)?;
+    let cache_path  = config_dir.join("mods_cache.json");
+    let api_key     = read_api_key(&config_dir).await;
 
     if api_key.is_empty() {
         return Err("NO_API_KEY".to_string());
@@ -620,14 +518,14 @@ async fn fetch_curseforge_mods(
         .unwrap_or_default()
         .as_secs();
 
-    let page_idx = index.unwrap_or(0);
-    let ps = page_size.unwrap_or(50);
+    let page_idx   = index.unwrap_or(0);
+    let ps         = page_size.unwrap_or(50);
     let has_search = search_filter.as_deref().map_or(false, |s| !s.is_empty());
 
-    // Serve from cache for first page if still fresh (skip when searching)
+    // Serve first page from cache when not searching
     if page_idx == 0 && !has_search {
-        if let Ok(cache_str) = tokio::fs::read_to_string(&cache_path).await {
-            if let Ok(cache) = serde_json::from_str::<ModsCacheFile>(&cache_str) {
+        if let Ok(s) = tokio::fs::read_to_string(&cache_path).await {
+            if let Ok(cache) = serde_json::from_str::<ModsCacheFile>(&s) {
                 if now.saturating_sub(cache.cached_at) < CACHE_VALIDITY_SECS {
                     return Ok(json!({
                         "mods": cache.mods,
@@ -639,21 +537,17 @@ async fn fetch_curseforge_mods(
         }
     }
 
-    // Fetch from CurseForge API
-    let client = reqwest::Client::new();
-    let mut req = client
+    let mut req = HTTP_CLIENT
         .get("https://api.curseforge.com/v1/mods/search")
         .query(&[
-            ("gameId", ARK_ASA_GAME_ID.to_string()),
+            ("gameId",    ARK_ASA_GAME_ID.to_string()),
             ("sortField", "2".to_string()),
             ("sortOrder", "desc".to_string()),
-            ("pageSize", ps.to_string()),
-            ("index", page_idx.to_string()),
+            ("pageSize",  ps.to_string()),
+            ("index",     page_idx.to_string()),
         ]);
     if let Some(ref q) = search_filter {
-        if !q.is_empty() {
-            req = req.query(&[("searchFilter", q.as_str())]);
-        }
+        if !q.is_empty() { req = req.query(&[("searchFilter", q.as_str())]); }
     }
 
     let resp = req
@@ -666,72 +560,42 @@ async fn fetch_curseforge_mods(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        if status.as_u16() == 403 {
-            return Err("INVALID_API_KEY".to_string());
-        }
-        return Err(format!("CurseForge API error {}: {}", status, body));
+        return if status.as_u16() == 403 {
+            Err("INVALID_API_KEY".to_string())
+        } else {
+            Err(format!("CurseForge API error {}: {}", status, body))
+        };
     }
 
-    let cf_resp: CfResponse = resp
-        .json()
-        .await
+    let cf_resp: CfResponse = resp.json().await
         .map_err(|e| format!("Failed to parse API response: {}", e))?;
 
     let total_count = cf_resp.pagination.total_count;
+    let mut mods: Vec<CurseForgeMod> = cf_resp.data.into_iter().map(cf_mod_to_domain).collect();
 
-    let mods: Vec<CurseForgeMod> = cf_resp
-        .data
-        .into_iter()
-        .map(|m| {
-            let cats = m.categories.unwrap_or_default();
-            let client_only = detect_client_only(&cats, &m.latest_files);
-            CurseForgeMod {
-                id: m.id.to_string(),
-                name: m.name,
-                summary: m.summary.unwrap_or_default(),
-                download_count: m.download_count.unwrap_or(0),
-                categories: cats.into_iter().map(|c| c.name).collect(),
-                logo_url: m.logo.and_then(|l| l.thumbnail_url),
-                slug: m.slug.unwrap_or_default(),
-                client_only,
-            }
-        })
-        .collect();
+    // Merge local DB results the API missed when searching.
+    // Deduplicate by both ID *and* name (case-insensitive) so a stale local
+    // entry with a wrong ID doesn't appear alongside the API's correct entry
+    // for the same mod (which would let the user add the wrong ID by mistake).
+    if has_search {
+        let query      = search_filter.as_deref().unwrap_or("");
+        let local      = search_local_db(query);
+        let api_ids:   std::collections::HashSet<String> = mods.iter().map(|m| m.id.clone()).collect();
+        let api_names: std::collections::HashSet<String> = mods.iter().map(|m| m.name.to_lowercase()).collect();
+        mods.extend(local.into_iter().filter(|m| {
+            !api_ids.contains(&m.id) && !api_names.contains(&m.name.to_lowercase())
+        }));
+    }
 
-    // When searching: merge local DB results that the API didn't return
-    let mods = if has_search {
-        let query = search_filter.as_deref().unwrap_or("");
-        let local = search_local_db(query);
-        let api_ids: std::collections::HashSet<String> =
-            mods.iter().map(|m| m.id.clone()).collect();
-        let extra: Vec<CurseForgeMod> = local
-            .into_iter()
-            .filter(|m| !api_ids.contains(&m.id))
-            .collect();
-        let mut merged = mods;
-        merged.extend(extra);
-        merged
-    } else {
-        mods
-    };
-
-    // Cache first page (only when not searching)
+    // Cache the first page (not search results — they change with the query)
     if page_idx == 0 && !has_search {
-        let cache = ModsCacheFile {
-            mods: mods.clone(),
-            cached_at: now,
-            total_count,
-        };
-        if let Ok(json_str) = serde_json::to_string(&cache) {
-            tokio::fs::write(&cache_path, json_str).await.ok();
+        let cache = ModsCacheFile { mods: mods.clone(), cached_at: now, total_count };
+        if let Ok(s) = serde_json::to_string(&cache) {
+            tokio::fs::write(&cache_path, s).await.ok();
         }
     }
 
-    Ok(json!({
-        "mods": mods,
-        "total_count": total_count,
-        "from_cache": false,
-    }))
+    Ok(json!({ "mods": mods, "total_count": total_count, "from_cache": false }))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -745,94 +609,31 @@ fn server_status() -> std::result::Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn start_server(config: ServerConfig) -> std::result::Result<String, String> {
-    use std::process::Command;
-
-    let maps: Vec<String> = if config.cluster_maps.is_empty() {
-        vec!["TheIsland_WP".to_string()]
-    } else {
-        config.cluster_maps.clone()
-    };
-
+    let maps       = config.effective_maps();
     let is_cluster = maps.len() > 1;
-
-    // Cluster ID derived from session name (alphanumeric only)
-    let cluster_id: String = config.identification.session_name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<String>()
-        .to_lowercase();
-    let cluster_id = if cluster_id.is_empty() { "ark_cluster".to_string() } else { cluster_id };
-
-    let server_dir = config.paths.server_dir.trim_end_matches('\\');
-    let exe = format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", server_dir);
-    let cluster_dir = format!("{}\\clusters", server_dir);
-
-    let mut launched: Vec<String> = Vec::new();
+    let exe        = config.paths.ark_exe();
+    let mut launched: Vec<String> = Vec::with_capacity(maps.len());
 
     for (i, raw_map) in maps.iter().enumerate() {
-        let map = if raw_map.trim().is_empty() { "TheIsland_WP".to_string() } else { raw_map.trim().to_string() };
-
-        // Each cluster instance gets offset ports to avoid conflicts:
-        //   game port:  base + i*2  (ARK uses port & port+1 internally)
-        //   query port: base + i
-        //   rcon port:  base + i
-        let game_port  = config.network.port       + (i as u16) * 2;
-        let query_port = config.network.query_port + i as u16;
-        let rcon_port  = config.network.rcon_port  + i as u16;
-
-        // In cluster mode each instance gets a map suffix so players can
-        // distinguish them in the ARK browser (e.g. "ServidorMax · Ragnarok").
-        // The primary map (index 0) keeps the bare session name.
-        let map_label = map.trim_end_matches("_WP");
-        let session_name = if is_cluster && i > 0 {
-            format!("{} · {}", config.identification.session_name, map_label)
-        } else {
-            config.identification.session_name.clone()
-        };
-
-        let mut params = format!(
-            "{}?listen?SessionName={}?ServerAdminPassword={}",
-            map,
-            session_name,
-            config.identification.admin_password,
-        );
-        if !config.identification.server_password.is_empty() {
-            params.push_str(&format!("?ServerPassword={}", config.identification.server_password));
-        }
-        params.push_str(&format!(
-            "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}",
-            config.gameplay.max_players,
-            game_port,
-            query_port,
-            rcon_port,
-        ));
+        let map  = if raw_map.trim().is_empty() { "TheIsland_WP".to_string() } else { raw_map.trim().to_string() };
+        let args = build_launch_args(&config, &map, i);
+        let (game_port, _, _) = config.network.ports_for_index(i);
 
         let mut cmd = Command::new(&exe);
-        cmd.arg(&params);
-        cmd.arg("-NoBattlEye");
-        cmd.arg("-server");
-        cmd.arg("-log");
-        cmd.arg("-servergamelog");
-        cmd.arg("-NoTransferFromFiltering");
-        cmd.arg(format!("-WinLiveMaxPlayers={}", config.gameplay.max_players));
+        cmd.arg(&args.url_params);
+        for flag in &args.flags { cmd.arg(flag); }
 
-        if is_cluster {
-            cmd.arg(format!("-clusterid={}", cluster_id));
-            cmd.arg(format!("-ClusterDirOverride={}", cluster_dir));
-        }
-
-        if !config.mods.active_mods.is_empty() {
-            cmd.arg(format!("-mods={}", config.mods.active_mods.join(",")));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0000_0008); // DETACHED_PROCESS
         }
 
         log::info!("Launching ARK {} (cluster={}) port={}", map, is_cluster, game_port);
 
         match cmd.spawn() {
             Ok(child) => launched.push(format!("{} PID {}", map, child.id())),
-            Err(e) => return Err(format!(
-                "Failed to start {}: {}. Check server at: {}",
-                map, e, exe
-            )),
+            Err(e) => return Err(format!("Failed to start {}: {}. Exe: {}", map, e, exe)),
         }
 
         // Brief stagger between cluster instances to avoid resource contention
@@ -848,33 +649,52 @@ fn start_server(config: ServerConfig) -> std::result::Result<String, String> {
     }
 }
 
+/// Graceful shutdown via RCON (saveworld → doexit).
+/// Falls back to taskkill /F for instances that don't respond.
 #[tauri::command]
-fn stop_server() -> std::result::Result<String, String> {
-    use std::process::Command;
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    let mut cmd = Command::new("taskkill");
-    cmd.args(["/F", "/IM", "ArkAscendedServer.exe"]);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    match cmd.output() {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if out.status.success() {
-                Ok(format!("Server stopped. {}", stdout.trim()))
-            } else if stdout.to_lowercase().contains("not found")
-                || stdout.to_lowercase().contains("no se encontr")
-            {
-                Ok("Server was not running".to_string())
-            } else {
-                Err(format!("taskkill failed: {}", stdout.trim()))
+async fn stop_server(config: ServerConfig) -> std::result::Result<String, String> {
+    let maps     = config.effective_maps();
+    let password = &config.identification.admin_password;
+
+    let mut graceful: Vec<String> = vec![];
+    let mut failed:   Vec<String> = vec![];
+
+    for (i, map) in maps.iter().enumerate() {
+        let (_, _, rcon_port) = config.network.ports_for_index(i);
+        let label  = map.trim_end_matches("_WP");
+        let client = RconClient::new(rcon_port, password.as_str());
+
+        match client.graceful_shutdown().await {
+            Ok(()) => {
+                log::info!("RCON graceful shutdown OK for {} (port {})", label, rcon_port);
+                graceful.push(label.to_string());
+            }
+            Err(e) => {
+                log::warn!("RCON shutdown failed for {} (port {}): {}", label, rcon_port, e);
+                failed.push(label.to_string());
             }
         }
-        Err(e) => Err(format!("Failed to run taskkill: {}", e)),
     }
+
+    if !failed.is_empty() {
+        log::warn!("Falling back to taskkill for: {:?}", failed);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", "ArkAscendedServer.exe"])
+                .creation_flags(0x08000000)
+                .output();
+        }
+    }
+
+    Ok(match (graceful.is_empty(), failed.is_empty()) {
+        (true, _)   => "Servidor detenido (taskkill)".to_string(),
+        (_, true)   => format!("Servidor detenido correctamente (saveworld + doexit): {}", graceful.join(", ")),
+        _           => format!("RCON OK: {} | taskkill: {}", graceful.join(", "), failed.join(", ")),
+    })
 }
 
-/// Check if ArkAscendedServer.exe is currently in the process list.
 #[tauri::command]
 fn is_server_running() -> bool {
     #[cfg(windows)]
@@ -882,16 +702,20 @@ fn is_server_running() -> bool {
     let mut cmd = Command::new("tasklist");
     cmd.args(["/FI", "IMAGENAME eq ArkAscendedServer.exe", "/NH"]);
     #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    match cmd.output() {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).contains("ArkAscendedServer.exe"),
-        Err(_) => false,
-    }
+    cmd.creation_flags(0x08000000);
+    matches!(cmd.output(), Ok(out) if String::from_utf8_lossy(&out.stdout).contains("ArkAscendedServer.exe"))
 }
 
 #[tauri::command]
 fn restart_server(config: ServerConfig) -> std::result::Result<String, String> {
-    let _ = stop_server();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "ArkAscendedServer.exe"])
+            .creation_flags(0x08000000)
+            .output();
+    }
     std::thread::sleep(std::time::Duration::from_secs(3));
     start_server(config)
 }
@@ -925,7 +749,6 @@ fn restore_backup(_name: String) -> std::result::Result<ServerConfig, String> {
 // Tailscale / ping keep-alive
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Open a URL in the system's default browser (Windows: cmd /C start).
 #[tauri::command]
 fn open_external_url(url: String) -> std::result::Result<(), String> {
     #[cfg(windows)]
@@ -933,25 +756,21 @@ fn open_external_url(url: String) -> std::result::Result<(), String> {
     let mut cmd = Command::new("cmd");
     cmd.args(["/C", "start", "", url.as_str()]);
     #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd.creation_flags(0x08000000);
     cmd.spawn().map_err(|e| format!("Failed to open URL: {}", e))?;
     Ok(())
 }
 
-/// Start a background ping loop to keep the Tailscale connection alive.
-/// Runs hidden one-shot pings every 30 seconds — no terminal window, no persistent process.
 #[tauri::command]
 async fn start_ping(ip: String, state: tauri::State<'_, PingState>) -> std::result::Result<(), String> {
-    // Abort any existing ping task
-    let old = { state.0.lock().map_err(|e| e.to_string())?.take() };
-    if let Some(handle) = old {
-        handle.abort();
+    // Abort any running ping task first
+    if let Some(h) = state.0.lock().map_err(|e| e.to_string())?.take() {
+        h.abort();
     }
 
     let ip = ip.trim().to_string();
     let handle = tokio::spawn(async move {
         loop {
-            // Hidden one-shot ping (4 packets) — no window, no persistent process
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
@@ -959,7 +778,7 @@ async fn start_ping(ip: String, state: tauri::State<'_, PingState>) -> std::resu
                     .args(["-n", "4", "-w", "3000", &ip])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                    .creation_flags(0x08000000)
                     .spawn();
             }
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -970,11 +789,10 @@ async fn start_ping(ip: String, state: tauri::State<'_, PingState>) -> std::resu
     Ok(())
 }
 
-/// Stop the background ping loop.
 #[tauri::command]
 fn stop_ping(state: tauri::State<'_, PingState>) -> std::result::Result<(), String> {
-    if let Some(handle) = state.0.lock().map_err(|e| e.to_string())?.take() {
-        handle.abort();
+    if let Some(h) = state.0.lock().map_err(|e| e.to_string())?.take() {
+        h.abort();
     }
     Ok(())
 }
@@ -985,9 +803,7 @@ fn stop_ping(state: tauri::State<'_, PingState>) -> std::result::Result<(), Stri
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let tray_state = Arc::new(TrayState {
-        minimize_to_tray: AtomicBool::new(true),
-    });
+    let tray_state     = Arc::new(TrayState { minimize_to_tray: AtomicBool::new(true) });
     let on_demand_state = Arc::new(stub::OnDemandState::new());
 
     tauri::Builder::default()
@@ -998,17 +814,13 @@ pub fn run() {
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::TrayIconBuilder;
 
-            // Build tray context menu
             let show_item = MenuItemBuilder::with_id("show", "Mostrar").build(app)?;
-            let sep      = tauri::menu::PredefinedMenuItem::separator(app)?;
+            let sep       = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Salir").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .items(&[&show_item, &sep, &quit_item])
-                .build()?;
+            let menu = MenuBuilder::new(app).items(&[&show_item, &sep, &quit_item]).build()?;
 
-            // Build tray icon
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            let tray = TrayIconBuilder::new()
+                .icon(tauri::include_image!("icons/icon.png"))
                 .tooltip("ARK ASA Server Manager")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -1020,7 +832,6 @@ pub fn run() {
                         }
                     }
                     "quit" => {
-                        // Tell frontend to save config, then exit after a short grace period
                         let _ = app.emit("tray-quit", ());
                         let app2 = app.clone();
                         std::thread::spawn(move || {
@@ -1041,6 +852,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // In Tauri v2, TrayIcon::drop() removes the icon from the OS tray.
+            // We must keep the handle alive for the entire app lifetime.
+            // std::mem::forget prevents the destructor from running.
+            std::mem::forget(tray);
 
             Ok(())
         })

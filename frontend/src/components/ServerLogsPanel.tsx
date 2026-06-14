@@ -3,20 +3,23 @@ import { invoke } from '../services/tauri'
 
 interface ServerLogsPanelProps {
   serverDir: string
+  maps: string[]
   onClose: () => void
 }
 
-export default function ServerLogsPanel({ serverDir, onClose }: ServerLogsPanelProps) {
+export default function ServerLogsPanel({ serverDir, maps, onClose }: ServerLogsPanelProps) {
+  const [selectedMap, setSelectedMap] = useState(maps[0] ?? 'TheIsland_WP')
   const [lines, setLines] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [filterText, setFilterText] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const loadLogs = async () => {
+  const loadLogs = async (map?: string) => {
     try {
       const result = await invoke<string[]>('read_server_log', {
         serverDir,
+        map: map ?? selectedMap,
         lines: 200,
       })
       setLines(result)
@@ -27,14 +30,16 @@ export default function ServerLogsPanel({ serverDir, onClose }: ServerLogsPanelP
   }
 
   useEffect(() => {
-    loadLogs()
-  }, [serverDir]) // eslint-disable-line react-hooks/exhaustive-deps
+    setLines([])
+    setError(null)
+    loadLogs(selectedMap)
+  }, [serverDir, selectedMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!autoRefresh) return
-    const interval = setInterval(loadLogs, 3000)
+    const interval = setInterval(() => loadLogs(), 3000)
     return () => clearInterval(interval)
-  }, [autoRefresh, serverDir]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [autoRefresh, serverDir, selectedMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (autoRefresh) {
@@ -54,6 +59,21 @@ export default function ServerLogsPanel({ serverDir, onClose }: ServerLogsPanelP
     ? lines.filter((l) => l.toLowerCase().includes(filterText.toLowerCase()))
     : lines
 
+  const MAP_LABELS: Record<string, string> = {
+    TheIsland_WP: 'The Island',
+    Ragnarok_WP: 'Ragnarok',
+    TheCenter_WP: 'The Center',
+    ScorchedEarth_WP: 'Scorched Earth',
+    Aberration_WP: 'Aberration',
+    Extinction_WP: 'Extinction',
+    Valguero_WP: 'Valguero',
+    Genesis_WP: 'Genesis',
+    CrystalIsles_WP: 'Crystal Isles',
+    Gen2_WP: 'Genesis 2',
+    LostIsland_WP: 'Lost Island',
+    Fjordur_WP: 'Fjordur',
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-stretch"
@@ -65,9 +85,25 @@ export default function ServerLogsPanel({ serverDir, onClose }: ServerLogsPanelP
       >
         {/* Toolbar */}
         <div className="flex items-center gap-3 px-4 py-2 border-b border-ark-cyan/20 flex-shrink-0">
-          <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">
+          <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase flex-shrink-0">
             📋 ShooterGame.log
           </span>
+
+          {/* Map selector — only shown when multiple maps are configured */}
+          {maps.length > 1 && (
+            <select
+              value={selectedMap}
+              onChange={(e) => setSelectedMap(e.target.value)}
+              className="bg-ark-secondary/60 border border-ark-cyan/30 text-ark-cyan/80 text-xs px-2 py-1 rounded focus:outline-none focus:border-ark-cyan/60"
+            >
+              {maps.map((m) => (
+                <option key={m} value={m}>
+                  {MAP_LABELS[m] ?? m}
+                </option>
+              ))}
+            </select>
+          )}
+
           <input
             type="text"
             value={filterText}
@@ -85,7 +121,7 @@ export default function ServerLogsPanel({ serverDir, onClose }: ServerLogsPanelP
             Auto-refresh
           </label>
           <button
-            onClick={loadLogs}
+            onClick={() => loadLogs()}
             className="ark-action-btn text-[10px] px-2 py-0.5"
           >
             ↻

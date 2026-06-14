@@ -5,6 +5,64 @@ interface GeneralSettingsProps {
   onConfigChange: (config: ServerConfig) => void
 }
 
+// ARK password rules:
+// • Max 27 characters (engine hard limit)
+// • No spaces, quotes, backslash, forward-slash, backtick, or tilde
+const ARK_PWD_REGEX = /^[A-Za-z0-9!@#$%^&*()\-_+=[\]{}|;:,.?]*$/
+const ARK_PWD_MAX = 27
+
+function validatePassword(value: string): string | null {
+  if (value.length > ARK_PWD_MAX) return `Máximo ${ARK_PWD_MAX} caracteres (ARK engine limit)`
+  if (value && !ARK_PWD_REGEX.test(value))
+    return 'Caracter no permitido — evita espacios, comillas, \\ / ` ~'
+  return null
+}
+
+function PasswordField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const error = validatePassword(value)
+  const tooLong = value.length > ARK_PWD_MAX
+
+  return (
+    <div>
+      <label className="block text-sm font-semibold text-ark-cyan mb-2">{label}</label>
+      <div className="relative">
+        <input
+          type="password"
+          value={value}
+          maxLength={ARK_PWD_MAX}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full bg-ark-dark border rounded px-4 py-2 text-white focus:outline-none transition ${
+            error
+              ? 'border-red-500/70 focus:border-red-400'
+              : 'border-ark-cyan/30 focus:border-ark-cyan'
+          }`}
+        />
+        {/* Character counter */}
+        <span
+          className={`absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono pointer-events-none ${
+            tooLong ? 'text-red-400' : value.length >= 20 ? 'text-yellow-400/70' : 'text-ark-cyan/30'
+          }`}
+        >
+          {value.length}/{ARK_PWD_MAX}
+        </span>
+      </div>
+      {error && (
+        <p className="text-red-400/80 text-[11px] mt-1 flex items-center gap-1">
+          <span>⚠</span> {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function GeneralSettings({
   config,
   onConfigChange,
@@ -36,29 +94,17 @@ export default function GeneralSettings({
           />
         </div>
 
-        <div>
-          <label className="block text-sm font-semibold text-ark-cyan mb-2">
-            Server Password
-          </label>
-          <input
-            type="password"
-            value={config.identification.server_password}
-            onChange={(e) => handleChange('server_password', e.target.value)}
-            className="w-full bg-ark-dark border border-ark-cyan/30 rounded px-4 py-2 text-white focus:outline-none focus:border-ark-cyan"
-          />
-        </div>
+        <PasswordField
+          label="Server Password"
+          value={config.identification.server_password}
+          onChange={(v) => handleChange('server_password', v)}
+        />
 
-        <div>
-          <label className="block text-sm font-semibold text-ark-cyan mb-2">
-            Admin Password
-          </label>
-          <input
-            type="password"
-            value={config.identification.admin_password}
-            onChange={(e) => handleChange('admin_password', e.target.value)}
-            className="w-full bg-ark-dark border border-ark-cyan/30 rounded px-4 py-2 text-white focus:outline-none focus:border-ark-cyan"
-          />
-        </div>
+        <PasswordField
+          label="Admin Password"
+          value={config.identification.admin_password}
+          onChange={(v) => handleChange('admin_password', v)}
+        />
 
         <div>
           <label className="block text-sm font-semibold text-ark-cyan mb-2">
@@ -86,10 +132,7 @@ export default function GeneralSettings({
             onChange={(e) =>
               onConfigChange({
                 ...config,
-                network: {
-                  ...config.network,
-                  port: parseInt(e.target.value),
-                },
+                network: { ...config.network, port: parseInt(e.target.value) },
               })
             }
             className="w-full bg-ark-dark border border-ark-cyan/30 rounded px-4 py-2 text-white focus:outline-none focus:border-ark-cyan"
@@ -106,10 +149,7 @@ export default function GeneralSettings({
             onChange={(e) =>
               onConfigChange({
                 ...config,
-                network: {
-                  ...config.network,
-                  query_port: parseInt(e.target.value),
-                },
+                network: { ...config.network, query_port: parseInt(e.target.value) },
               })
             }
             className="w-full bg-ark-dark border border-ark-cyan/30 rounded px-4 py-2 text-white focus:outline-none focus:border-ark-cyan"
@@ -126,10 +166,7 @@ export default function GeneralSettings({
             onChange={(e) =>
               onConfigChange({
                 ...config,
-                network: {
-                  ...config.network,
-                  rcon_port: parseInt(e.target.value),
-                },
+                network: { ...config.network, rcon_port: parseInt(e.target.value) },
               })
             }
             className="w-full bg-ark-dark border border-ark-cyan/30 rounded px-4 py-2 text-white focus:outline-none focus:border-ark-cyan"
@@ -145,10 +182,7 @@ export default function GeneralSettings({
             onChange={(e) =>
               onConfigChange({
                 ...config,
-                network: {
-                  ...config.network,
-                  server_platform: e.target.value,
-                },
+                network: { ...config.network, server_platform: e.target.value },
               })
             }
             className="w-full bg-ark-dark border border-ark-cyan/30 rounded px-4 py-2 text-white focus:outline-none focus:border-ark-cyan"

@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 use async_trait::async_trait;
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};

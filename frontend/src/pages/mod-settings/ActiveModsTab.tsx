@@ -7,9 +7,7 @@ export default function ActiveModsTab() {
   const { config, setConfig } = useConfigStore()
   const { modCache, setModInfo, getModInfo } = useModsStore()
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null)
-  const [newModId, setNewModId] = useState('')
-  const [error, setError] = useState('')
-  const [resolvingId, setResolvingId] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [checkingPcOnly, setCheckingPcOnly] = useState(false)
   const mods = config?.mods?.active_mods ?? []
 
@@ -37,8 +35,7 @@ export default function ActiveModsTab() {
     })
   }, [mods.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Check PC-only status — re-checks mods that are unchecked (undefined) OR flagged (true),
-  // so stale false-positives from old logic get corrected automatically.
+  // Check PC-only status
   useEffect(() => {
     if (mods.length === 0) return
     const toCheck = mods.filter(id => modCache[id]?.clientOnly !== false)
@@ -49,9 +46,7 @@ export default function ActiveModsTab() {
         const pcOnlySet = new Set(clientOnlyIds as string[])
         toCheck.forEach(id => {
           const cached = modCache[id]
-          if (cached) {
-            setModInfo(id, { ...cached, clientOnly: pcOnlySet.has(id) })
-          }
+          if (cached) setModInfo(id, { ...cached, clientOnly: pcOnlySet.has(id) })
         })
       })
       .catch(() => {})
@@ -63,7 +58,7 @@ export default function ActiveModsTab() {
     setConfig({ ...config, mods: { ...config.mods, active_mods: next } })
   }
 
-  // Build duplicate name detection
+  // Duplicate name detection
   const nameCounts: Record<string, number> = {}
   for (const id of mods) {
     const name = modCache[id]?.name?.toLowerCase()
@@ -72,7 +67,6 @@ export default function ActiveModsTab() {
   const duplicateNames = new Set(Object.keys(nameCounts).filter(n => nameCounts[n] > 1))
   const hasDuplicates = duplicateNames.size > 0
 
-  // PC-only mods
   const pcOnlyIds = mods.filter(id => modCache[id]?.clientOnly === true)
   const hasPcOnly = pcOnlyIds.length > 0
 
@@ -98,61 +92,6 @@ export default function ActiveModsTab() {
     setSelectedIdx(null)
   }
 
-  const addMod = async () => {
-    const id = newModId.trim()
-    if (!id) return
-    if (!/^\d+$/.test(id)) { setError('El ID debe ser numérico (CurseForge)'); return }
-    if (mods.includes(id)) { setError('El mod ya está en la lista'); return }
-    setError('')
-    setResolvingId(true)
-    let resolvedName: string | undefined
-    let isClientOnly = false
-    try {
-      const mod = await invoke('get_curseforge_mod_by_id', { modId: id }) as any
-      if (mod?.name) {
-        resolvedName = mod.name
-        isClientOnly = mod.client_only ?? false
-        setModInfo(id, {
-          name: mod.name,
-          summary: mod.summary ?? '',
-          logoUrl: mod.logo_url ?? null,
-          slug: mod.slug ?? '',
-          downloadCount: mod.download_count ?? 0,
-          categories: mod.categories ?? [],
-          clientOnly: isClientOnly,
-        })
-      }
-    } catch { /* ignore */ }
-    finally {
-      setResolvingId(false)
-    }
-
-    // Warn if PC-only
-    if (isClientOnly) {
-      if (!confirm(`⚠️ El mod "${resolvedName ?? id}" es solo para PC y no funcionará en un servidor cross-platform. ¿Agregar de todos modos?`)) {
-        setNewModId('')
-        return
-      }
-    }
-
-    // Check name duplicate
-    if (resolvedName) {
-      const dupId = mods.find(existingId => {
-        const cached = modCache[existingId]
-        return cached?.name?.toLowerCase() === resolvedName!.toLowerCase()
-      })
-      if (dupId) {
-        if (!confirm(`Ya tienes "${resolvedName}" activo (ID: ${dupId}).\n¿Agregar de todos modos con el ID ${id}?`)) {
-          setNewModId('')
-          return
-        }
-      }
-    }
-
-    updateMods([...mods, id])
-    setNewModId('')
-  }
-
   const removeMod = (i: number) => {
     updateMods(mods.filter((_, idx) => idx !== i))
     setSelectedIdx(null)
@@ -174,6 +113,16 @@ export default function ActiveModsTab() {
     setSelectedIdx(i + 1)
   }
 
+  // Filter by search query (name or ID)
+  const q = searchQuery.trim().toLowerCase()
+  const filteredIndices = mods
+    .map((id, i) => ({ id, i }))
+    .filter(({ id }) => {
+      if (!q) return true
+      const name = modCache[id]?.name?.toLowerCase() ?? ''
+      return name.includes(q) || id.includes(q)
+    })
+
   const selectedId = selectedIdx !== null ? mods[selectedIdx] : null
   const selectedInfo = selectedId ? getModInfo(selectedId) : null
 
@@ -181,25 +130,24 @@ export default function ActiveModsTab() {
     <div className="flex gap-4 px-8 py-6 pb-24">
       {/* Left: mod list */}
       <div className="flex-1 flex flex-col gap-3">
-        {/* Add mod input */}
+
+        {/* Search/filter input */}
         <div className="ark-panel rounded-lg p-3 flex gap-2 items-center">
           <input
             type="text"
-            value={newModId}
-            onChange={(e) => { setNewModId(e.target.value); setError('') }}
-            onKeyDown={(e) => e.key === 'Enter' && addMod()}
-            placeholder="ID de CurseForge (ej: 928988)"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Buscar entre mods activos por nombre o ID…"
             className="flex-1 bg-transparent border border-ark-cyan/30 text-ark-cyan/90 text-sm px-3 py-1.5 rounded focus:outline-none focus:border-ark-cyan/70 placeholder-ark-cyan/30"
           />
-          <button
-            onClick={addMod}
-            disabled={resolvingId}
-            className="ark-action-btn text-xs px-4 py-1.5 disabled:opacity-40"
-          >
-            {resolvingId ? 'BUSCANDO...' : '+ ADD MOD'}
-          </button>
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="text-ark-cyan/40 hover:text-ark-cyan/80 text-sm px-2 transition"
+              title="Limpiar"
+            >×</button>
+          )}
         </div>
-        {error && <p className="text-red-400/80 text-xs px-1 -mt-1">{error}</p>}
 
         {/* PC-only warning banner */}
         {hasPcOnly && (
@@ -240,7 +188,6 @@ export default function ActiveModsTab() {
           </div>
         )}
 
-        {/* PC-only check in progress indicator */}
         {checkingPcOnly && (
           <p className="text-ark-cyan/30 text-[10px] px-1 -mt-1 animate-pulse">Verificando compatibilidad de mods...</p>
         )}
@@ -248,17 +195,23 @@ export default function ActiveModsTab() {
         {/* Mod list */}
         <div className="ark-panel rounded-lg overflow-hidden flex-1">
           <div className="bg-ark-secondary/40 px-4 py-2 border-b border-ark-cyan/20 flex items-center justify-between">
-            <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">Mods Activos ({mods.length})</span>
+            <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">
+              Mods Activos ({q ? `${filteredIndices.length}/` : ''}{mods.length})
+            </span>
             <span className="text-ark-cyan/40 text-xs">Orden de carga ↑ = mayor prioridad</span>
           </div>
           <div className="ark-scroll overflow-y-auto" style={{ maxHeight: 'calc(100vh - 320px)' }}>
             {mods.length === 0 ? (
               <div className="p-8 text-ark-cyan/40 text-sm text-center">
                 <div className="text-2xl mb-2 opacity-40">📦</div>
-                Sin mods activos. Agrega un ID de CurseForge arriba o ve a la pestaña de mods disponibles.
+                Sin mods activos. Ve a la pestaña de búsqueda de mods para añadirlos.
+              </div>
+            ) : filteredIndices.length === 0 ? (
+              <div className="p-8 text-ark-cyan/40 text-sm text-center">
+                No hay mods que coincidan con "{searchQuery}".
               </div>
             ) : (
-              mods.map((modId, i) => {
+              filteredIndices.map(({ id: modId, i }) => {
                 const info = getModInfo(modId)
                 const displayName = info?.name ?? modId
                 const isResolved = !!info?.name
@@ -289,24 +242,20 @@ export default function ActiveModsTab() {
                       >▼</button>
                     </div>
 
-                    {/* Load order index */}
                     <span className="text-ark-cyan/30 text-xs w-5 text-right flex-shrink-0">{i + 1}</span>
 
-                    {/* Status badge */}
                     {isPcOnly ? (
-                      <span className="w-5 h-5 flex items-center justify-center border border-red-500/70 text-red-400 text-[9px] font-bold flex-shrink-0" title="Solo PC — no funciona en servidor cross-platform">PC</span>
+                      <span className="w-5 h-5 flex items-center justify-center border border-red-500/70 text-red-400 text-[9px] font-bold flex-shrink-0" title="Solo PC">PC</span>
                     ) : isDuplicate ? (
-                      <span className="w-5 h-5 flex items-center justify-center border border-yellow-400/60 text-yellow-300 text-[10px] font-bold flex-shrink-0" title="Mod duplicado">!</span>
+                      <span className="w-5 h-5 flex items-center justify-center border border-yellow-400/60 text-yellow-300 text-[10px] font-bold flex-shrink-0" title="Duplicado">!</span>
                     ) : (
                       <span className="w-5 h-5 flex items-center justify-center border border-ark-cyan/50 text-ark-cyan text-[10px] font-bold flex-shrink-0">A</span>
                     )}
 
-                    {/* Logo if cached */}
                     {info?.logoUrl ? (
                       <img src={info.logoUrl} alt="" className="w-6 h-6 rounded object-cover flex-shrink-0 opacity-70" />
                     ) : null}
 
-                    {/* Name or ID */}
                     <div className="flex-1 min-w-0">
                       <span className={`text-sm tracking-wide ${
                         isPcOnly ? 'text-red-300/80' :
@@ -323,14 +272,12 @@ export default function ActiveModsTab() {
                       )}
                     </div>
 
-                    {/* CurseForge link */}
                     <button
                       onClick={(e) => { e.stopPropagation(); invoke('open_external_url', { url: `https://www.curseforge.com/ark-survival-ascended/mods/${info?.slug || modId}` }) }}
                       className="text-ark-cyan/30 hover:text-ark-cyan/70 text-xs transition flex-shrink-0"
                       title="Ver en CurseForge"
                     >↗</button>
 
-                    {/* Remove */}
                     <button
                       onClick={(e) => { e.stopPropagation(); removeMod(i) }}
                       className="text-red-400/50 hover:text-red-400 text-sm font-bold transition flex-shrink-0 w-5 text-center"

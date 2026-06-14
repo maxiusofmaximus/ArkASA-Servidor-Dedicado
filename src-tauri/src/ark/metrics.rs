@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 // System metrics collection
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
@@ -124,7 +126,7 @@ impl ProcessMetrics {
     }
 
     /// Get metrics for all processes matching pattern
-    pub async fn matching(pattern: &str) -> Result<Vec<Self>> {
+    pub async fn matching(_pattern: &str) -> Result<Vec<Self>> {
         // Mock implementation
         Ok(vec![Self::for_pid(1234).await?])
     }

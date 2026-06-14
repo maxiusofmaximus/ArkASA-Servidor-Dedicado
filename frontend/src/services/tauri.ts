@@ -73,6 +73,7 @@ function createMockInvoke() {
           query_port: 27015,
           rcon_port: 27020,
           server_platform: 'ALL',
+          server_ip: '',
         },
         gameplay: {
           server_pve: true,

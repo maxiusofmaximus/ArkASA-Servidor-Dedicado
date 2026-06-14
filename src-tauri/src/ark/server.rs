@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 use async_trait::async_trait;
 use crate::config::ServerConfig;
 use crate::error::{Error, Result};

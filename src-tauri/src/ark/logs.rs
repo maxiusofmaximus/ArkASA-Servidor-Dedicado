@@ -1,8 +1,9 @@
+#![allow(dead_code, unused_imports)]
+
 // Server log reading and tailing
 use crate::error::Result;
 use std::path::Path;
 use tokio::fs;
-use tokio::io::AsyncBufReadExt;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -54,7 +55,7 @@ impl LogReader {
         }
 
         let timestamp = parts[0].trim_start_matches('[').to_string();
-        let channel = parts[1].trim_start_matches('[').to_string();
+        let _channel = parts[1].trim_start_matches('[').to_string();
 
         // Extract level and message from the rest
         let rest = parts[2..].join("]");

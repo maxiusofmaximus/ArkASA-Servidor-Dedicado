@@ -40,6 +40,9 @@ pub struct NetworkConfig {
     pub query_port: u16,
     pub rcon_port: u16,
     pub server_platform: String,
+    /// If set, passed as -ip=<value> so ARK advertises this address for
+    /// connections and cluster-travel redirects (e.g. Tailscale IP).
+    pub server_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -271,6 +274,57 @@ pub struct AdvancedConfig {
     pub custom_config: HashMap<String, String>,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain helpers — used by both start_server and on-demand stubs
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl ServerConfig {
+    /// Effective map list — defaults to TheIsland_WP for single-server setups.
+    pub fn effective_maps(&self) -> Vec<String> {
+        if self.cluster_maps.is_empty() {
+            vec!["TheIsland_WP".to_string()]
+        } else {
+            self.cluster_maps.clone()
+        }
+    }
+
+    /// Safe alphanumeric cluster ID derived from the session name.
+    pub fn cluster_id(&self) -> String {
+        let id: String = self.identification.session_name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_lowercase();
+        if id.is_empty() { "ark_cluster".to_string() } else { id }
+    }
+}
+
+impl NetworkConfig {
+    /// (game_port, query_port, rcon_port) for cluster instance at index `i`.
+    /// ARK uses two consecutive UDP ports per game port, so game_port steps by 2.
+    pub fn ports_for_index(&self, i: usize) -> (u16, u16, u16) {
+        (
+            self.port       + (i as u16) * 2,
+            self.query_port + i as u16,
+            self.rcon_port  + i as u16,
+        )
+    }
+}
+
+impl PathsConfig {
+    /// Absolute path to ArkAscendedServer.exe derived from server_dir.
+    pub fn ark_exe(&self) -> String {
+        let dir = self.server_dir.trim_end_matches('\\');
+        format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", dir)
+    }
+
+    /// Cluster save directory (sibling of ShooterGame).
+    pub fn cluster_dir(&self) -> String {
+        let dir = self.server_dir.trim_end_matches('\\');
+        format!("{}\\clusters", dir)
+    }
+}
+
 // Default implementations
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -315,6 +369,7 @@ impl Default for NetworkConfig {
             query_port: 27015,
             rcon_port: 27020,
             server_platform: "ALL".to_string(),
+            server_ip: String::new(),
         }
     }
 }

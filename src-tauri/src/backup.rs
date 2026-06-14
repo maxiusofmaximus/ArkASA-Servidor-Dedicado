@@ -35,7 +35,7 @@ pub async fn backup_saves(
     server_dir: String,
     map: String,
     scope: String, // "map" | "map_players_tribes" | "full"
-    provider: String, // "s3" | "gdrive" | "onedrive" | "icloud"
+    provider: String, // "s3" | "gdrive" | "onedrive" | "icloud" | "local_folder"
     // S3
     s3_endpoint: Option<String>,
     s3_bucket: Option<String>,
@@ -46,6 +46,8 @@ pub async fn backup_saves(
     access_token: Option<String>,
     // iCloud
     icloud_path: Option<String>,
+    // Local folder
+    local_folder_path: Option<String>,
 ) -> Result<String, String> {
     // 1. Collect files
     let files = collect_files(&server_dir, &map, &scope);
@@ -84,6 +86,15 @@ pub async fn backup_saves(
             let folder = icloud_path.ok_or("Falta ruta de iCloud")?;
             copy_to_icloud(&zip_path, &folder, &filename)?;
         }
+        "local_folder" => {
+            let folder = local_folder_path.ok_or("Falta ruta de carpeta local")?;
+            let dest_dir = PathBuf::from(&folder);
+            std::fs::create_dir_all(&dest_dir)
+                .map_err(|e| format!("No se pudo crear el directorio '{}': {}", folder, e))?;
+            let dest = dest_dir.join(&filename);
+            std::fs::copy(&zip_path, &dest)
+                .map_err(|e| format!("No se pudo copiar el backup a '{}': {}", folder, e))?;
+        }
         other => return Err(format!("Proveedor desconocido: {}", other)),
     }
 
@@ -93,14 +104,20 @@ pub async fn backup_saves(
     Ok(filename)
 }
 
-/// Read the last N lines of ShooterGame.log
+/// Read the last N lines of ShooterGame.log.
+/// If `map` is provided, tries `{server_dir}/{map}/ShooterGame/Saved/Logs/ShooterGame.log` first
+/// (for per-map server dirs in cluster setups), then falls back to the shared log.
 #[tauri::command]
-pub fn read_server_log(server_dir: String, lines: usize) -> Result<Vec<String>, String> {
-    let log_path = PathBuf::from(&server_dir)
-        .join("ShooterGame")
-        .join("Saved")
-        .join("Logs")
-        .join("ShooterGame.log");
+pub fn read_server_log(server_dir: String, map: Option<String>, lines: usize) -> Result<Vec<String>, String> {
+    let base = PathBuf::from(&server_dir);
+    let shared_log = base.join("ShooterGame").join("Saved").join("Logs").join("ShooterGame.log");
+
+    let log_path = if let Some(ref m) = map {
+        let per_map = base.join(m).join("ShooterGame").join("Saved").join("Logs").join("ShooterGame.log");
+        if per_map.exists() { per_map } else { shared_log }
+    } else {
+        shared_log
+    };
 
     if !log_path.exists() {
         return Err(format!("Log no encontrado: {}", log_path.display()));
@@ -110,12 +127,7 @@ pub fn read_server_log(server_dir: String, lines: usize) -> Result<Vec<String>, 
         .map_err(|e| format!("Error leyendo log: {}", e))?;
 
     let all_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-    let start = if all_lines.len() > lines {
-        all_lines.len() - lines
-    } else {
-        0
-    };
-
+    let start = if all_lines.len() > lines { all_lines.len() - lines } else { 0 };
     Ok(all_lines[start..].to_vec())
 }
 

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 export type BackupScope = 'map' | 'map_players_tribes' | 'full'
-export type CloudProvider = 'none' | 's3' | 'gdrive' | 'onedrive' | 'icloud'
+export type CloudProvider = 'none' | 's3' | 'gdrive' | 'onedrive' | 'icloud' | 'local_folder'
 
 export interface BackupEntry {
   filename: string
@@ -13,16 +13,17 @@ export interface BackupEntry {
 
 interface BackupStore {
   // General options
+  language: string          // 'en' | 'es' | 'fr' | 'zh' | 'ja' | 'ko' | 'pt' | 'de' | 'it' | 'ru'
   logsEnabled: boolean
   minimizeToTray: boolean
   manualSave: boolean
   backupScope: BackupScope
-  maxSaves: number // 1–10
+  maxSaves: number
 
   // On-demand server
-  onDemandEnabled: boolean     // master switch — disables the whole dormant-stub feature
-  onDemandMaps: string[]       // map IDs that should run as stubs instead of always-on
-  autoShutdownMin: number      // minutes of empty server before auto-stop (0 = never)
+  onDemandEnabled: boolean
+  onDemandMaps: string[]
+  autoShutdownMin: number
 
   // Provider
   provider: CloudProvider
@@ -48,10 +49,14 @@ interface BackupStore {
   // iCloud
   icloudPath: string
 
+  // Local folder
+  localFolderPath: string
+
   // History
   backupHistory: BackupEntry[]
 
   // Actions
+  setLanguage: (v: string) => void
   setLogsEnabled: (v: boolean) => void
   setMinimizeToTray: (v: boolean) => void
   setManualSave: (v: boolean) => void
@@ -66,12 +71,14 @@ interface BackupStore {
   setGDriveField: (field: keyof Pick<BackupStore, 'gdriveClientId' | 'gdriveClientSecret' | 'gdriveAccessToken' | 'gdriveRefreshToken'>, value: string) => void
   setOneDriveField: (field: keyof Pick<BackupStore, 'onedriveClientId' | 'onedriveAccessToken' | 'onedriveRefreshToken'>, value: string) => void
   setICloudPath: (v: string) => void
+  setLocalFolderPath: (v: string) => void
   addBackupEntry: (entry: BackupEntry) => void
 }
 
 export const useBackupStore = create<BackupStore>()(
   persist(
     (set) => ({
+      language: 'es',
       logsEnabled: false,
       minimizeToTray: true,
       manualSave: false,
@@ -94,8 +101,10 @@ export const useBackupStore = create<BackupStore>()(
       onedriveAccessToken: '',
       onedriveRefreshToken: '',
       icloudPath: '',
+      localFolderPath: '',
       backupHistory: [],
 
+      setLanguage: (v) => set({ language: v }),
       setLogsEnabled: (v) => set({ logsEnabled: v }),
       setMinimizeToTray: (v) => set({ minimizeToTray: v }),
       setManualSave: (v) => set({ manualSave: v }),
@@ -114,6 +123,7 @@ export const useBackupStore = create<BackupStore>()(
       setGDriveField: (field, value) => set({ [field]: value } as any),
       setOneDriveField: (field, value) => set({ [field]: value } as any),
       setICloudPath: (v) => set({ icloudPath: v }),
+      setLocalFolderPath: (v) => set({ localFolderPath: v }),
       addBackupEntry: (entry) =>
         set((s) => ({
           backupHistory: [entry, ...s.backupHistory].slice(0, 50),
