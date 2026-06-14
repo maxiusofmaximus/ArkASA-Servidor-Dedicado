@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARK ASA Configuration Manager - Documentación</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px 20px;
+        }
+
+        .intro {
+            background: #f0f4ff;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+            margin-bottom: 30px;
+            border-radius: 5px;
+        }
+
+        .guides-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .guide-card {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .guide-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
+            transform: translateY(-5px);
+        }
+
+        .guide-card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.3em;
+        }
+
+        .guide-card p {
+            color: #666;
+            font-size: 0.95em;
+            margin-bottom: 15px;
+        }
+
+        .guide-card a {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            text-decoration: none;
+            transition: background 0.3s;
+            font-weight: bold;
+        }
+
+        .guide-card a:hover {
+            background: #764ba2;
+        }
+
+        .guide-list {
+            list-style: none;
+        }
+
+        .guide-list li {
+            padding: 5px 0;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .guide-list li:before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .quick-links {
+            background: #f9f9f9;
+            padding: 30px 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .quick-links h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .links-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .quick-link {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+        }
+
+        .quick-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .quick-link a:hover {
+            text-decoration: underline;
+        }
+
+        footer {
+            background: #f0f0f0;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .emoji {
+            font-size: 1.5em;
+            margin-right: 8px;
+        }
+
+        @media (max-width: 600px) {
+            header h1 {
+                font-size: 1.8em;
+            }
+
+            .guides-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><span class="emoji">🎮</span>ARK ASA Configuration Manager</h1>
+            <p>Documentación Completa - Guías para Cualquiera</p>
+        </header>
+
+        <div class="content">
+            <div class="intro">
+                <h2><span class="emoji">📚</span>Bienvenido a la Documentación</h2>
+                <p>Aquí encontrarás <strong>guías detalladas explicadas en lenguaje simple</strong>, sin importar si eres completamente principiante o usuario avanzado.</p>
+                <p><strong>Elige tu punto de partida abajo:</strong></p>
+            </div>
+
+            <div class="guides-grid">
+                <div class="guide-card">
+                    <h3><span class="emoji">🚀</span>Para Principiantes</h3>
+                    <p><strong>GETTING_STARTED.md</strong></p>
+                    <p>Instalación paso a paso, configuración inicial y tu primer servidor.</p>
+                    <ul class="guide-list">
+                        <li>Instalación del instalador</li>
+                        <li>Descarga del servidor</li>
+                        <li>Configuración básica</li>
+                        <li>Arrancar servidor</li>
+                        <li>Conectarse localmente</li>
+                    </ul>
+                    <a href="GETTING_STARTED.md">Leer Guía →</a>
+                </div>
+
+                <div class="guide-card">
+                    <h3><span class="emoji">🔗</span>Conectar Amigos</h3>
+                    <p><strong>STEAM_A2S.md</strong></p>
+                    <p>Cómo conectarse localmente y desde internet (con o sin port forwarding).</p>
+                    <ul class="guide-list">
+                        <li>Conexión WiFi local</li>
+                        <li>Conexión remota</li>
+                        <li>Port forwarding</li>
+                        <li>Tailscale VPN</li>
+                        <li>Troubleshooting</li>
+                    </ul>
+                    <a href="STEAM_A2S.md">Leer Guía →</a>
+                </div>
+
+                <div class="guide-card">
+                    <h3><span class="emoji">📖</span>Todas las Opciones</h3>
+                    <p><strong>USER_GUIDE.md</strong></p>
+                    <p>Referencia completa de cada pestaña y configuración disponible.</p>
+                    <ul class="guide-list">
+                        <li>Interface explicada</li>
+                        <li>Todas las pestañas</li>
+                        <li>Cada ajuste detallado</li>
+                        <li>Comandos de admin</li>
+                        <li>Pro tips</li>
+                    </ul>
+                    <a href="USER_GUIDE.md">Leer Guía →</a>
+                </div>
+
+                <div class="guide-card">
+                    <h3><span class="emoji">❓</span>Preguntas Frecuentes</h3>
+                    <p><strong>FAQ.md</strong></p>
+                    <p>50+ respuestas a las preguntas más comunes de usuarios.</p>
+                    <ul class="guide-list">
+                        <li>Requisitos del sistema</li>
+                        <li>Límites de jugadores</li>
+                        <li>Gestión de mods</li>
+                        <li>Backups y seguridad</li>
+                        <li>Glosario técnico</li>
+                    </ul>
+                    <a href="FAQ.md">Leer FAQ →</a>
+                </div>
+
+                <div class="guide-card">
+                    <h3><span class="emoji">🔧</span>Problemas y Soluciones</h3>
+                    <p><strong>TROUBLESHOOTING.md</strong></p>
+                    <p>10+ problemas comunes con procedimientos paso a paso para resolverlos.</p>
+                    <ul class="guide-list">
+                        <li>La app no abre</li>
+                        <li>Servidor no arranca</li>
+                        <li>Amigos no conectan</li>
+                        <li>Lag/rendimiento</li>
+                        <li>Y más...</li>
+                    </ul>
+                    <a href="TROUBLESHOOTING.md">Ver Soluciones →</a>
+                </div>
+
+                <div class="guide-card">
+                    <h3><span class="emoji">📚</span>Mapa de Contenido</h3>
+                    <p><strong>INDEX.md</strong></p>
+                    <p>Navegación completa con rutas de aprendizaje y búsqueda rápida.</p>
+                    <ul class="guide-list">
+                        <li>Rutas por nivel</li>
+                        <li>Búsqueda por tema</li>
+                        <li>Estimaciones tiempo</li>
+                        <li>Dificultad de temas</li>
+                        <li>Enlaces útiles</li>
+                    </ul>
+                    <a href="INDEX.md">Ver Índice →</a>
+                </div>
+            </div>
+
+            <div class="quick-links">
+                <h2><span class="emoji">⚡</span>Enlaces Rápidos</h2>
+                <div class="links-grid">
+                    <div class="quick-link">
+                        <strong>Descargar App</strong>
+                        <p><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases">GitHub Releases →</a></p>
+                    </div>
+                    <div class="quick-link">
+                        <strong>Código Fuente</strong>
+                        <p><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado">GitHub Repositorio →</a></p>
+                    </div>
+                    <div class="quick-link">
+                        <strong>Reportar Problemas</strong>
+                        <p><a href="https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/issues">GitHub Issues →</a></p>
+                    </div>
+                    <div class="quick-link">
+                        <strong>Mods CurseForge</strong>
+                        <p><a href="https://www.curseforge.com/ark-survival-ascended/mods">Buscar Mods →</a></p>
+                    </div>
+                    <div class="quick-link">
+                        <strong>ARK Wiki Oficial</strong>
+                        <p><a href="https://ark.wiki.gg/">Documentación ARK →</a></p>
+                    </div>
+                    <div class="quick-link">
+                        <strong>Tailscale VPN</strong>
+                        <p><a href="https://tailscale.com/">Descargar Tailscale →</a></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p><strong>ARK ASA Configuration Manager v1.1</strong></p>
+            <p>Documentación completa para alojar tu propio servidor de ARK: Survival Ascended</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">Hecho con ❤️ para la comunidad de ARK</p>
+        </footer>
+    </div>
+</body>
+</html>
