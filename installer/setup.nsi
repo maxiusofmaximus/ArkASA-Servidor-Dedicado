@@ -17,9 +17,9 @@ InstallDir "C:\Program Files\ARK ASA Config Manager"
 InstallDirRegKey HKLM "Software\ARKASAConfigManager" "InstallDir"
 RequestExecutionLevel admin
 
-VIProductVersion "1.2.0.0"
+VIProductVersion "1.3.0.0"
 VIAddVersionKey "ProductName"     "ARK ASA Configuration Manager Setup"
-VIAddVersionKey "ProductVersion"  "1.2.0"
+VIAddVersionKey "ProductVersion"  "1.3.0"
 VIAddVersionKey "FileDescription" "Full installer for ARK ASA Config Manager"
 VIAddVersionKey "LegalCopyright"  "MIT License - 2026"
 VIAddVersionKey "CompanyName"     "ARK ASA Config Manager"
@@ -370,7 +370,7 @@ Section "$(SEC_APP_NAME)" SEC_APP
     DetailPrint "Downloading ARK ASA Configuration Manager..."
     inetc::get /CAPTION "Downloading ARK ASA Config Manager..." \
         /BANNER "Please wait..." \
-        "https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases/download/v1.1/ARK.ASA.Config.Manager_2.0.0_x64-setup.exe" \
+        "https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases/download/v1.3/ARK.ASA.Config.Manager_2.0.0_x64-setup.exe" \
         "$TEMP\ark-app-setup.exe" /END
     Pop $0
     ${If} $0 != "OK"
@@ -387,7 +387,7 @@ Section "$(SEC_APP_NAME)" SEC_APP
     WriteRegStr   HKLM "Software\ARKASAConfigManager" "InstallDir" "$INSTDIR"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "DisplayName"     "ARK ASA Configuration Manager"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-    WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "DisplayVersion"  "1.2"
+    WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "DisplayVersion"  "1.3"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "Publisher"       "ARK ASA Config Manager"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "URLInfoAbout"    "https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "NoModify" 1
