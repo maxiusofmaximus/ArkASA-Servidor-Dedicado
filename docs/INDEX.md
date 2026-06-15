@@ -40,6 +40,24 @@ description: Guías completas explicadas para cualquiera, sin importar el nivel 
 
 ---
 
+### 🌐 **Quiero configurar la red desde cero (o en otro PC/router)**
+
+→ **[NETWORK_SETUP.md](NETWORK_SETUP.md)**
+
+- Qué puertos necesita ARK ASA y cuáles NUNCA exponer (RCON)
+- IP local fija: reserva DHCP o IP estática en Windows
+- Port forwarding paso a paso (genérico + Movistar Colombia MITRASTAR)
+- Firewall de Windows con reglas seguras por puerto
+- DDNS con DuckDNS (hostname fijo cuando cambia la IP pública)
+- Diagnóstico de CG-NAT y alternativas
+- Checklist de verificación completo
+
+**Ideal para:** reinstalar desde cero, mover el servidor a otro PC, o vender/ceder el setup a alguien más.
+
+**Tiempo:** 30 minutos de lectura + 1 hora de configuración
+
+---
+
 ### 🔧 **Algo no funciona, necesito ayuda**
 
 → **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
@@ -104,6 +122,18 @@ description: Guías completas explicadas para cualquiera, sin importar el nivel 
 │   ├─ Tailscale (alternativa fácil)
 │   ├─ Troubleshooting de conexión
 │   └─ Obelisco y cluster
+│
+├── 🌐 NETWORK_SETUP.md
+│   ├─ Puertos de ARK ASA (7777/7778/27015/27020)
+│   ├─ IP local fija (DHCP o estática en Windows)
+│   ├─ Port forwarding genérico + Movistar MITRASTAR
+│   ├─ Firewall de Windows (reglas seguras por puerto)
+│   ├─ DDNS con DuckDNS
+│   ├─ Seguridad RCON
+│   ├─ CG-NAT diagnóstico y alternativas
+│   ├─ Checklist de verificación
+│   ├─ Apéndice A: Movistar Colombia (quirks del API)
+│   └─ Apéndice B: Scripts de utilidad
 │
 ├── 🔧 TROUBLESHOOTING.md
 │   ├─ La app no abre
@@ -197,6 +227,10 @@ description: Guías completas explicadas para cualquiera, sin importar el nivel 
 | La app no abre | TROUBLESHOOTING | La app no abre |
 | El servidor no arranca | TROUBLESHOOTING | El servidor no arranca |
 | Amigos no pueden conectar | TROUBLESHOOTING / STEAM_A2S | Secciones de conectividad |
+| Configurar router / port forwarding | NETWORK_SETUP | Port forwarding + Checklist |
+| Router Movistar Colombia | NETWORK_SETUP | Apéndice A |
+| IP local cambia al reiniciar router | NETWORK_SETUP | IP local fija |
+| DDNS / hostname fijo | NETWORK_SETUP | DDNS con DuckDNS |
 | Lag, servidor lento | TROUBLESHOOTING | El servidor va lento |
 | ¿Cuántos jugadores? | FAQ | ¿Cuál es el límite de jugadores? |
 | ¿Qué mods puedo usar? | FAQ | ¿Qué mods puedo usar? |
@@ -247,7 +281,7 @@ description: Guías completas explicadas para cualquiera, sin importar el nivel 
 | Agregar mods | ⭐⭐ Fácil | FAQ |
 | Cambiar configuración | ⭐⭐ Fácil | USER_GUIDE |
 | Troubleshooting | ⭐⭐⭐ Medio | TROUBLESHOOTING |
-| Port forwarding | ⭐⭐⭐ Medio | STEAM_A2S |
+| Port forwarding | ⭐⭐⭐ Medio | STEAM_A2S / NETWORK_SETUP |
 | Cluster (multi-mapa) | ⭐⭐⭐⭐ Avanzado | USER_GUIDE |
 | RCON / Administración | ⭐⭐⭐⭐ Avanzado | USER_GUIDE |
 | Optimización | ⭐⭐⭐⭐⭐ Muy avanzado | TROUBLESHOOTING |
