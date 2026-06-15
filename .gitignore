@@ -74,3 +74,4 @@ playwright.config.ts
 *.pem
 *.key
 chat.json
+_tmp_*
