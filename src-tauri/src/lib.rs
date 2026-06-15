@@ -119,6 +119,7 @@ async fn enable_on_demand(
     map_index: usize,
     auto_shutdown_min: u64,
     state: tauri::State<'_, Arc<stub::OnDemandState>>,
+    app: tauri::AppHandle,
 ) -> std::result::Result<String, String> {
     let maps = config.effective_maps();
     let map  = maps.get(map_index)
@@ -138,6 +139,7 @@ async fn enable_on_demand(
         rcon_port,
         admin_password: config.identification.admin_password.clone(),
         auto_shutdown_min,
+        app:            Some(app),
     };
 
     // Replace any existing stub on the same port

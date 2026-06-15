@@ -14,11 +14,15 @@ import { logger } from '../services/logger'
 import type { ServerConfig } from '../types'
 
 interface Options {
-  config:          ServerConfig | null
-  minimizeToTray:  boolean
+  config:           ServerConfig | null
+  minimizeToTray:   boolean
+  /** Called when a dormant map receives a connection attempt and ARK starts. */
+  onDemandWaking?:  (map: string) => void
+  /** Called when a dormant map's ARK has finished loading and is ready. */
+  onDemandReady?:   (map: string) => void
 }
 
-export function useTauriEvents({ config, minimizeToTray }: Options): void {
+export function useTauriEvents({ config, minimizeToTray, onDemandWaking, onDemandReady }: Options): void {
   const configRef        = useRef(config)
   const minimizeRef      = useRef(minimizeToTray)
 
@@ -67,5 +71,25 @@ export function useTauriEvents({ config, minimizeToTray }: Options): void {
       }).then((fn) => { unlisten = fn })
     }).catch(() => {})
     return () => unlisten?.()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On-demand stub events: notify the frontend when a sleeping map is waking or ready.
+  const wakingRef = useRef(onDemandWaking)
+  const readyRef  = useRef(onDemandReady)
+  useEffect(() => { wakingRef.current = onDemandWaking }, [onDemandWaking])
+  useEffect(() => { readyRef.current  = onDemandReady  }, [onDemandReady])
+
+  useEffect(() => {
+    const unlistens: Array<() => void> = []
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<string>('on-demand-waking', (ev) => {
+        wakingRef.current?.(ev.payload)
+      }).then((fn) => unlistens.push(fn))
+
+      listen<string>('on-demand-ready', (ev) => {
+        readyRef.current?.(ev.payload)
+      }).then((fn) => unlistens.push(fn))
+    }).catch(() => {})
+    return () => unlistens.forEach((fn) => fn())
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 }

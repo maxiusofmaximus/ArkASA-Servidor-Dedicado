@@ -15,6 +15,7 @@
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::watch;
@@ -50,6 +51,8 @@ pub struct MapLaunchParams {
     pub admin_password: String,
     /// Minutes of zero players before ARK is shut down (0 = never)
     pub auto_shutdown_min: u64,
+    /// Optional Tauri AppHandle for emitting lifecycle events to the frontend.
+    pub app: Option<tauri::AppHandle>,
 }
 
 /// Status reported to the frontend via `get_on_demand_status`.
@@ -95,7 +98,7 @@ fn is_a2s_query(data: &[u8]) -> bool {
 
 /// Build a minimal but valid A2S_INFO response packet.
 ///
-/// EDF 0x90 = 0x80 (game port) | 0x10 (full AppID as u64)
+/// EDF 0x81 = 0x80 (game port) | 0x01 (full 64-bit GameID/AppID)
 fn build_a2s_info(display_name: &str, map: &str, game_port: u16) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::with_capacity(160);
 
@@ -111,8 +114,12 @@ fn build_a2s_info(display_name: &str, map: &str, game_port: u16) -> Vec<u8> {
     buf.extend_from_slice(b"ShooterGame"); buf.push(0);           // game folder
     buf.extend_from_slice(b"ARK: Survival Ascended"); buf.push(0); // game description
 
-    // ── Short AppID (lower 16 bits, LE) ─────────────────────────────────────
-    buf.extend_from_slice(&(ARK_ASA_APP_ID as u16).to_le_bytes());
+    // ── Short AppID field (2 bytes, legacy) ─────────────────────────────────
+    // ARK ASA AppID (2_399_830) exceeds u16::MAX (65_535). Sending the
+    // truncated value causes Steam to reject the connection with "invalid
+    // application ID". Use 0 here and rely on the full 8-byte GameID in the
+    // EDF section below — which is what Steam actually uses for app lookup.
+    buf.extend_from_slice(&0u16.to_le_bytes());
 
     // ── Server info bytes ────────────────────────────────────────────────────
     buf.push(0);      // current players (0 while dormant)
@@ -127,9 +134,14 @@ fn build_a2s_info(display_name: &str, map: &str, game_port: u16) -> Vec<u8> {
     buf.extend_from_slice(b"1.0.0.0"); buf.push(0);
 
     // ── EDF flags + extra data ───────────────────────────────────────────────
-    buf.push(0x90); // 0x80 (port) | 0x10 (gameID)
-    buf.extend_from_slice(&game_port.to_le_bytes());               // 2 bytes LE
-    buf.extend_from_slice(&(ARK_ASA_APP_ID as u64).to_le_bytes()); // 8 bytes LE
+    // Valve EDF bits (A2S_INFO spec):
+    //   0x80 = game port (2 bytes)
+    //   0x10 = server's Steam ID (8 bytes)  ← NOT the game AppID
+    //   0x01 = full 64-bit GameID / AppID   ← this is what we want
+    // EDF = 0x81 = 0x80 (port) | 0x01 (GameID)
+    buf.push(0x81);
+    buf.extend_from_slice(&game_port.to_le_bytes());               // 2 bytes: game port
+    buf.extend_from_slice(&(ARK_ASA_APP_ID as u64).to_le_bytes()); // 8 bytes: full AppID
 
     buf
 }
@@ -272,14 +284,25 @@ async fn query_ark_players(query_port: u16) -> Option<u8> {
 // Main stub task
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Emit a Tauri event if an AppHandle was provided.
+fn emit_event(app: &Option<tauri::AppHandle>, event: &str, payload: &str) {
+    if let Some(handle) = app {
+        let _ = handle.emit(event, payload.to_string());
+    }
+}
+
 /// Run the full on-demand lifecycle for one map. Loops until shutdown fires.
 pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) {
-    let display_name = {
+    // Extract the session name from the launch_params URL string.
+    let base_name = {
         let s = &params.launch_params;
         let start = s.find("SessionName=").map(|i| i + 12).unwrap_or(0);
         let end = s[start..].find('?').map(|i| start + i).unwrap_or(s.len());
-        format!("{} [DORMIDO]", &s[start..end])
+        s[start..end].to_string()
     };
+    // Pre-build A2S responses for each lifecycle state.
+    let a2s_dormant  = build_a2s_info(&format!("{} [DORMIDO]",   base_name), &params.map, params.game_port);
+    let a2s_starting = build_a2s_info(&format!("{} [INICIANDO]", base_name), &params.map, params.game_port);
 
     'lifecycle: loop {
         // ── Phase 1: Stub dormant — bind both ports, serve A2S queries ─────────
@@ -300,7 +323,6 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
             }
         };
 
-        let a2s_resp = build_a2s_info(&display_name, &params.map, params.game_port);
         let mut qbuf = [0u8; 2048];
         let mut gbuf = [0u8; 2048];
 
@@ -318,7 +340,7 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
                 result = query_sock.recv_from(&mut qbuf) => {
                     if let Ok((n, src)) = result {
                         if is_a2s_query(&qbuf[..n]) {
-                            let _ = query_sock.send_to(&a2s_resp, src).await;
+                            let _ = query_sock.send_to(&a2s_dormant, src).await;
                         }
                     }
                 }
@@ -335,6 +357,8 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
 
         // Release ONLY game_sock so the OS gives game_port to ARK.
         // query_sock stays so we can keep serving A2S while ARK loads.
+        // Notify the frontend that this map is waking up.
+        emit_event(&params.app, "on-demand-waking", &params.map);
         drop(game_sock);
         sleep(Duration::from_millis(200)).await;
 
@@ -390,7 +414,8 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
                 result = query_sock.recv_from(&mut tbuf) => {
                     if let Ok((n, src)) = result {
                         if is_a2s_query(&tbuf[..n]) {
-                            let _ = query_sock.send_to(&a2s_resp, src).await;
+                            // Show INICIANDO so players know to wait and reconnect
+                            let _ = query_sock.send_to(&a2s_starting, src).await;
                         }
                     }
                 }
@@ -410,6 +435,7 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
 
         if ark_ready {
             log::info!("[Stub {}] ARK is READY", params.map);
+            emit_event(&params.app, "on-demand-ready", &params.map);
         } else {
             // Phase 3b: burst-bind windows.
             // Alternate between "hold query_port and serve A2S" and "yield it to ARK",
@@ -437,7 +463,8 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
                             match tokio::time::timeout(remaining, temp_sock.recv_from(&mut bbuf)).await {
                                 Ok(Ok((n, src))) => {
                                     if is_a2s_query(&bbuf[..n]) {
-                                        let _ = temp_sock.send_to(&a2s_resp, &src).await;
+                                        // Show INICIANDO so players know to wait and reconnect
+                                        let _ = temp_sock.send_to(&a2s_starting, &src).await;
                                     }
                                 }
                                 _ => break,
@@ -450,6 +477,7 @@ pub async fn run_stub(params: MapLaunchParams, shutdown: watch::Receiver<bool>) 
                         // ARK has query_port — check if it's actually responding (RCON up)
                         if is_rcon_accepting(params.rcon_port).await {
                             log::info!("[Stub {}] ARK RCON up in burst phase — ready", params.map);
+                            emit_event(&params.app, "on-demand-ready", &params.map);
                             ark_ready = true;
                         } else {
                             sleep(Duration::from_secs(5)).await;

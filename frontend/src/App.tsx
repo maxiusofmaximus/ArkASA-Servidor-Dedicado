@@ -69,6 +69,7 @@ const ADVANCED_TABS: Record<AdvancedSubTab, (c: ServerConfig) => ReactNode> = {
 function App() {
   const [loading, setLoading] = useState(true)
   const [error,   setErrorRaw] = useState<string | null>(null)
+  const [wakeInfo, setWakeInfoRaw] = useState<string | null>(null)
   const [showDifficultyModal, setShowDifficultyModal] = useState(false)
   const [showOptionsModal,    setShowOptionsModal]    = useState(false)
   const [showLogsPanel,       setShowLogsPanel]       = useState(false)
@@ -87,6 +88,16 @@ function App() {
     }
   }, [errorTimer])
 
+  // ── Auto-dismiss wake notification after 30 s ─────────────────────────────
+  const wakeTimer = useState<ReturnType<typeof setTimeout>>()[0]
+  const setWakeInfo = useCallback((msg: string | null) => {
+    setWakeInfoRaw(msg)
+    if (msg !== null) {
+      clearTimeout(wakeTimer)
+      setTimeout(() => setWakeInfoRaw(null), 30_000)
+    }
+  }, [wakeTimer])
+
   // ── Hooks ──────────────────────────────────────────────────────────────────
   const {
     serverRunning, stubsRunning,
@@ -95,7 +106,12 @@ function App() {
   } = useServerLifecycle({ config, setSaving, setError })
 
   useAutoSave(config, !manualSave)
-  useTauriEvents({ config, minimizeToTray })
+  useTauriEvents({
+    config,
+    minimizeToTray,
+    onDemandWaking: (map) => setWakeInfo(`⏳ ${map.replace('_WP', '')} está iniciando… reconéctate en ~5 min`),
+    onDemandReady:  (map) => setWakeInfo(`✅ ${map.replace('_WP', '')} está listo — conéctate ahora`),
+  })
 
   // Escape → toggle Options (unless DifficultyModal is open)
   useEffect(() => {
@@ -214,6 +230,12 @@ function App() {
       {error && (
         <div className="fixed top-20 right-8 bg-ark-accent/20 border border-ark-accent text-ark-accent p-4 rounded z-50 max-w-sm">
           {error}
+        </div>
+      )}
+
+      {wakeInfo && (
+        <div className="fixed top-36 right-8 bg-ark-cyan/10 border border-ark-cyan text-ark-cyan p-4 rounded z-50 max-w-sm text-sm">
+          {wakeInfo}
         </div>
       )}
 
