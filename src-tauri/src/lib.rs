@@ -768,6 +768,12 @@ async fn detect_ips() -> DetectedIps {
     DetectedIps { public_ip, tailscale_ip, local_ip }
 }
 
+#[tauri::command]
+fn parse_config_from_toml(toml_str: String) -> Result<config::ServerConfig, String> {
+    toml::from_str::<config::ServerConfig>(&toml_str)
+        .map_err(|e| format!("Error al leer el archivo TOML: {}", e))
+}
+
 async fn detect_public_ip() -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -997,6 +1003,7 @@ pub fn run() {
             backup::restore_backup_from_cloud,
             // IP detection
             detect_ips,
+            parse_config_from_toml,
             // Ping / Tailscale
             start_ping,
             stop_ping,

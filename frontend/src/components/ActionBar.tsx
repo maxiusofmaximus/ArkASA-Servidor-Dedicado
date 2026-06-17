@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 
 interface ActionBarProps {
   onSave?: () => Promise<void> | void
@@ -9,6 +9,7 @@ interface ActionBarProps {
   onStopServer?: () => void
   onOpenOptions?: () => void
   onToggleLogs?: () => void
+  onImportConfig?: (tomlText: string) => void
   isSaving?: boolean
   autoSave?: boolean
   isServerRunning?: boolean
@@ -28,6 +29,7 @@ export default function ActionBar({
   onStopServer,
   onOpenOptions,
   onToggleLogs,
+  onImportConfig,
   isSaving = false,
   autoSave = true,
   isServerRunning = false,
@@ -38,6 +40,7 @@ export default function ActionBar({
   variant = 'default',
 }: ActionBarProps) {
   const [saveOk, setSaveOk] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleSave = async () => {
     if (!onSave) return
@@ -50,6 +53,18 @@ export default function ActionBar({
 
   const startDisabled = isServerStarting || isServerRunning
   const stopDisabled = isServerStopping
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !onImportConfig) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target?.result
+      if (typeof text === 'string') onImportConfig(text)
+    }
+    reader.readAsText(file)
+    e.target.value = ''  // reset so same file can be re-selected
+  }
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-20 ark-panel border-t border-ark-cyan/40 px-6 py-3 flex items-center justify-between">
@@ -92,6 +107,27 @@ export default function ActionBar({
                 </button>
               )
             )}
+          </>
+        )}
+
+        {/* Import config button */}
+        {onImportConfig && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".toml"
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="ark-action-btn text-[10px] px-3"
+              title="Importar configuración desde archivo .toml"
+              style={{ color: 'rgba(0,200,255,0.5)' }}
+            >
+              ↑ IMPORTAR
+            </button>
           </>
         )}
 

@@ -373,6 +373,18 @@ function createMockInvoke() {
       `Restaurado '${_args?.backupName || 'backup'}' — 42 archivos extraídos. Snapshot previo guardado como SavedArks_preRestore_*`
     mocks['read_backup_metadata'] = async () =>
       JSON.stringify({ server_name: 'Mi Servidor ARK', mod_ids: ['927083', '1932787', '1565001'], scope: 'map_players_tribes', backed_up_at: new Date().toISOString() })
+    mocks['parse_config_from_toml'] = async (args: any) => {
+      // In dev mode, return a copy of the current default config with some changes to demo the diff
+      const base = mocks['get_default_config'] as any
+      if (typeof base === 'object' && base !== null) {
+        return {
+          ...base,
+          multipliers: { ...base.multipliers, xp_multiplier: 3, taming_speed_multiplier: 10 },
+          gameplay: { ...base.gameplay, max_players: 30 },
+        }
+      }
+      throw new Error('Mock parse failed')
+    }
 
     const raw = mocks[command]
     // Support function mocks (for commands that vary by args)

@@ -15,8 +15,12 @@ import SubNav from './components/SubNav'
 import ActionBar from './components/ActionBar'
 import DifficultyModal from './components/DifficultyModal'
 import OptionsModal from './components/OptionsModal'
+import ConfigDiffViewer from './components/ConfigDiffViewer'
 import ServerLogsPanel from './components/ServerLogsPanel'
 import LogsViewer from './components/LogsViewer'
+
+import { computeDiff } from './utils/configDiff'
+import type { DiffEntry } from './utils/configDiff'
 
 // Tab pages
 import ArksTab from './pages/arks/ArksTab'
@@ -74,9 +78,15 @@ function App() {
   const [showOptionsModal,    setShowOptionsModal]    = useState(false)
   const [showLogsPanel,       setShowLogsPanel]       = useState(false)
 
-  const { config, setConfig, isSaving, setSaving } = useConfigStore()
+  const { config, savedConfig, setConfig, setSavedConfig, isSaving, setSaving } = useConfigStore()
   const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore()
   const { logsEnabled, minimizeToTray, manualSave } = useBackupStore()
+
+  // ── Diff viewer state ─────────────────────────────────────────────────────
+  const [diffEntries,  setDiffEntries]  = useState<DiffEntry[]>([])
+  const [diffTitle,    setDiffTitle]    = useState<string>()
+  const [diffApplyLabel, setDiffApplyLabel] = useState<string>('Aplicar cambios')
+  const [pendingApply, setPendingApply] = useState<(() => void) | null>(null)
 
   // ── Auto-dismiss error after 3 s ──────────────────────────────────────────
   const errorTimer = useState<ReturnType<typeof setTimeout>>()[0]
@@ -146,6 +156,7 @@ function App() {
       setLoading(true)
       const saved: ServerConfig = await invoke('load_config_or_default')
       setConfig(saved)
+      setSavedConfig(saved)
       setError(null)
     } catch (err) {
       logger.warn('Failed to load saved config, keeping localStorage version', err)
@@ -156,20 +167,37 @@ function App() {
   }
 
   // ── Config actions ─────────────────────────────────────────────────────────
-  const handleSave = async () => {
+  const doSave = async () => {
     if (!config) return
     try {
       setSaving(true)
       await invoke('save_config', { config })
+      setSavedConfig(config)
       setError(null)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       logger.error('Failed to save config', err)
       setError(`Failed to save: ${msg}`)
-      throw err // let ActionBar know it failed
+      throw err
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleSave = async () => {
+    if (!config) return
+    // In manual save mode, show diff if 6+ fields changed vs last saved state
+    if (manualSave && savedConfig) {
+      const diffs = computeDiff(savedConfig, config)
+      if (diffs.length >= 6) {
+        setDiffEntries(diffs)
+        setDiffTitle(`Guardar Configuración — ${diffs.length} cambios`)
+        setDiffApplyLabel('Guardar todo')
+        setPendingApply(() => doSave)
+        return
+      }
+    }
+    await doSave()
   }
 
   const handleReset = async () => {
@@ -179,6 +207,41 @@ function App() {
     } catch (err) {
       setError(`Failed to load defaults: ${err}`)
     }
+  }
+
+  const handleImportConfig = async (tomlText: string) => {
+    if (!config) return
+    try {
+      const imported: ServerConfig = await invoke('parse_config_from_toml', { tomlStr: tomlText })
+      const diffs = computeDiff(config, imported)
+      if (diffs.length === 0) {
+        setError('El archivo importado es idéntico a la configuración actual.')
+        return
+      }
+      setDiffEntries(diffs)
+      setDiffTitle(`Importar Configuración — ${diffs.length} cambios`)
+      setDiffApplyLabel('Aplicar importación')
+      setPendingApply(() => () => {
+        setConfig(imported)
+        setSavedConfig(imported)
+        invoke('save_config', { config: imported }).catch((e) =>
+          setError(`Error al guardar: ${e}`)
+        )
+      })
+    } catch (err) {
+      setError(`Error al importar: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const handleDiffApply = () => {
+    if (pendingApply) pendingApply()
+    setPendingApply(null)
+    setDiffEntries([])
+  }
+
+  const handleDiffCancel = () => {
+    setPendingApply(null)
+    setDiffEntries([])
   }
 
   const handleDifficultySelect = (value: number) => {
@@ -248,6 +311,7 @@ function App() {
         onStopServer={handleStopServer}
         onOpenOptions={() => setShowOptionsModal(true)}
         onToggleLogs={() => setShowLogsPanel((p) => !p)}
+        onImportConfig={handleImportConfig}
         isSaving={isSaving}
         autoSave={!manualSave}
         isServerRunning={serverRunning || stubsRunning}
@@ -257,6 +321,16 @@ function App() {
         isLogsOpen={showLogsPanel}
         variant={primaryTab === 'mod_settings' ? 'mod_settings' : 'default'}
       />
+
+      {diffEntries.length > 0 && (
+        <ConfigDiffViewer
+          title={diffTitle}
+          entries={diffEntries}
+          applyLabel={diffApplyLabel}
+          onApply={handleDiffApply}
+          onCancel={handleDiffCancel}
+        />
+      )}
 
       {showDifficultyModal && config && (
         <DifficultyModal
