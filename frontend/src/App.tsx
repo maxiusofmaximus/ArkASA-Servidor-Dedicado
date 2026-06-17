@@ -78,7 +78,8 @@ function App() {
   const [showOptionsModal,    setShowOptionsModal]    = useState(false)
   const [showLogsPanel,       setShowLogsPanel]       = useState(false)
 
-  const { config, savedConfig, setConfig, setSavedConfig, isSaving, setSaving } = useConfigStore()
+  const { config, savedConfig, setConfig, setSavedConfig, isSaving, setSaving,
+          undo, redo, historyIndex, history } = useConfigStore()
   const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore()
   const { logsEnabled, minimizeToTray, manualSave } = useBackupStore()
 
@@ -124,14 +125,21 @@ function App() {
   })
 
   // Escape → toggle Options (unless DifficultyModal is open)
+  // Ctrl+Z → undo, Ctrl+Y / Ctrl+Shift+Z → redo
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || showDifficultyModal) return
-      setShowOptionsModal((p) => !p)
+      if (e.key === 'Escape' && !showDifficultyModal) {
+        setShowOptionsModal((p) => !p)
+        return
+      }
+      const ctrl = e.ctrlKey || e.metaKey
+      if (!ctrl) return
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
+      if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [showDifficultyModal])
+  }, [showDifficultyModal, undo, redo])
 
   // ── Init ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -312,6 +320,10 @@ function App() {
         onOpenOptions={() => setShowOptionsModal(true)}
         onToggleLogs={() => setShowLogsPanel((p) => !p)}
         onImportConfig={handleImportConfig}
+        canUndo={historyIndex > 0}
+        canRedo={historyIndex < history.length - 1}
+        onUndo={undo}
+        onRedo={redo}
         isSaving={isSaving}
         autoSave={!manualSave}
         isServerRunning={serverRunning || stubsRunning}

@@ -400,4 +400,32 @@ button:hover {
   border-top: none;
 }
 
+/* ── TruncatedText — marquee scroll on hover ────────────────────────────── */
+@keyframes text-scroll {
+  0%,  10% { transform: translateX(0); }
+  80%, 90% { transform: translateX(var(--scroll-dist, -60px)); }
+  100%      { transform: translateX(0); }
+}
+
+.truncated-text-scroll {
+  text-overflow: ellipsis;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.truncated-text-container:hover .truncated-text-scroll {
+  text-overflow: clip;
+  overflow: visible;
+  animation: text-scroll 2.8s ease-in-out infinite;
+  animation-delay: 0.3s;
+}
+
+/* ── Undo/Redo indicator flash ──────────────────────────────────────────── */
+@keyframes undo-flash {
+  0%   { outline-color: rgba(0,200,255,0.8); }
+  100% { outline-color: transparent; }
+}
+
+.undo-flash { animation: undo-flash 0.4s ease-out; }
+
 @tailwind utilities;
