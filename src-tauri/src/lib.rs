@@ -748,6 +748,101 @@ fn restore_backup(_name: String) -> std::result::Result<ServerConfig, String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// IP auto-detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct DetectedIps {
+    public_ip:    Option<String>,
+    tailscale_ip: Option<String>,
+    local_ip:     Option<String>,
+}
+
+#[tauri::command]
+async fn detect_ips() -> DetectedIps {
+    let (public_ip, tailscale_ip, local_ip) = tokio::join!(
+        detect_public_ip(),
+        detect_tailscale_ip(),
+        async { detect_local_ip() },
+    );
+    DetectedIps { public_ip, tailscale_ip, local_ip }
+}
+
+async fn detect_public_ip() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build().ok()?;
+    let ip = client.get("https://api4.ipify.org")
+        .send().await.ok()?
+        .text().await.ok()?
+        .trim()
+        .to_string();
+    // Sanity: non-empty and looks like an IPv4 address (≤15 chars)
+    if ip.is_empty() || ip.len() > 15 { None } else { Some(ip) }
+}
+
+async fn detect_tailscale_ip() -> Option<String> {
+    // Primary: tailscale CLI (installed alongside the Tailscale app)
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if let Ok(out) = std::process::Command::new("tailscale")
+            .args(["ip", "-4"])
+            .creation_flags(0x08000000)
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() && !s.to_lowercase().contains("error") && is_tailscale_range(&s) {
+                return Some(s);
+            }
+        }
+    }
+
+    // Fallback: scan ipconfig output for a 100.64.0.0/10 address
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if let Ok(out) = std::process::Command::new("ipconfig")
+            .creation_flags(0x08000000)
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if line.contains("IPv4") {
+                    if let Some(pos) = line.rfind(':') {
+                        let ip = line[pos + 1..].trim();
+                        if is_tailscale_range(ip) {
+                            return Some(ip.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn is_tailscale_range(ip: &str) -> bool {
+    // Tailscale uses 100.64.0.0/10 → second octet 64-127
+    let parts: Vec<&str> = ip.split('.').collect();
+    if parts.len() != 4 { return false; }
+    let a: u8 = parts[0].parse().unwrap_or(0);
+    let b: u8 = parts[1].parse().unwrap_or(0);
+    a == 100 && b >= 64 && b <= 127
+}
+
+fn detect_local_ip() -> Option<String> {
+    // UDP connect trick: the OS selects the right outbound interface without
+    // actually sending any packets
+    use std::net::UdpSocket;
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip().to_string();
+    if ip.starts_with("127.") { None } else { Some(ip) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tailscale / ping keep-alive
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -899,6 +994,8 @@ pub fn run() {
             backup::test_s3_connection,
             backup::list_cloud_backups,
             backup::restore_backup_from_cloud,
+            // IP detection
+            detect_ips,
             // Ping / Tailscale
             start_ping,
             stop_ping,

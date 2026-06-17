@@ -308,6 +308,7 @@ function createMockInvoke() {
       get_server_metrics: { cpu: 5, memory: 256, fps: 60 },
       start_ping: null,
       stop_ping: null,
+      detect_ips: { public_ip: '181.237.12.34', tailscale_ip: '100.71.59.101', local_ip: '192.168.1.100' },
       open_external_url: null,
       set_minimize_to_tray: null,
       quit_app: null,

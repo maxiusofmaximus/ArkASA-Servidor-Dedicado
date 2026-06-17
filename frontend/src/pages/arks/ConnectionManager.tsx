@@ -1,4 +1,6 @@
-import type { ServerConfig, ConnectionMethod, NetworkConfig } from '../../types'
+import { useState } from 'react'
+import { invoke } from '../../services/tauri'
+import type { ServerConfig, ConnectionMethod, NetworkConfig, DetectedIps } from '../../types'
 
 interface ConnectionManagerProps {
   config: ServerConfig
@@ -64,26 +66,66 @@ export default function ConnectionManager({ config, updateNetwork }: ConnectionM
   const meta = METHODS[method]
   const ip = effectiveIp(net)
 
+  const [detecting, setDetecting] = useState(false)
+  const [detectMsg, setDetectMsg] = useState<string | null>(null)
+
+  const handleDetect = async () => {
+    setDetecting(true)
+    setDetectMsg(null)
+    try {
+      const ips = await invoke<DetectedIps>('detect_ips')
+      const found: string[] = []
+      if (ips.public_ip)    { updateNetwork('public_ip',    ips.public_ip);    found.push(`Pública: ${ips.public_ip}`) }
+      if (ips.tailscale_ip) { updateNetwork('tailscale_ip', ips.tailscale_ip); found.push(`Tailscale: ${ips.tailscale_ip}`) }
+      if (ips.local_ip)     { updateNetwork('local_ip',     ips.local_ip);     found.push(`Local: ${ips.local_ip}`) }
+      setDetectMsg(found.length > 0 ? found.join(' · ') : 'No se detectaron IPs automáticamente')
+    } catch (e) {
+      setDetectMsg(`Error: ${String(e)}`)
+    } finally {
+      setDetecting(false)
+    }
+  }
+
   return (
     <div className="ark-panel rounded-lg p-4 space-y-3">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase flex-shrink-0">
           Conexión del Servidor
         </span>
-        {ip ? (
-          <span
-            className="text-[10px] font-bold tracking-widest px-2 py-0.5 rounded font-mono"
-            style={{ background: 'rgba(0,200,255,0.1)', color: 'rgba(0,200,255,0.8)', border: '1px solid rgba(0,200,255,0.25)' }}
+        <div className="flex items-center gap-2 min-w-0">
+          {ip ? (
+            <span
+              className="text-[10px] font-bold tracking-widest px-2 py-0.5 rounded font-mono truncate"
+              style={{ background: 'rgba(0,200,255,0.1)', color: 'rgba(0,200,255,0.8)', border: '1px solid rgba(0,200,255,0.25)' }}
+            >
+              -ip={ip}
+            </span>
+          ) : (
+            <span className="text-[10px] truncate" style={{ color: 'rgba(255,255,255,0.2)' }}>
+              sin -ip
+            </span>
+          )}
+          <button
+            onClick={handleDetect}
+            disabled={detecting}
+            className="flex-shrink-0 ark-action-btn text-[10px] px-2.5 py-0.5"
+            title="Detectar automáticamente IP pública, Tailscale y local"
           >
-            -ip={ip}
-          </span>
-        ) : (
-          <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.2)' }}>
-            sin -ip — ARK escucha en todas las interfaces
-          </span>
-        )}
+            {detecting ? '⏳' : '🔍 Detectar'}
+          </button>
+        </div>
       </div>
+
+      {/* Detection result */}
+      {detectMsg && (
+        <p
+          className="text-[10px] leading-relaxed"
+          style={{ color: detectMsg.startsWith('Error') ? 'rgba(239,68,68,0.7)' : 'rgba(74,222,128,0.8)' }}
+        >
+          {detectMsg.startsWith('Error') ? detectMsg : `✓ ${detectMsg}`}
+        </p>
+      )}
 
       {/* Method selector — horizontal chips */}
       <div className="flex flex-wrap gap-1.5">

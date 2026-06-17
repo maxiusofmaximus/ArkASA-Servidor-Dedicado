@@ -93,6 +93,13 @@ export interface FriendContact {
   ip: string
 }
 
+// Result of the detect_ips Tauri command
+export interface DetectedIps {
+  public_ip:    string | null
+  tailscale_ip: string | null
+  local_ip:     string | null
+}
+
 // Gameplay settings (expanded with ~20 new boolean/number fields)
 export interface GameplayConfig {
   server_pve: boolean
