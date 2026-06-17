@@ -31,6 +31,7 @@ interface BackupStore {
   onDemandEnabled: boolean
   onDemandMaps: string[]
   autoShutdownMin: number
+  clusterStartDelaySec: number
 
   // Provider
   provider: CloudProvider
@@ -78,6 +79,7 @@ interface BackupStore {
   setOnDemandMaps: (v: string[]) => void
   toggleOnDemandMap: (mapId: string) => void
   setAutoShutdownMin: (v: number) => void
+  setClusterStartDelaySec: (v: number) => void
   setBackupScope: (v: BackupScope) => void
   setMaxSaves: (v: number) => void
   setProvider: (v: CloudProvider) => void
@@ -110,6 +112,7 @@ export const useBackupStore = create<BackupStore>()(
       onDemandEnabled: true,
       onDemandMaps: [],
       autoShutdownMin: 30,
+      clusterStartDelaySec: 60,
       provider: 'none',
       s3Endpoint: '',
       s3Bucket: '',
@@ -142,6 +145,7 @@ export const useBackupStore = create<BackupStore>()(
           : [...s.onDemandMaps, mapId],
       })),
       setAutoShutdownMin: (v) => set({ autoShutdownMin: v }),
+      setClusterStartDelaySec: (v) => set({ clusterStartDelaySec: v }),
       setBackupScope: (v) => set({ backupScope: v }),
       setMaxSaves: (v) => set({ maxSaves: v }),
       setProvider: (v) => set({ provider: v }),

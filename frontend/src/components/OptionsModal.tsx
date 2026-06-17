@@ -350,6 +350,34 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                 </div>
               </Section>
 
+              {/* Cluster start delay — only relevant in always-on (non-on-demand) mode */}
+              {!store.onDemandEnabled && (
+                <Section title="Clúster de Servidores">
+                  <div>
+                    <p className="text-ark-cyan/80 text-sm">Retardo entre instancias del clúster</p>
+                    <p className="text-ark-cyan/40 text-xs mt-0.5 mb-3">
+                      Tiempo de espera entre el arranque de cada mapa en un clúster. Evita que dos instancias
+                      intenten instalar el mismo mod simultáneamente, lo que causa crashes.
+                      Solo aplica en modo activo (no dormido). Valor recomendado: 60 s.
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <input
+                        type="range"
+                        min={0}
+                        max={180}
+                        step={5}
+                        value={store.clusterStartDelaySec}
+                        onChange={(e) => store.setClusterStartDelaySec(Number(e.target.value))}
+                        className="flex-1 accent-ark-cyan"
+                      />
+                      <span className="text-ark-cyan/80 font-mono text-sm w-20 text-right">
+                        {store.clusterStartDelaySec === 0 ? 'Sin retardo' : `${store.clusterStartDelaySec} s`}
+                      </span>
+                    </div>
+                  </div>
+                </Section>
+              )}
+
               {/* Minimize to tray */}
               <Section title="Comportamiento al Cerrar">
                 <div className="flex items-center justify-between">

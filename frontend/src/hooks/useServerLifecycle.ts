@@ -32,7 +32,7 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
   const [isServerStarting, setIsServerStarting] = useState(false)
   const [isServerStopping, setIsServerStopping] = useState(false)
 
-  const { onDemandEnabled, onDemandMaps, autoShutdownMin, recordModsActive } = useBackupStore()
+  const { onDemandEnabled, onDemandMaps, autoShutdownMin, clusterStartDelaySec, recordModsActive } = useBackupStore()
 
   // ── Start ────────────────────────────────────────────────────────────────────
   const handleStartServer = useCallback(async () => {
@@ -87,7 +87,7 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
           ...config,
           cluster_maps: normalIndices.map((i) => maps[i]),
         }
-        const msg = await invoke<string>('start_server', { config: normalConfig })
+        const msg = await invoke<string>('start_server', { config: normalConfig, clusterDelaySec: clusterStartDelaySec })
         logger.info('Server start result', msg)
         setServerRunning(true)
         // Record that these mods were used in a real server launch
@@ -108,7 +108,7 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
     } finally {
       setIsServerStarting(false)
     }
-  }, [config, isServerStarting, serverRunning, onDemandEnabled, onDemandMaps, autoShutdownMin, setSaving, setError])
+  }, [config, isServerStarting, serverRunning, onDemandEnabled, onDemandMaps, autoShutdownMin, clusterStartDelaySec, setSaving, setError])
 
   // ── Stop ─────────────────────────────────────────────────────────────────────
   const handleStopServer = useCallback(async () => {

@@ -610,7 +610,7 @@ fn server_status() -> std::result::Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn start_server(config: ServerConfig) -> std::result::Result<String, String> {
+fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> std::result::Result<String, String> {
     let maps       = config.effective_maps();
     let is_cluster = maps.len() > 1;
     let exe        = config.paths.ark_exe();
@@ -638,9 +638,10 @@ fn start_server(config: ServerConfig) -> std::result::Result<String, String> {
             Err(e) => return Err(format!("Failed to start {}: {}. Exe: {}", map, e, exe)),
         }
 
-        // Brief stagger between cluster instances to avoid resource contention
+        // Stagger between cluster instances to avoid mod installation conflicts
         if is_cluster && i < maps.len() - 1 {
-            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let delay_ms = cluster_delay_sec.unwrap_or(60) * 1000;
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
     }
 
@@ -719,7 +720,7 @@ fn restart_server(config: ServerConfig) -> std::result::Result<String, String> {
             .output();
     }
     std::thread::sleep(std::time::Duration::from_secs(3));
-    start_server(config)
+    start_server(config, None)
 }
 
 #[tauri::command]
