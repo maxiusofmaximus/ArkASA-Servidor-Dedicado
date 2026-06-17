@@ -48,6 +48,8 @@ pub async fn backup_saves(
     icloud_path: Option<String>,
     // Local folder
     local_folder_path: Option<String>,
+    // Optional JSON blob written as ark-metadata.json inside the zip
+    metadata_json: Option<String>,
 ) -> Result<String, String> {
     // 1. Collect files
     let files = collect_files(&server_dir, &map, &scope);
@@ -62,7 +64,7 @@ pub async fn backup_saves(
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let filename = format!("ark_backup_{}_{}.zip", map, timestamp);
     let zip_path = std::env::temp_dir().join(&filename);
-    create_zip(&files, &zip_path)?;
+    create_zip(&files, &zip_path, metadata_json.as_deref())?;
 
     // 3. Upload
     match provider.as_str() {
@@ -387,7 +389,7 @@ fn collect_files(server_dir: &str, map: &str, scope: &str) -> Vec<(PathBuf, Stri
 
 // ─── ZIP creation ───────────────────────────────────────────
 
-fn create_zip(files: &[(PathBuf, String)], zip_path: &Path) -> Result<(), String> {
+fn create_zip(files: &[(PathBuf, String)], zip_path: &Path, metadata_json: Option<&str>) -> Result<(), String> {
     let file = std::fs::File::create(zip_path)
         .map_err(|e| format!("Cannot create zip: {}", e))?;
 
@@ -395,6 +397,14 @@ fn create_zip(files: &[(PathBuf, String)], zip_path: &Path) -> Result<(), String
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .compression_level(Some(6));
+
+    // Write metadata first so it's easy to inspect
+    if let Some(meta) = metadata_json {
+        zip.start_file("ark-metadata.json", options)
+            .map_err(|e| format!("Zip metadata error: {}", e))?;
+        zip.write_all(meta.as_bytes())
+            .map_err(|e| format!("Zip metadata write error: {}", e))?;
+    }
 
     let mut buf = Vec::new();
     for (abs_path, rel_path) in files {
@@ -853,6 +863,7 @@ pub async fn list_cloud_backups(
     s3_region: Option<String>,
     access_token: Option<String>,
     icloud_path: Option<String>,
+    local_folder_path: Option<String>,
 ) -> Result<Vec<BackupListEntry>, String> {
     match provider.as_str() {
         "s3" => {
@@ -874,6 +885,10 @@ pub async fn list_cloud_backups(
         "icloud" => {
             let folder = icloud_path.ok_or("Falta icloud_path")?;
             list_icloud_backups(&folder)
+        }
+        "local_folder" => {
+            let folder = local_folder_path.ok_or("Falta local_folder_path")?;
+            list_local_folder_backups(&folder)
         }
         _ => Err(format!("Proveedor desconocido: {}", provider)),
     }
@@ -915,10 +930,10 @@ pub async fn restore_backup_from_cloud(
             let token = access_token.ok_or("Falta access_token")?;
             download_from_onedrive(&backup_key, &token).await?
         }
-        "icloud" => {
+        "icloud" | "local_folder" => {
             tokio::fs::read(&backup_key)
                 .await
-                .map_err(|e| format!("iCloud read error: {}", e))?
+                .map_err(|e| format!("Error leyendo archivo local: {}", e))?
         }
         _ => return Err(format!("Proveedor desconocido: {}", provider)),
     };
@@ -1042,6 +1057,33 @@ fn list_icloud_backups(folder: &str) -> Result<Vec<BackupListEntry>, String> {
             let path = e.path();
             let name = path.file_name()?.to_string_lossy().to_string();
             if !name.ends_with(".zip") { return None; }
+            let meta = std::fs::metadata(&path).ok()?;
+            let modified = meta.modified().ok()?;
+            let dt: chrono::DateTime<Utc> = modified.into();
+            Some(BackupListEntry {
+                key: path.to_string_lossy().to_string(),
+                name,
+                size_bytes: meta.len(),
+                created_at: dt.to_rfc3339(),
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(entries)
+}
+
+fn list_local_folder_backups(folder: &str) -> Result<Vec<BackupListEntry>, String> {
+    let dir = PathBuf::from(folder);
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut entries: Vec<BackupListEntry> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Local folder dir error: {}", e))?
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_string_lossy().to_string();
+            if !name.starts_with("ark_backup_") || !name.ends_with(".zip") { return None; }
             let meta = std::fs::metadata(&path).ok()?;
             let modified = meta.modified().ok()?;
             let dt: chrono::DateTime<Utc> = modified.into();

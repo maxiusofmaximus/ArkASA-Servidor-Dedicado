@@ -79,6 +79,17 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     localFolderPath: store.localFolderPath || null,
   }), [store])
 
+  // Metadata JSON embedded inside every backup zip (for new-PC restore)
+  const buildMetadataJson = useCallback(() => {
+    if (!config) return null
+    return JSON.stringify({
+      server_name: config.identification.session_name,
+      mod_ids: config.mods.active_mods,
+      scope: store.backupScope,
+      backed_up_at: new Date().toISOString(),
+    })
+  }, [config, store.backupScope])
+
   // ── List cloud backups ───────────────────────────────────────────────────────
   const handleListBackups = async () => {
     setIsListing(true)
@@ -148,6 +159,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         accessToken: token || null,
         icloudPath: store.icloudPath || null,
         localFolderPath: store.localFolderPath || null,
+        metadataJson: buildMetadataJson(),
       })
 
       store.addBackupEntry({
@@ -231,8 +243,8 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     }
   }
 
-  // local_folder and icloud don't need cloud list/restore (files are already local)
-  const isCloudProvider = !['none', 'local_folder', 'icloud'].includes(store.provider)
+  // icloud is synced silently by the OS; local_folder and cloud providers support explicit list/restore
+  const isCloudProvider = !['none', 'icloud'].includes(store.provider)
 
   return (
     <div
