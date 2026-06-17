@@ -56,11 +56,11 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
         format!("-WinLiveMaxPlayers={}", config.gameplay.max_players),
     ];
 
-    // Advertise a specific IP (e.g. Tailscale) so cluster-travel redirects and
-    // direct connections use the correct reachable address.
-    let server_ip = config.network.server_ip.trim();
-    if !server_ip.is_empty() {
-        flags.push(format!("-ip={}", server_ip));
+    // Advertise the configured IP so cluster-travel redirects and direct
+    // connections use the correct reachable address.
+    let effective_ip = config.network.effective_ip();
+    if !effective_ip.is_empty() {
+        flags.push(format!("-ip={}", effective_ip));
     }
 
     if is_cluster {

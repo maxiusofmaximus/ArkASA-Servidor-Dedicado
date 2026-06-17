@@ -33,6 +33,17 @@ pub struct IdentificationConfig {
     pub server_message_of_the_day: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionMethod {
+    Tailscale,
+    Public,
+    DuckDns,
+    Local,
+    #[default]
+    Manual,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct NetworkConfig {
@@ -40,9 +51,32 @@ pub struct NetworkConfig {
     pub query_port: u16,
     pub rcon_port: u16,
     pub server_platform: String,
-    /// If set, passed as -ip=<value> so ARK advertises this address for
-    /// connections and cluster-travel redirects (e.g. Tailscale IP).
+    // ── Connection Manager ────────────────────────────────────────────────────
+    pub connection_method: ConnectionMethod,
+    pub tailscale_ip: String,
+    pub public_ip: String,
+    pub duckdns_host: String,
+    pub local_ip: String,
+    /// Generic / migration target for old server_ip values.
+    pub manual_ip: String,
+    // ── Legacy: kept to read old TOML files; effective_ip() falls back to it ─
+    #[serde(default)]
     pub server_ip: String,
+}
+
+impl NetworkConfig {
+    /// Returns the IP string ARK receives as -ip=VALUE.
+    /// Empty string → omit -ip flag (ARK binds all interfaces).
+    pub fn effective_ip(&self) -> String {
+        let resolved = match self.connection_method {
+            ConnectionMethod::Tailscale => self.tailscale_ip.trim().to_string(),
+            ConnectionMethod::Public    => self.public_ip.trim().to_string(),
+            ConnectionMethod::DuckDns   => self.duckdns_host.trim().to_string(),
+            ConnectionMethod::Local     => self.local_ip.trim().to_string(),
+            ConnectionMethod::Manual    => self.manual_ip.trim().to_string(),
+        };
+        if resolved.is_empty() { self.server_ip.trim().to_string() } else { resolved }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -369,6 +403,12 @@ impl Default for NetworkConfig {
             query_port: 27015,
             rcon_port: 27020,
             server_platform: "ALL".to_string(),
+            connection_method: ConnectionMethod::Manual,
+            tailscale_ip: String::new(),
+            public_ip: String::new(),
+            duckdns_host: String::new(),
+            local_ip: String::new(),
+            manual_ip: String::new(),
             server_ip: String::new(),
         }
     }
