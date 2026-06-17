@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { FriendContact } from '../types'
 
 export type BackupScope = 'map' | 'map_players_tribes' | 'full'
 export type CloudProvider = 'none' | 's3' | 'gdrive' | 'onedrive' | 'icloud' | 'local_folder'
@@ -55,6 +56,10 @@ interface BackupStore {
   // History
   backupHistory: BackupEntry[]
 
+  // Friend Contacts
+  friendContacts: FriendContact[]
+  activePingContactId: string | null
+
   // Actions
   setLanguage: (v: string) => void
   setLogsEnabled: (v: boolean) => void
@@ -73,6 +78,12 @@ interface BackupStore {
   setICloudPath: (v: string) => void
   setLocalFolderPath: (v: string) => void
   addBackupEntry: (entry: BackupEntry) => void
+
+  // Friend Contact actions
+  addFriendContact: (contact: Omit<FriendContact, 'id'>) => void
+  updateFriendContact: (id: string, patch: Partial<Omit<FriendContact, 'id'>>) => void
+  removeFriendContact: (id: string) => void
+  setActivePingContactId: (id: string | null) => void
 }
 
 export const useBackupStore = create<BackupStore>()(
@@ -103,6 +114,8 @@ export const useBackupStore = create<BackupStore>()(
       icloudPath: '',
       localFolderPath: '',
       backupHistory: [],
+      friendContacts: [],
+      activePingContactId: null,
 
       setLanguage: (v) => set({ language: v }),
       setLogsEnabled: (v) => set({ logsEnabled: v }),
@@ -128,6 +141,25 @@ export const useBackupStore = create<BackupStore>()(
         set((s) => ({
           backupHistory: [entry, ...s.backupHistory].slice(0, 50),
         })),
+
+      addFriendContact: (contact) =>
+        set((s) => ({
+          friendContacts: [
+            ...s.friendContacts,
+            { ...contact, id: crypto.randomUUID() },
+          ],
+        })),
+      updateFriendContact: (id, patch) =>
+        set((s) => ({
+          friendContacts: s.friendContacts.map((c) =>
+            c.id === id ? { ...c, ...patch } : c
+          ),
+        })),
+      removeFriendContact: (id) =>
+        set((s) => ({
+          friendContacts: s.friendContacts.filter((c) => c.id !== id),
+        })),
+      setActivePingContactId: (id) => set({ activePingContactId: id }),
     }),
     { name: 'ark-backup-config' }
   )

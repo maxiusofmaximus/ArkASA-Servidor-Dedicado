@@ -66,13 +66,31 @@ export interface IdentificationConfig {
   server_message_of_the_day: string
 }
 
+// Connection method for the server IP selector
+export type ConnectionMethod = 'tailscale' | 'public' | 'duckdns' | 'local' | 'manual'
+
 // Network settings
 export interface NetworkConfig {
   port: number
   query_port: number
   rcon_port: number
   server_platform: string
+  // Connection Manager
+  connection_method: ConnectionMethod
+  tailscale_ip: string
+  public_ip: string
+  duckdns_host: string
+  local_ip: string
+  manual_ip: string
+  // Legacy — read from old TOML; effective_ip() falls back to it
   server_ip: string
+}
+
+// A saved friend IP contact
+export interface FriendContact {
+  id: string
+  name: string
+  ip: string
 }
 
 // Gameplay settings (expanded with ~20 new boolean/number fields)
