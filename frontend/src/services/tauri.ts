@@ -371,6 +371,8 @@ function createMockInvoke() {
     ]
     mocks['restore_backup_from_cloud'] = async (_args: any) =>
       `Restaurado '${_args?.backupName || 'backup'}' — 42 archivos extraídos. Snapshot previo guardado como SavedArks_preRestore_*`
+    mocks['read_backup_metadata'] = async () =>
+      JSON.stringify({ server_name: 'Mi Servidor ARK', mod_ids: ['927083', '1932787', '1565001'], scope: 'map_players_tribes', backed_up_at: new Date().toISOString() })
 
     const raw = mocks[command]
     // Support function mocks (for commands that vary by args)

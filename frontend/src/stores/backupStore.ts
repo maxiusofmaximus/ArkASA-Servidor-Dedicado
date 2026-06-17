@@ -12,6 +12,12 @@ export interface BackupEntry {
   provider: CloudProvider
 }
 
+export interface ModUsageRecord {
+  firstSeen: string      // ISO date — when the mod was first added to the active list
+  lastActive: string     // ISO date — last time server started with this mod
+  serverLaunches: number // how many successful server starts included this mod
+}
+
 interface BackupStore {
   // General options
   language: string          // 'en' | 'es' | 'fr' | 'zh' | 'ja' | 'ko' | 'pt' | 'de' | 'it' | 'ru'
@@ -60,6 +66,9 @@ interface BackupStore {
   friendContacts: FriendContact[]
   activePingContactId: string | null
 
+  // Mod usage tracking (persisted — survives restarts)
+  modUsageHistory: Record<string, ModUsageRecord>
+
   // Actions
   setLanguage: (v: string) => void
   setLogsEnabled: (v: boolean) => void
@@ -84,6 +93,9 @@ interface BackupStore {
   updateFriendContact: (id: string, patch: Partial<Omit<FriendContact, 'id'>>) => void
   removeFriendContact: (id: string) => void
   setActivePingContactId: (id: string | null) => void
+
+  // Mod usage actions
+  recordModsActive: (modIds: string[]) => void
 }
 
 export const useBackupStore = create<BackupStore>()(
@@ -116,6 +128,7 @@ export const useBackupStore = create<BackupStore>()(
       backupHistory: [],
       friendContacts: [],
       activePingContactId: null,
+      modUsageHistory: {},
 
       setLanguage: (v) => set({ language: v }),
       setLogsEnabled: (v) => set({ logsEnabled: v }),
@@ -160,6 +173,20 @@ export const useBackupStore = create<BackupStore>()(
           friendContacts: s.friendContacts.filter((c) => c.id !== id),
         })),
       setActivePingContactId: (id) => set({ activePingContactId: id }),
+
+      recordModsActive: (modIds) => set((s) => {
+        const now = new Date().toISOString()
+        const next = { ...s.modUsageHistory }
+        for (const id of modIds) {
+          const prev = next[id]
+          next[id] = {
+            firstSeen:     prev?.firstSeen ?? now,
+            lastActive:    now,
+            serverLaunches: (prev?.serverLaunches ?? 0) + 1,
+          }
+        }
+        return { modUsageHistory: next }
+      }),
     }),
     { name: 'ark-backup-config' }
   )

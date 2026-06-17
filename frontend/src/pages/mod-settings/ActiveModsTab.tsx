@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react'
 import { useConfigStore } from '../../stores/configStore'
 import { useModsStore } from '../../stores/modsStore'
+import { useBackupStore } from '../../stores/backupStore'
 import { invoke } from '../../services/tauri'
+
+type RemovePending = { modId: string; modName: string; index: number }
 
 export default function ActiveModsTab() {
   const { config, setConfig } = useConfigStore()
   const { modCache, setModInfo, getModInfo } = useModsStore()
+  const store = useBackupStore()
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [checkingPcOnly, setCheckingPcOnly] = useState(false)
+  const [removePending, setRemovePending] = useState<RemovePending | null>(null)
+  const [isBackingUp, setIsBackingUp] = useState(false)
+  const [backupMsg, setBackupMsg] = useState<string | null>(null)
   const mods = config?.mods?.active_mods ?? []
 
   // Fetch names for any mod IDs not yet in the cache
@@ -97,6 +104,69 @@ export default function ActiveModsTab() {
     setSelectedIdx(null)
   }
 
+  // Request removal — shows warning if the mod has been used in server launches
+  const requestRemoveMod = (i: number) => {
+    const modId = mods[i]
+    const usage = store.modUsageHistory[modId]
+    if (usage && usage.serverLaunches > 0) {
+      setRemovePending({ modId, modName: modCache[modId]?.name ?? modId, index: i })
+      setBackupMsg(null)
+    } else {
+      removeMod(i)
+    }
+  }
+
+  const isBackupConfigured = () => {
+    switch (store.provider) {
+      case 's3':           return !!(store.s3Endpoint && store.s3Bucket && store.s3AccessKey && store.s3SecretKey)
+      case 'gdrive':       return !!store.gdriveAccessToken
+      case 'onedrive':     return !!store.onedriveAccessToken
+      case 'icloud':       return !!store.icloudPath
+      case 'local_folder': return !!store.localFolderPath
+      default:             return false
+    }
+  }
+
+  const handleBackupAndRemove = async () => {
+    if (!removePending || !config) return
+    setIsBackingUp(true)
+    setBackupMsg(null)
+    try {
+      const token = store.provider === 'gdrive' ? store.gdriveAccessToken
+        : store.provider === 'onedrive' ? store.onedriveAccessToken
+        : undefined
+      const metadataJson = JSON.stringify({
+        server_name: config.identification.session_name,
+        mod_ids: config.mods.active_mods,
+        scope: store.backupScope,
+        backed_up_at: new Date().toISOString(),
+        note: `Backup before removing mod ${removePending.modId}`,
+      })
+      const filename = await invoke<string>('backup_saves', {
+        serverDir: config.paths.server_dir,
+        map: config.cluster_maps?.[0] || 'TheIsland_WP',
+        scope: store.backupScope,
+        provider: store.provider,
+        s3Endpoint: store.s3Endpoint || null,
+        s3Bucket: store.s3Bucket || null,
+        s3AccessKey: store.s3AccessKey || null,
+        s3SecretKey: store.s3SecretKey || null,
+        s3Region: store.s3Region || null,
+        accessToken: token || null,
+        icloudPath: store.icloudPath || null,
+        localFolderPath: store.localFolderPath || null,
+        metadataJson,
+      })
+      store.addBackupEntry({ filename, size_bytes: 0, created_at: new Date().toISOString(), provider: store.provider })
+      removeMod(removePending.index)
+      setRemovePending(null)
+    } catch (e) {
+      setBackupMsg(`❌ Error al hacer backup: ${String(e)}`)
+    } finally {
+      setIsBackingUp(false)
+    }
+  }
+
   const moveUp = (i: number) => {
     if (i === 0) return
     const next = [...mods];
@@ -126,7 +196,99 @@ export default function ActiveModsTab() {
   const selectedId = selectedIdx !== null ? mods[selectedIdx] : null
   const selectedInfo = selectedId ? getModInfo(selectedId) : null
 
+  // ── Mod remove warning modal ──────────────────────────────────────────────────
+  const usage = removePending ? store.modUsageHistory[removePending.modId] : null
+  const canBackup = store.provider !== 'none' && isBackupConfigured()
+
+  const RemoveWarningModal = removePending ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}
+    >
+      <div
+        className="ark-panel rounded-xl w-full max-w-md mx-4 flex flex-col"
+        style={{ border: '1px solid rgba(239,68,68,0.4)', boxShadow: '0 0 40px rgba(239,68,68,0.15)' }}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 pt-5 pb-4 border-b border-red-500/25">
+          <span className="text-red-400 text-xl">⚠</span>
+          <span className="text-red-300/90 font-bold tracking-widest text-sm uppercase">Advertencia: Datos del servidor</span>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 py-4 space-y-3">
+          <p className="text-white/80 text-sm">
+            El mod <span className="text-ark-cyan font-semibold">"{removePending.modName}"</span>{' '}
+            <span className="text-white/50 font-mono text-xs">#{removePending.modId}</span> ha sido
+            iniciado con el servidor{' '}
+            <span className="text-red-300 font-bold">{usage?.serverLaunches ?? 0} {(usage?.serverLaunches ?? 0) === 1 ? 'vez' : 'veces'}</span>.
+          </p>
+
+          {usage && (
+            <div className="rounded-md px-3 py-2 space-y-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <p className="text-ark-cyan/50 text-[10px]">
+                Primer uso: <span className="text-ark-cyan/70">{new Date(usage.firstSeen).toLocaleDateString()}</span>
+                {' · '}Último: <span className="text-ark-cyan/70">{new Date(usage.lastActive).toLocaleDateString()}</span>
+              </p>
+            </div>
+          )}
+
+          <div className="rounded-md px-3 py-2.5 space-y-1" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
+            <p className="text-red-300/90 text-xs font-bold">Eliminarlo puede causar pérdida permanente de:</p>
+            <ul className="text-red-300/65 text-[11px] space-y-0.5 ml-3">
+              <li>• Estructuras colocadas con este mod (mesas, máquinas, etc.)</li>
+              <li>• Items y crafteos del mod en inventarios y cofres</li>
+              <li>• Datos guardados asociados al mod en el .ark</li>
+            </ul>
+          </div>
+
+          <p className="text-ark-cyan/40 text-[10px]">
+            Para recuperarlo después: <span className="text-ark-cyan/60">Opciones → Backup → Restaurar</span> un backup anterior que tenga el mod activo.
+          </p>
+
+          {backupMsg && (
+            <p className="text-red-400/80 text-xs">{backupMsg}</p>
+          )}
+        </div>
+
+        {/* Buttons */}
+        <div className="px-5 pb-5 flex gap-2 flex-wrap">
+          <button
+            onClick={() => { setRemovePending(null); setBackupMsg(null) }}
+            className="ark-action-btn px-4 py-2 text-xs tracking-widest flex-1"
+          >
+            CANCELAR
+          </button>
+          <button
+            onClick={() => { removeMod(removePending.index); setRemovePending(null) }}
+            className="px-4 py-2 text-xs font-bold tracking-widest rounded transition-all flex-1"
+            style={{ background: 'rgba(239,68,68,0.15)', color: 'rgba(239,68,68,0.85)', border: '1px solid rgba(239,68,68,0.4)' }}
+          >
+            ELIMINAR DE TODAS FORMAS
+          </button>
+          {canBackup && (
+            <button
+              onClick={handleBackupAndRemove}
+              disabled={isBackingUp}
+              className="px-4 py-2 text-xs font-bold tracking-widest rounded transition-all w-full"
+              style={{ background: 'rgba(0,200,255,0.15)', color: 'rgba(0,200,255,0.9)', border: '1px solid rgba(0,200,255,0.4)', opacity: isBackingUp ? 0.6 : 1 }}
+            >
+              {isBackingUp ? '⏳ CREANDO BACKUP...' : '💾 CREAR BACKUP Y ELIMINAR'}
+            </button>
+          )}
+          {!canBackup && (
+            <p className="text-ark-cyan/30 text-[10px] w-full text-center">
+              Configura un proveedor en <span className="text-ark-cyan/50">Opciones → Backup</span> para hacer backup antes de eliminar.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  ) : null
+
   return (
+    <>
+    {RemoveWarningModal}
     <div className="flex gap-4 px-8 py-6 pb-24">
       {/* Left: mod list */}
       <div className="flex-1 flex flex-col gap-3">
@@ -279,7 +441,7 @@ export default function ActiveModsTab() {
                     >↗</button>
 
                     <button
-                      onClick={(e) => { e.stopPropagation(); removeMod(i) }}
+                      onClick={(e) => { e.stopPropagation(); requestRemoveMod(i) }}
                       className="text-red-400/50 hover:text-red-400 text-sm font-bold transition flex-shrink-0 w-5 text-center"
                       title="Quitar mod"
                     >×</button>
@@ -344,5 +506,6 @@ export default function ActiveModsTab() {
         </div>
       </div>
     </div>
+    </>
   )
 }

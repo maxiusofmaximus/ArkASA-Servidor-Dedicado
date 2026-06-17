@@ -106,6 +106,29 @@ pub async fn backup_saves(
     Ok(filename)
 }
 
+/// Read ark-metadata.json from inside a local backup zip.
+/// Returns None if the zip has no metadata (old backup).
+#[tauri::command]
+pub fn read_backup_metadata(zip_path: String) -> Result<Option<String>, String> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(&zip_path)
+        .map_err(|e| format!("Cannot open zip: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Invalid zip: {}", e))?;
+
+    let result = match archive.by_name("ark-metadata.json") {
+        Ok(mut entry) => {
+            let mut buf = String::new();
+            entry.read_to_string(&mut buf)
+                .map_err(|e| format!("Read error: {}", e))?;
+            Some(buf)
+        }
+        Err(_) => None,
+    };
+    Ok(result)
+}
+
 /// Read the last N lines of ShooterGame.log.
 /// If `map` is provided, tries `{server_dir}/{map}/ShooterGame/Saved/Logs/ShooterGame.log` first
 /// (for per-map server dirs in cluster setups), then falls back to the shared log.

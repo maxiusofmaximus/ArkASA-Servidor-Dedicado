@@ -32,7 +32,7 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
   const [isServerStarting, setIsServerStarting] = useState(false)
   const [isServerStopping, setIsServerStopping] = useState(false)
 
-  const { onDemandEnabled, onDemandMaps, autoShutdownMin } = useBackupStore()
+  const { onDemandEnabled, onDemandMaps, autoShutdownMin, recordModsActive } = useBackupStore()
 
   // ── Start ────────────────────────────────────────────────────────────────────
   const handleStartServer = useCallback(async () => {
@@ -90,6 +90,8 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
         const msg = await invoke<string>('start_server', { config: normalConfig })
         logger.info('Server start result', msg)
         setServerRunning(true)
+        // Record that these mods were used in a real server launch
+        recordModsActive(config.mods?.active_mods ?? [])
       }
 
       // Track stub-only mode separately to avoid false crash alerts

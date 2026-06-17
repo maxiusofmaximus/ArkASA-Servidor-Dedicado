@@ -61,6 +61,8 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
   const [restoring, setRestoring] = useState<string | null>(null)
   const [restoreStatus, setRestoreStatus] = useState<string | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
+  // Metadata for local backups — keyed by backup key (abs path)
+  const [backupMeta, setBackupMeta] = useState<Record<string, { mod_ids?: string[]; server_name?: string; note?: string } | null>>({})
 
   const store = useBackupStore()
   const { config } = useConfigStore()
@@ -100,6 +102,20 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
       const entries = await invoke<BackupListEntry[]>('list_cloud_backups', providerArgs())
       setCloudList(entries)
       if (entries.length === 0) setListError('No se encontraron backups en este proveedor.')
+
+      // For local providers (icloud, local_folder), read metadata from each zip
+      if (store.provider === 'local_folder' || store.provider === 'icloud') {
+        const metaResults: Record<string, any> = {}
+        await Promise.all(entries.map(async (entry) => {
+          try {
+            const raw = await invoke<string | null>('read_backup_metadata', { zipPath: entry.key })
+            metaResults[entry.key] = raw ? JSON.parse(raw) : null
+          } catch {
+            metaResults[entry.key] = null
+          }
+        }))
+        setBackupMeta(metaResults)
+      }
     } catch (e) {
       setListError(`❌ ${String(e)}`)
     } finally {
@@ -644,6 +660,17 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                                 <div className="min-w-0 flex-1">
                                   <p className="text-ark-cyan/80 text-xs font-mono truncate">{entry.name}</p>
                                   <p className="text-ark-cyan/30 text-[10px]">{date} · {sizeMB} MB</p>
+                                  {backupMeta[entry.key]?.mod_ids && backupMeta[entry.key]!.mod_ids!.length > 0 && (
+                                    <p className="text-ark-cyan/40 text-[10px] mt-0.5 truncate">
+                                      Mods: {backupMeta[entry.key]!.mod_ids!.slice(0, 5).join(', ')}
+                                      {backupMeta[entry.key]!.mod_ids!.length > 5 && ` +${backupMeta[entry.key]!.mod_ids!.length - 5} más`}
+                                    </p>
+                                  )}
+                                  {backupMeta[entry.key]?.note && (
+                                    <p className="text-yellow-400/50 text-[10px] mt-0.5 truncate">
+                                      ℹ {backupMeta[entry.key]!.note}
+                                    </p>
+                                  )}
                                 </div>
                                 <button
                                   onClick={() => handleRestore(entry)}

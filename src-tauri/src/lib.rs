@@ -986,6 +986,7 @@ pub fn run() {
             restore_backup,
             // Cloud backup
             backup::backup_saves,
+            backup::read_backup_metadata,
             backup::read_server_log,
             backup::start_gdrive_oauth,
             backup::start_onedrive_oauth,
