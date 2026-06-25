@@ -62,7 +62,7 @@ export default function AvailableModsTab() {
   // Search
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const activeMods = config?.mods?.active_mods ?? []
 

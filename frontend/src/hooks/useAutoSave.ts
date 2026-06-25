@@ -12,7 +12,7 @@ import type { ServerConfig } from '../types'
 const DELAY_MS = 1_500
 
 export function useAutoSave(config: ServerConfig | null, enabled: boolean): void {
-  const timer = useRef<ReturnType<typeof setTimeout>>()
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
     if (!config || !enabled) return

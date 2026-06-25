@@ -371,7 +371,7 @@ function createMockInvoke() {
       { key: 'ark_backup_TheIsland_WP_20260612_080000.zip', name: 'ark_backup_TheIsland_WP_20260612_080000.zip', size_bytes: 298_100_000, created_at: '2026-06-12T08:00:00Z' },
       { key: 'ark_backup_TheIsland_WP_20260611_200000.zip', name: 'ark_backup_TheIsland_WP_20260611_200000.zip', size_bytes: 301_000_000, created_at: '2026-06-11T20:00:00Z' },
     ]
-    mocks['parse_config_from_toml'] = async (args: any) => {
+    mocks['parse_config_from_toml'] = async (_args: any) => {
       // In dev mode, return a copy of the current default config with some changes to demo the diff
       const base = mocks['get_default_config'] as any
       if (typeof base === 'object' && base !== null) {

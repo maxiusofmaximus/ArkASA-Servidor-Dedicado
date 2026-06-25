@@ -186,7 +186,7 @@ export default function EngramsTab() {
                 Click + on any engram to auto-unlock it for all players.
               </div>
             ) : (
-              enrichedAutoUnlock.map(({ id, name, level, category: cat }) => (
+              enrichedAutoUnlock.map(({ id, name, level, category: _cat }) => (
                 <div key={id} className="flex items-center gap-2 px-3 py-2 border-b border-ark-cyan/10 hover:bg-ark-secondary/15 transition">
                   <div className="flex-1 min-w-0">
                     {name ? (

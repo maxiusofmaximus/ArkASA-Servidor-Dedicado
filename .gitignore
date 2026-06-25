@@ -59,8 +59,16 @@ backups/
 coverage/
 .nyc_output/
 .playwright/
+.playwright-mcp/
 playwright-report/
 playwright.config.ts
+frontend/screenshots/
+frontend/real-screenshots/
+frontend/examples/
+frontend/test-results/
+
+# ========== TAURI GENERATED ==========
+src-tauri/gen/schemas/
 
 # ========== BUILD ARTIFACTS & INSTALLERS ==========
 *.exe

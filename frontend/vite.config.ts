@@ -22,8 +22,7 @@ export default defineConfig({
     include: [
       'react',
       'react-dom',
-      'zustand',
-      'axios'
+      'zustand'
     ],
     exclude: ['@tauri-apps/api', '@tauri-apps/api/tauri', '@tauri-apps/cli']
   },

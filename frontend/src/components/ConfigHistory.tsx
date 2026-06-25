@@ -12,7 +12,7 @@ interface ConfigHistoryProps {
   currentConfig: ServerConfig
 }
 
-export default function ConfigHistory({ currentConfig }: ConfigHistoryProps) {
+export default function ConfigHistory(_props: ConfigHistoryProps) {
   // Mock history data - en producción vendría de la base de datos
   const [history] = useState<ConfigSnapshot[]>([
     {

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React from 'react'
 import TripleStatRow from '../../components/TripleStatRow'
 import SettingsPanel from '../../components/SettingsPanel'
 import { useConfigUpdate } from '../../hooks/useConfigUpdate'

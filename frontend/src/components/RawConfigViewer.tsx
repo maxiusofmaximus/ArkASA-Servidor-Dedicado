@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import type { ServerConfig } from '../types'
 import { invoke } from '../services/tauri'
+import { generateGameUserSettings, generateGameIni, generateToml } from '../services/configGenerators'
+import { type ConfigSaveStrategy, TomlSaveStrategy, IniSaveStrategy, CustomFileSaveStrategy } from '../services/configSaveStrategies'
 import { useBackupStore } from '../stores/backupStore'
 import { useI18n } from '../i18n/useI18n'
 import { useTextHistory } from '../hooks/useTextHistory'
@@ -11,240 +13,8 @@ interface RawConfigViewerProps {
   onConfigSaved?: (config: ServerConfig) => void
 }
 
-// ── GameUserSettings.ini generator ─────────────────────────────────────────
-function generateGameUserSettings(c: ServerConfig): string {
-  const m = c.multipliers
-  const w = c.world
-  const g = c.gameplay
-  const net = c.network
-  const id = c.identification
-
-  return [
-    '[ServerSettings]',
-    `ServerPassword=${id.server_password}`,
-    `AdminPassword=${id.admin_password}`,
-    `Port=${net.port}`,
-    `QueryPort=${net.query_port}`,
-    `RCONPort=${net.rcon_port}`,
-    `RCONEnabled=True`,
-    `ServerPlatform=${net.server_platform}`,
-    '',
-    '; ─── Multipliers ───────────────────────────────────────',
-    `XPMultiplier=${m.xp_multiplier}`,
-    `TamingSpeedMultiplier=${m.taming_speed_multiplier}`,
-    `HarvestAmountMultiplier=${m.harvest_amount_multiplier}`,
-    `HarvestHealthMultiplier=${m.harvest_health_multiplier}`,
-    '',
-    '; Player',
-    `PlayerDamageMultiplier=${m.player_damage_multiplier}`,
-    `PlayerResistanceMultiplier=${m.player_resistance_multiplier}`,
-    `PlayerCharacterWaterDrainMultiplier=${m.player_character_water_drain_multiplier}`,
-    `PlayerCharacterFoodDrainMultiplier=${m.player_character_food_drain_multiplier}`,
-    `PlayerCharacterStaminaDrainMultiplier=${m.player_character_stamina_drain_multiplier}`,
-    `PlayerCharacterHealthRecoveryMultiplier=${m.player_character_health_recovery_multiplier}`,
-    '',
-    '; Dinos',
-    `DinoDamageMultiplier=${m.dino_damage_multiplier}`,
-    `DinoResistanceMultiplier=${m.dino_resistance_multiplier}`,
-    `DinoCharacterHealthMultiplier=${m.dino_character_health_multiplier}`,
-    `DinoCharacterFoodDrainMultiplier=${m.dino_character_food_drain_multiplier}`,
-    `DinoCharacterStaminaDrainMultiplier=${m.dino_character_stamina_drain_multiplier}`,
-    '',
-    '; Structures',
-    `StructureDamageMultiplier=${m.structure_damage_multiplier}`,
-    `StructureResistanceMultiplier=${m.structure_resistance_multiplier}`,
-    '',
-    '; Breeding',
-    `BabyMatureSpeedMultiplier=${m.baby_mature_speed_multiplier}`,
-    `BabyFoodConsumptionMultiplier=${m.baby_food_consumption_multiplier}`,
-    `BabyCuddleLossMultiplier=${m.baby_cuddle_loss_multiplier}`,
-    `BabyCuddleIntervalMultiplier=${m.baby_cuddle_interval_multiplier}`,
-    `BabyCuddleGracePeriodMultiplier=${m.baby_cuddle_grace_period_multiplier}`,
-    `BabyImprintStatScaleMultiplier=${m.baby_imprint_stat_scale_multiplier}`,
-    `EggHatchSpeedMultiplier=${m.egg_hatch_speed_multiplier}`,
-    `MatingIntervalMultiplier=${m.mating_interval_multiplier}`,
-    `LayEggIntervalMultiplier=${m.lay_egg_interval_multiplier}`,
-    `PoopsIntervalMultiplier=${m.poops_interval_multiplier}`,
-    '',
-    '; Crafting',
-    `CraftingSpeedMultiplier=${m.crafting_speed_multiplier}`,
-    `CraftingSkillBonusMultiplier=${m.crafting_skill_bonus_multiplier}`,
-    '',
-    '; World / Environment',
-    `DayCycleSpeedScale=${w.day_cycle_speed_scale}`,
-    `DayTimeSpeedScale=${w.day_time_speed_scale}`,
-    `NightTimeSpeedScale=${w.night_time_speed_scale}`,
-    `GlobalSpoilingTimeMultiplier=${w.global_spoiling_time_multiplier}`,
-    `GlobalItemDecompositionTimeMultiplier=${w.global_item_decomposition_time_multiplier}`,
-    `GlobalCorpseDecompositionTimeMultiplier=${w.global_corpse_decomposition_time_multiplier}`,
-    `ResourceNoReplenishRadiusPlayers=${w.resource_no_replenish_radius_players}`,
-    `ResourceNoReplenishRadiusStructures=${w.resource_no_replenish_radius_structures}`,
-    `ResourceRespawnPeriodMultiplier=${w.resource_respawn_period_multiplier}`,
-    `CropGrowthSpeedMultiplier=${w.crop_growth_speed_multiplier}`,
-    `CropDecaySpeedMultiplier=${w.crop_decay_speed_multiplier}`,
-    `FuelConsumptionIntervalMultiplier=${w.fuel_consumption_interval_multiplier}`,
-    '',
-    '; Gameplay',
-    `KickIdlePlayersPeriod=${g.kick_idle_players_period}`,
-    '',
-    '[SessionSettings]',
-    `SessionName=${id.server_message_of_the_day}`,
-    '',
-    '[/Script/Engine.GameSession]',
-    `MaxPlayers=${g.max_players}`,
-  ].join('\n')
-}
-
-// ── Game.ini generator ──────────────────────────────────────────────────────
-function generateGameIni(c: ServerConfig): string {
-  const g = c.gameplay
-  const id = c.identification
-  const w = c.world
-  const bool = (v: boolean) => (v ? 'True' : 'False')
-
-  return [
-    '[/Script/ShooterGame.ShooterGameMode]',
-    `SessionName=${id.session_name}`,
-    `MOTD=${id.server_message_of_the_day}`,
-    '',
-    '; ─── Difficulty ────────────────────────────────────────',
-    `DifficultyOffset=${g.difficulty_offset}`,
-    `OverrideOfficialDifficulty=${g.override_official_difficulty}`,
-    `DinoCountMultiplier=${g.dino_count_multiplier}`,
-    '',
-    '; ─── Player behaviour ──────────────────────────────────',
-    `bServerPVE=${bool(g.server_pve)}`,
-    `bServerHardcore=${bool(g.server_hardcore)}`,
-    `bAllowThirdPersonPlayer=${bool(g.allow_third_person_player)}`,
-    `bAllowSpeedLeveling=${bool(g.allow_speed_leveling)}`,
-    `bAllowFlyerSpeedLeveling=${bool(g.allow_flyer_speed_leveling)}`,
-    `bAllowUnlimitedRespecs=${bool(g.allow_unlimited_respecs)}`,
-    `bShowFloatingDamageText=${bool(g.show_floating_damage_text)}`,
-    `bAllowHitMarkers=${bool(g.allow_hit_markers)}`,
-    `bServerCrosshair=${bool(g.server_crosshair)}`,
-    `bForceNoHud=${bool(g.force_no_hud)}`,
-    `bProximityChat=${bool(g.proximity_chat)}`,
-    `bGlobalVoiceChat=${bool(g.global_voice_chat)}`,
-    `bAdminLogging=${bool(g.admin_logging)}`,
-    `bAlwaysNotifyPlayerLeft=${bool(g.always_notify_player_left)}`,
-    `bDontAlwaysNotifyPlayerJoined=${bool(g.dont_always_notify_player_joined)}`,
-    '',
-    '; ─── PvP ───────────────────────────────────────────────',
-    `bEnablePVPGamma=${bool(g.enable_pvp_gamma_bypass)}`,
-    `bDisablePvEGamma=${bool(g.disable_pvp_gamma)}`,
-    `bAllowCryopodNerf=${bool(g.allow_cryopod_nerf_removal)}`,
-    '',
-    '; ─── World ─────────────────────────────────────────────',
-    `ForceResetWildDinos=${bool(w.force_reset_wild_dinos)}`,
-    `OverallDamageMultiplier=${w.overall_damage_multiplier}`,
-    '',
-    '; ─── Mods ──────────────────────────────────────────────',
-    `ActiveMods=${c.mods.active_mods.join(',')}`,
-  ].join('\n')
-}
-
-// ── config.toml generator ───────────────────────────────────────────────────
-function generateToml(c: ServerConfig): string {
-  const m = c.multipliers
-  const w = c.world
-  const g = c.gameplay
-  const net = c.network
-  const id = c.identification
-
-  return [
-    '[identification]',
-    `session_name = "${id.session_name}"`,
-    `admin_password = "${id.admin_password}"`,
-    `server_password = "${id.server_password}"`,
-    `server_message_of_the_day = "${id.server_message_of_the_day}"`,
-    '',
-    '[network]',
-    `port = ${net.port}`,
-    `query_port = ${net.query_port}`,
-    `rcon_port = ${net.rcon_port}`,
-    `server_platform = "${net.server_platform}"`,
-    '',
-    '[gameplay]',
-    `server_pve = ${g.server_pve}`,
-    `server_hardcore = ${g.server_hardcore}`,
-    `max_players = ${g.max_players}`,
-    `difficulty_offset = ${g.difficulty_offset}`,
-    `override_official_difficulty = ${g.override_official_difficulty}`,
-    `dino_count_multiplier = ${g.dino_count_multiplier}`,
-    `allow_third_person_player = ${g.allow_third_person_player}`,
-    `allow_speed_leveling = ${g.allow_speed_leveling}`,
-    `allow_flyer_speed_leveling = ${g.allow_flyer_speed_leveling}`,
-    `allow_unlimited_respecs = ${g.allow_unlimited_respecs}`,
-    `show_floating_damage_text = ${g.show_floating_damage_text}`,
-    `allow_hit_markers = ${g.allow_hit_markers}`,
-    `server_crosshair = ${g.server_crosshair}`,
-    `force_no_hud = ${g.force_no_hud}`,
-    `proximity_chat = ${g.proximity_chat}`,
-    `global_voice_chat = ${g.global_voice_chat}`,
-    `admin_logging = ${g.admin_logging}`,
-    `kick_idle_players_period = ${g.kick_idle_players_period}`,
-    '',
-    '[multipliers]',
-    `xp_multiplier = ${m.xp_multiplier}`,
-    `taming_speed_multiplier = ${m.taming_speed_multiplier}`,
-    `harvest_amount_multiplier = ${m.harvest_amount_multiplier}`,
-    `harvest_health_multiplier = ${m.harvest_health_multiplier}`,
-    `player_damage_multiplier = ${m.player_damage_multiplier}`,
-    `player_resistance_multiplier = ${m.player_resistance_multiplier}`,
-    `player_character_water_drain_multiplier = ${m.player_character_water_drain_multiplier}`,
-    `player_character_food_drain_multiplier = ${m.player_character_food_drain_multiplier}`,
-    `player_character_stamina_drain_multiplier = ${m.player_character_stamina_drain_multiplier}`,
-    `player_character_health_recovery_multiplier = ${m.player_character_health_recovery_multiplier}`,
-    `dino_damage_multiplier = ${m.dino_damage_multiplier}`,
-    `dino_resistance_multiplier = ${m.dino_resistance_multiplier}`,
-    `dino_character_health_multiplier = ${m.dino_character_health_multiplier}`,
-    `dino_character_food_drain_multiplier = ${m.dino_character_food_drain_multiplier}`,
-    `dino_character_stamina_drain_multiplier = ${m.dino_character_stamina_drain_multiplier}`,
-    `structure_damage_multiplier = ${m.structure_damage_multiplier}`,
-    `structure_resistance_multiplier = ${m.structure_resistance_multiplier}`,
-    `baby_mature_speed_multiplier = ${m.baby_mature_speed_multiplier}`,
-    `baby_food_consumption_multiplier = ${m.baby_food_consumption_multiplier}`,
-    `baby_cuddle_loss_multiplier = ${m.baby_cuddle_loss_multiplier}`,
-    `baby_cuddle_interval_multiplier = ${m.baby_cuddle_interval_multiplier}`,
-    `baby_cuddle_grace_period_multiplier = ${m.baby_cuddle_grace_period_multiplier}`,
-    `baby_imprint_stat_scale_multiplier = ${m.baby_imprint_stat_scale_multiplier}`,
-    `egg_hatch_speed_multiplier = ${m.egg_hatch_speed_multiplier}`,
-    `mating_interval_multiplier = ${m.mating_interval_multiplier}`,
-    `lay_egg_interval_multiplier = ${m.lay_egg_interval_multiplier}`,
-    `poops_interval_multiplier = ${m.poops_interval_multiplier}`,
-    `crafting_speed_multiplier = ${m.crafting_speed_multiplier}`,
-    `crafting_skill_bonus_multiplier = ${m.crafting_skill_bonus_multiplier}`,
-    '',
-    '[world]',
-    `day_cycle_speed_scale = ${w.day_cycle_speed_scale}`,
-    `day_time_speed_scale = ${w.day_time_speed_scale}`,
-    `night_time_speed_scale = ${w.night_time_speed_scale}`,
-    `global_spoiling_time_multiplier = ${w.global_spoiling_time_multiplier}`,
-    `global_item_decomposition_time_multiplier = ${w.global_item_decomposition_time_multiplier}`,
-    `global_corpse_decomposition_time_multiplier = ${w.global_corpse_decomposition_time_multiplier}`,
-    `resource_no_replenish_radius_players = ${w.resource_no_replenish_radius_players}`,
-    `resource_no_replenish_radius_structures = ${w.resource_no_replenish_radius_structures}`,
-    `resource_respawn_period_multiplier = ${w.resource_respawn_period_multiplier}`,
-    `crop_growth_speed_multiplier = ${w.crop_growth_speed_multiplier}`,
-    `crop_decay_speed_multiplier = ${w.crop_decay_speed_multiplier}`,
-    `fuel_consumption_interval_multiplier = ${w.fuel_consumption_interval_multiplier}`,
-    `force_reset_wild_dinos = ${w.force_reset_wild_dinos}`,
-    `overall_damage_multiplier = ${w.overall_damage_multiplier}`,
-    '',
-    '[mods]',
-    `active_mods = [${c.mods.active_mods.map((m) => `"${m}"`).join(', ')}]`,
-  ].join('\n')
-}
-
-// ── Component ───────────────────────────────────────────────────────────────
-
 type BuiltinTab = 'gameusersettings' | 'game' | 'toml'
 type EditMode = 'idle' | 'form' | 'raw'
-
-interface RawConfigViewerProps {
-  config: ServerConfig
-  onConfigSaved?: (config: ServerConfig) => void
-}
 
 const BUILTIN_TABS: { id: BuiltinTab; label: string }[] = [
   { id: 'gameusersettings', label: 'GameUserSettings.ini' },
@@ -262,6 +32,16 @@ function generatedForTab(tab: BuiltinTab, config: ServerConfig): string {
   if (tab === 'gameusersettings') return generateGameUserSettings(config)
   if (tab === 'game') return generateGameIni(config)
   return generateToml(config)
+}
+
+function getSaveStrategy(tab: BuiltinTab | undefined, customPath: string | null, config: ServerConfig): ConfigSaveStrategy | null {
+  if (tab === 'toml') return new TomlSaveStrategy()
+  if (tab === 'game' || tab === 'gameusersettings') {
+    const path = pathForBuiltinTab(tab, config)
+    return path ? new IniSaveStrategy(path) : null
+  }
+  if (customPath) return new CustomFileSaveStrategy(customPath)
+  return null
 }
 
 export default function RawConfigViewer({ config, onConfigSaved }: RawConfigViewerProps) {
@@ -341,26 +121,16 @@ export default function RawConfigViewer({ config, onConfigSaved }: RawConfigView
   }
 
   const saveContent = async (content: string) => {
+    const strategy = getSaveStrategy(activeBuiltin, activeCustom?.path ?? null, config)
+    if (!strategy) return
+
     setIsSaving(true)
     setSaveStatus(null)
     setSaveError(null)
     try {
-      if (activeBuiltin === 'toml') {
-        const parsed = await invoke<ServerConfig>('parse_config_from_toml', { tomlStr: content })
-        await invoke('save_config', { config: parsed })
-        onConfigSaved?.(parsed)
-        setSaveStatus(tk('config_saved', 'Configuration saved'))
-      } else if (activeBuiltin === 'game' || activeBuiltin === 'gameusersettings') {
-        const path = pathForBuiltinTab(activeBuiltin, config)!
-        await invoke('write_text_file', { path, content })
-        const merged = await invoke<ServerConfig>('merge_config_from_ini', { config, iniContent: content })
-        await invoke('save_config', { config: merged })
-        onConfigSaved?.(merged)
-        setSaveStatus(tk('config_saved', 'Configuration saved'))
-      } else if (activeCustom) {
-        await invoke('write_text_file', { path: activeCustom.path, content })
-        setSaveStatus(tk('file_saved', 'File saved'))
-      }
+      const result = await strategy.save(content, config)
+      if (result.updatedConfig) onConfigSaved?.(result.updatedConfig)
+      setSaveStatus(result.message ?? tk('config_saved', 'Configuration saved'))
       setEditMode('idle')
     } catch (e) {
       setSaveError(String(e))

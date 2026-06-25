@@ -1,18 +1,17 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 interface TooltipProps {
   content: string
-  children: React.ReactElement
-  delay?: number    // ms before tooltip appears
-  maxWidth?: number // px
+  children: ReactNode
+  delay?: number
+  maxWidth?: number
 }
 
 interface Pos { top: number; left: number }
 
 function calcPos(trigger: DOMRect, tipW: number, tipH: number): Pos {
   const above = trigger.top
-  const below = window.innerHeight - trigger.bottom
   const top = above >= tipH + 10 ? trigger.top - tipH - 8 : trigger.bottom + 8
   let left = trigger.left + trigger.width / 2 - tipW / 2
   left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8))
@@ -22,9 +21,9 @@ function calcPos(trigger: DOMRect, tipW: number, tipH: number): Pos {
 export default function Tooltip({ content, children, delay = 400, maxWidth = 280 }: TooltipProps) {
   const [visible, setVisible] = useState(false)
   const [pos, setPos] = useState<Pos | null>(null)
-  const triggerRef = useRef<HTMLElement>(null)
+  const triggerRef = useRef<HTMLDivElement>(null)
   const tipRef = useRef<HTMLDivElement>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>>()
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const show = useCallback(() => {
     clearTimeout(timer.current)
@@ -46,17 +45,18 @@ export default function Tooltip({ content, children, delay = 400, maxWidth = 280
 
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  const child = React.cloneElement(children, {
-    ref: triggerRef,
-    onMouseEnter: (e: React.MouseEvent) => { show(); children.props.onMouseEnter?.(e) },
-    onMouseLeave: (e: React.MouseEvent) => { hide(); children.props.onMouseLeave?.(e) },
-    onFocus:      (e: React.FocusEvent) => { show(); children.props.onFocus?.(e) },
-    onBlur:       (e: React.FocusEvent) => { hide(); children.props.onBlur?.(e) },
-  })
-
   return (
     <>
-      {child}
+      <div
+        ref={triggerRef}
+        style={{ display: 'inline-block' }}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+      >
+        {children}
+      </div>
       {visible && createPortal(
         <div
           ref={tipRef}

@@ -56,7 +56,7 @@ export function useTauriEvents({ config, minimizeToTray, onDemandWaking, onDeman
         .then((fn) => { unlisten = fn })
     }).catch(() => { /* not in Tauri */ })
     return () => unlisten?.()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])  
 
   // Save config when "Salir" is chosen from the tray menu
   useEffect(() => {
@@ -71,7 +71,7 @@ export function useTauriEvents({ config, minimizeToTray, onDemandWaking, onDeman
       }).then((fn) => { unlisten = fn })
     }).catch(() => {})
     return () => unlisten?.()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])  
 
   // On-demand stub events: notify the frontend when a sleeping map is waking or ready.
   const wakingRef = useRef(onDemandWaking)
@@ -91,5 +91,5 @@ export function useTauriEvents({ config, minimizeToTray, onDemandWaking, onDeman
       }).then((fn) => unlistens.push(fn))
     }).catch(() => {})
     return () => unlistens.forEach((fn) => fn())
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])  
 }

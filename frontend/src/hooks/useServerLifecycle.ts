@@ -32,8 +32,8 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
   const [stubsRunning,     setStubsRunning]     = useState(false)
   const [isServerStarting, setIsServerStarting] = useState(false)
   const [isServerStopping, setIsServerStopping] = useState(false)
-  const [startingMaps,     setStartingMaps]     = useState<Set<number>>(new Set())
-  const [stoppingMaps,     setStoppingMaps]     = useState<Set<number>>(new Set())
+  const [_startingMaps,    setStartingMaps]     = useState<Set<number>>(new Set())
+  const [_stoppingMaps,    setStoppingMaps]     = useState<Set<number>>(new Set())
 
   const { onDemandEnabled, onDemandMaps, autoShutdownMin, clusterStartDelaySec, recordModsActive } = useBackupStore()
 

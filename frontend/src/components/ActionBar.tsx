@@ -1,5 +1,6 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import Tooltip from './Tooltip'
+import DropdownPortal from './DropdownPortal'
 import { useI18n } from '../i18n/useI18n'
 import { invoke } from '../services/tauri'
 import type { ServerConfig } from '../types'
@@ -43,7 +44,6 @@ export default function ActionBar({
   onImportError,
   isSaving = false,
   autoSave = true,
-  isServerRunning = false,
   isServerStarting = false,
   isServerStopping = false,
   showLogsButton = false,
@@ -59,7 +59,16 @@ export default function ActionBar({
   const [startMenuOpen, setStartMenuOpen] = useState(false)
   const [stopMenuOpen, setStopMenuOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const startBtnRef = useRef<HTMLDivElement>(null)
+  const stopBtnRef = useRef<HTMLDivElement>(null)
   const { tk, tip } = useI18n()
+
+  useEffect(() => {
+    if (!startMenuOpen && !stopMenuOpen) return
+    const close = () => { setStartMenuOpen(false); setStopMenuOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [startMenuOpen, stopMenuOpen])
 
   const handleSave = async () => {
     if (!onSave) return
@@ -112,7 +121,7 @@ export default function ActionBar({
   const anyStopped = stoppedMaps.length > 0
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 ark-panel border-t border-ark-cyan/40 px-6 py-3 flex items-center justify-between">
+    <div className="fixed bottom-0 left-0 right-0 z-40 ark-panel border-t border-ark-cyan/40 px-6 py-3 flex items-center justify-between">
 
       {/* ── Left: action buttons ──────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
@@ -254,7 +263,7 @@ export default function ActionBar({
 
         {/* Start — show when stopped instances exist */}
         {anyStopped && (
-          <div className="relative flex">
+          <div ref={startBtnRef} className="relative flex">
             <Tooltip content={tip('start_server') ?? ''}>
               <button
                 onClick={() => onStartServer?.()}
@@ -271,7 +280,7 @@ export default function ActionBar({
             </Tooltip>
             {isCluster && (
               <button
-                onClick={() => setStartMenuOpen((o) => !o)}
+                onClick={(e) => { e.stopPropagation(); setStartMenuOpen((o) => !o); setStopMenuOpen(false) }}
                 disabled={startDisabled}
                 className="ark-action-btn ark-action-btn-amber-active px-2 py-2 disabled:opacity-50"
                 style={{ borderLeft: '1px solid rgba(251,191,36,0.25)', borderRadius: '0 4px 4px 0' }}
@@ -280,11 +289,8 @@ export default function ActionBar({
                 ▼
               </button>
             )}
-            {startMenuOpen && (
-              <div
-                className="absolute bottom-full right-0 mb-1 min-w-[200px] rounded-md py-1 z-30 ark-panel"
-                style={{ border: '1px solid rgba(0,200,255,0.25)' }}
-              >
+            <DropdownPortal anchorRef={startBtnRef} open={startMenuOpen}>
+              <div style={{ border: '1px solid rgba(0,200,255,0.25)' }}>
                 {stoppedMaps.map((m) => (
                   <button
                     key={m.map_index}
@@ -298,13 +304,13 @@ export default function ActionBar({
                   </button>
                 ))}
               </div>
-            )}
+            </DropdownPortal>
           </div>
         )}
 
         {/* Stop — show when any instance is running */}
         {anyRunning && (
-          <div className="relative flex">
+          <div ref={stopBtnRef} className="relative flex">
             <Tooltip content={tip('stop_server') ?? ''}>
               <button
                 onClick={() => onStopServer?.()}
@@ -326,7 +332,7 @@ export default function ActionBar({
             </Tooltip>
             {isCluster && (
               <button
-                onClick={() => setStopMenuOpen((o) => !o)}
+                onClick={(e) => { e.stopPropagation(); setStopMenuOpen((o) => !o); setStartMenuOpen(false) }}
                 disabled={stopDisabled}
                 className="ark-action-btn px-2 py-2 disabled:opacity-50"
                 style={{
@@ -341,11 +347,8 @@ export default function ActionBar({
                 ▼
               </button>
             )}
-            {stopMenuOpen && (
-              <div
-                className="absolute bottom-full right-0 mb-1 min-w-[200px] rounded-md py-1 z-30 ark-panel"
-                style={{ border: '1px solid rgba(239,68,68,0.25)' }}
-              >
+            <DropdownPortal anchorRef={stopBtnRef} open={stopMenuOpen}>
+              <div style={{ border: '1px solid rgba(239,68,68,0.25)' }}>
                 {runningMaps.map((m) => (
                   <button
                     key={m.map_index}
@@ -359,7 +362,7 @@ export default function ActionBar({
                   </button>
                 ))}
               </div>
-            )}
+            </DropdownPortal>
           </div>
         )}
       </div>

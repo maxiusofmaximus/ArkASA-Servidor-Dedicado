@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 
 interface LogEntry {
   timestamp: string
@@ -7,7 +7,7 @@ interface LogEntry {
 }
 
 export default function ServerLogs() {
-  const [logs, setLogs] = useState<LogEntry[]>([
+  const [logs] = useState<LogEntry[]>([
     {
       timestamp: '2026-06-11 10:45:23',
       level: 'INFO',

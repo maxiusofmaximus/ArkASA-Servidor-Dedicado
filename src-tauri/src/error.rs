@@ -35,9 +35,6 @@ pub enum Error {
     #[error("Process error: {0}")]
     ProcessError(String),
 
-    #[error("Database error: {0}")]
-    DatabaseError(#[from] sqlx::Error),
-
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 

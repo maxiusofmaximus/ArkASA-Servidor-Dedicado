@@ -29,7 +29,7 @@ const snapshot = (s: UiStore): NavSnapshot => ({
   modSettingsSubTab: s.modSettingsSubTab,
 })
 
-export const useUiStore = create<UiStore>((set, get) => ({
+export const useUiStore = create<UiStore>((set, _get) => ({
   primaryTab: 'arks',
   gameRulesSubTab: 'player',
   advancedSubTab: 'pve',
