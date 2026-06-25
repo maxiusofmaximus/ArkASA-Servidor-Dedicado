@@ -62,11 +62,17 @@ pub async fn backup_saves(
         ));
     }
 
-    // 2. Create zip in temp directory
+    // 2. Create zip in temp directory (spawn_blocking to not block tokio runtime)
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let filename = format!("ark_backup_{}_{}.zip", map, timestamp);
     let zip_path = std::env::temp_dir().join(&filename);
-    create_zip(&files, &zip_path, metadata_json.as_deref(), config_toml.as_deref())?;
+    let zip_path_clone = zip_path.clone();
+    let files_clone = files.clone();
+    let meta = metadata_json.clone();
+    let cfg = config_toml.clone();
+    tokio::task::spawn_blocking(move || {
+        create_zip(&files_clone, &zip_path_clone, meta.as_deref(), cfg.as_deref())
+    }).await.map_err(|e| format!("zip task panicked: {e}"))??;
 
     // 3. Upload
     match provider.as_str() {
@@ -135,7 +141,7 @@ pub fn read_backup_metadata(zip_path: String) -> Result<Option<String>, String> 
 /// If `map` is provided, tries `{server_dir}/{map}/ShooterGame/Saved/Logs/ShooterGame.log` first
 /// (for per-map server dirs in cluster setups), then falls back to the shared log.
 #[tauri::command]
-pub fn read_server_log(server_dir: String, map: Option<String>, lines: usize) -> Result<Vec<String>, String> {
+pub async fn read_server_log(server_dir: String, map: Option<String>, lines: usize) -> Result<Vec<String>, String> {
     let base = PathBuf::from(&server_dir);
     let shared_log = base.join("ShooterGame").join("Saved").join("Logs").join("ShooterGame.log");
 
@@ -150,12 +156,53 @@ pub fn read_server_log(server_dir: String, map: Option<String>, lines: usize) ->
         return Err(format!("Log no encontrado: {}", log_path.display()));
     }
 
-    let content = std::fs::read_to_string(&log_path)
-        .map_err(|e| format!("Error leyendo log: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        tail_file_lines(&log_path, lines)
+    }).await.map_err(|e| format!("log read task panicked: {e}"))?
+}
 
-    let all_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-    let start = if all_lines.len() > lines { all_lines.len() - lines } else { 0 };
-    Ok(all_lines[start..].to_vec())
+fn tail_file_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String> {
+    use std::io::{BufRead, Seek, SeekFrom};
+    let file = std::fs::File::open(path).map_err(|e| format!("Error leyendo log: {}", e))?;
+    let file_len = file.metadata().map_err(|e| format!("Error leyendo log: {}", e))?.len();
+
+    if file_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut reader = std::io::BufReader::new(file);
+
+    let chunk_size: u64 = 8192;
+    let mut pos = file_len;
+    let mut newline_count = 0u64;
+    let mut read_from = file_len;
+
+    while pos > 0 && newline_count < (max_lines as u64 + 1) {
+        let seek_back = chunk_size.min(pos);
+        pos -= seek_back;
+        reader.get_mut().seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; seek_back as usize];
+        reader.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        for b in buf.iter().rev() {
+            if *b == b'\n' {
+                newline_count += 1;
+                if newline_count > max_lines as u64 {
+                    break;
+                }
+            }
+        }
+        read_from = pos;
+    }
+
+    reader.get_mut().seek(SeekFrom::Start(read_from)).map_err(|e| e.to_string())?;
+    let mut result = Vec::new();
+    for line in reader.lines() {
+        if let Ok(l) = line {
+            if result.len() >= max_lines { break; }
+            result.push(l);
+        }
+    }
+    Ok(result)
 }
 
 /// Start Google Drive OAuth PKCE flow. Opens browser, waits for callback.
@@ -188,7 +235,7 @@ pub async fn start_gdrive_oauth(
     let code = wait_for_oauth_callback(port).await?;
 
     // Exchange code for tokens
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .post("https://oauth2.googleapis.com/token")
         .form(&[
@@ -244,7 +291,7 @@ pub async fn start_onedrive_oauth(
 
     let code = wait_for_oauth_callback(port).await?;
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
         .form(&[
@@ -280,7 +327,7 @@ pub async fn refresh_gdrive_token(
     client_secret: String,
     refresh_token: String,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .post("https://oauth2.googleapis.com/token")
         .form(&[
@@ -306,7 +353,7 @@ pub async fn refresh_onedrive_token(
     client_id: String,
     refresh_token: String,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
         .form(&[
@@ -341,7 +388,7 @@ pub async fn test_s3_connection(
     let payload_hash = sha256_hex(b"");
     let headers = sign_s3_request("GET", &url, &payload_hash, &access_key, &secret_key, &region, &now)?;
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let mut req = client.get(&format!("{}?max-keys=1", url));
     for (k, v) in &headers {
         req = req.header(k.as_str(), v.as_str());
@@ -483,7 +530,7 @@ async fn upload_to_s3(
     headers.insert("content-type".to_string(), "application/zip".to_string());
     headers.insert("content-length".to_string(), body.len().to_string());
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let mut req = client.put(&url).body(body);
     for (k, v) in &headers {
         req = req.header(k.as_str(), v.as_str());
@@ -602,7 +649,7 @@ async fn upload_to_gdrive(zip_path: &Path, access_token: &str, filename: &str) -
         "parents": [folder_id],
     });
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let init_resp = client
         .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable")
         .bearer_auth(access_token)
@@ -646,7 +693,7 @@ async fn upload_to_gdrive(zip_path: &Path, access_token: &str, filename: &str) -
 }
 
 async fn gdrive_get_or_create_folder(token: &str, name: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let q = format!("name='{}' and mimeType='application/vnd.google-apps.folder' and trashed=false", name);
     let resp = client
         .get("https://www.googleapis.com/drive/v3/files")
@@ -687,7 +734,7 @@ async fn upload_to_onedrive(zip_path: &Path, access_token: &str, filename: &str)
         .await
         .map_err(|e| format!("Cannot read zip: {}", e))?;
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
 
     // Create upload session
     let session_url = format!(
@@ -989,7 +1036,12 @@ pub async fn restore_backup_from_cloud(
     }
 
     // 4. Extract zip relative to server_dir
-    let extracted = extract_zip(&zip_path, &PathBuf::from(&server_dir))?;
+    let extracted = {
+        let zp = zip_path.clone();
+        let sd = PathBuf::from(&server_dir);
+        tokio::task::spawn_blocking(move || extract_zip(&zp, &sd))
+            .await.map_err(|e| format!("extract task panicked: {e}"))??
+    };
 
     // 5. Cleanup
     let _ = std::fs::remove_file(&zip_path);
@@ -1014,7 +1066,7 @@ async fn list_s3_backups(
     let payload_hash = sha256_hex(b"");
     let headers = sign_s3_request("GET", &url, &payload_hash, access_key, secret_key, region, &now)?;
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let mut req = client.get(&url);
     for (k, v) in &headers {
         req = req.header(k.as_str(), v.as_str());
@@ -1029,7 +1081,7 @@ async fn list_s3_backups(
 
 async fn list_gdrive_backups(token: &str) -> Result<Vec<BackupListEntry>, String> {
     let folder_id = gdrive_get_or_create_folder(token, "ArkASA Backups").await?;
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let q = format!("'{}' in parents and name contains 'ark_backup' and trashed=false", folder_id);
     let resp = client
         .get("https://www.googleapis.com/drive/v3/files")
@@ -1054,7 +1106,7 @@ async fn list_gdrive_backups(token: &str) -> Result<Vec<BackupListEntry>, String
 }
 
 async fn list_onedrive_backups(token: &str) -> Result<Vec<BackupListEntry>, String> {
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .get("https://graph.microsoft.com/v1.0/me/drive/root:/ArkASA Backups:/children")
         .bearer_auth(token)
@@ -1149,7 +1201,7 @@ async fn download_from_s3(
     // For GET, we don't need content-type in signed headers — use UNSIGNED or empty
     headers.insert("content-type".to_string(), "application/zip".to_string());
 
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let mut req = client.get(&url);
     for (k, v) in &headers {
         req = req.header(k.as_str(), v.as_str());
@@ -1164,7 +1216,7 @@ async fn download_from_s3(
 }
 
 async fn download_from_gdrive(file_id: &str, token: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .get(format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id))
         .bearer_auth(token)
@@ -1181,7 +1233,7 @@ async fn download_from_gdrive(file_id: &str, token: &str) -> Result<Vec<u8>, Str
 }
 
 async fn download_from_onedrive(item_id: &str, token: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::new();
+    let client = crate::HTTP_CLIENT.clone();
     let resp = client
         .get(format!("https://graph.microsoft.com/v1.0/me/drive/items/{}/content", item_id))
         .bearer_auth(token)

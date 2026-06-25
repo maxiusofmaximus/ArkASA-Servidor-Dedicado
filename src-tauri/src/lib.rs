@@ -11,11 +11,10 @@ use config::{ConfigLoader, ConfigPersister, ServerConfig, CompositeValidator};
 use ark::{build_launch_args, RconClient};
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, LazyLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Command;
 use tauri::{Manager, Emitter};
-use once_cell::sync::Lazy;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Local mods DB — parsed once at startup, not on every search/lookup.
@@ -23,7 +22,7 @@ use once_cell::sync::Lazy;
 
 const LOCAL_MODS_JSON: &str = include_str!("mods_db.json");
 
-static LOCAL_MODS_DB: Lazy<Vec<CurseForgeMod>> = Lazy::new(|| {
+static LOCAL_MODS_DB: LazyLock<Vec<CurseForgeMod>> = LazyLock::new(|| {
     serde_json::from_str(LOCAL_MODS_JSON).unwrap_or_default()
 });
 
@@ -76,7 +75,7 @@ async fn read_api_key(config_dir: &PathBuf) -> String {
 // Shared reqwest client — reuse across all CurseForge calls.
 // ─────────────────────────────────────────────────────────────────────────────
 
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+pub(crate) static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -311,7 +310,7 @@ async fn load_config(config_path: String) -> std::result::Result<ServerConfig, S
 #[tauri::command]
 async fn load_config_or_default(app: tauri::AppHandle) -> std::result::Result<ServerConfig, String> {
     let config_dir = get_config_dir(&app)?;
-    std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&config_dir).await.map_err(|e| e.to_string())?;
     let toml_path = config_dir.join("server-config.toml");
     log::info!("Loading config from {:?}", toml_path);
     ConfigLoader::load_or_default(&toml_path).await.map_err(|e| e.to_string())
@@ -331,7 +330,7 @@ async fn save_config(app: tauri::AppHandle, config: ServerConfig) -> std::result
     use tokio::fs;
 
     let config_dir = get_config_dir(&app)?;
-    std::fs::create_dir_all(&config_dir)
+    fs::create_dir_all(&config_dir).await
         .map_err(|e| format!("Failed to create config dir: {}", e))?;
 
     let toml_path = config_dir.join("server-config.toml");
@@ -391,7 +390,7 @@ async fn get_curseforge_api_key(app: tauri::AppHandle) -> std::result::Result<St
 #[tauri::command]
 async fn set_curseforge_api_key(app: tauri::AppHandle, api_key: String) -> std::result::Result<(), String> {
     let config_dir = get_config_dir(&app)?;
-    std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&config_dir).await.map_err(|e| e.to_string())?;
     tokio::fs::write(config_dir.join("curseforge_api_key.txt"), api_key.trim())
         .await
         .map_err(|e| e.to_string())
@@ -439,21 +438,23 @@ async fn check_mods_available(
     let api_key = read_api_key(&get_config_dir(&app)?).await;
     if api_key.is_empty() { return Ok(vec![]); }
 
-    let mut unavailable = vec![];
-    for mod_id in &mod_ids {
+    let checks: Vec<_> = mod_ids.iter().map(|mod_id| {
         let url = format!("https://api.curseforge.com/v1/mods/{}", mod_id.trim());
-        if let Ok(resp) = HTTP_CLIENT
-            .get(&url)
-            .header("x-api-key", &api_key)
-            .header("Accept", "application/json")
-            .send()
-            .await
-        {
-            if resp.status().as_u16() == 404 {
-                unavailable.push(mod_id.clone());
-            }
+        let key = api_key.clone();
+        let id = mod_id.clone();
+        async move {
+            let resp = HTTP_CLIENT
+                .get(&url)
+                .header("x-api-key", &key)
+                .header("Accept", "application/json")
+                .send()
+                .await;
+            if let Ok(r) = resp {
+                if r.status().as_u16() == 404 { Some(id) } else { None }
+            } else { None }
         }
-    }
+    }).collect();
+    let unavailable: Vec<String> = futures::future::join_all(checks).await.into_iter().flatten().collect();
     Ok(unavailable)
 }
 
@@ -469,26 +470,29 @@ async fn check_client_only_mods(
     #[derive(serde::Deserialize)]
     struct SingleModResp { data: CfMod }
 
-    let mut client_only = vec![];
-    for mod_id in &mod_ids {
+    let checks: Vec<_> = mod_ids.iter().map(|mod_id| {
         let url = format!("https://api.curseforge.com/v1/mods/{}", mod_id.trim());
-        if let Ok(resp) = HTTP_CLIENT
-            .get(&url)
-            .header("x-api-key", &api_key)
-            .header("Accept", "application/json")
-            .send()
-            .await
-        {
-            if resp.status().is_success() {
-                if let Ok(body) = resp.json::<SingleModResp>().await {
-                    let cats = body.data.categories.unwrap_or_default();
-                    if detect_client_only(&cats) {
-                        client_only.push(mod_id.clone());
+        let key = api_key.clone();
+        let id = mod_id.clone();
+        async move {
+            let resp = HTTP_CLIENT
+                .get(&url)
+                .header("x-api-key", &key)
+                .header("Accept", "application/json")
+                .send()
+                .await;
+            if let Ok(r) = resp {
+                if r.status().is_success() {
+                    if let Ok(body) = r.json::<SingleModResp>().await {
+                        let cats = body.data.categories.unwrap_or_default();
+                        if detect_client_only(&cats) { return Some(id); }
                     }
                 }
             }
+            None
         }
-    }
+    }).collect();
+    let client_only: Vec<String> = futures::future::join_all(checks).await.into_iter().flatten().collect();
     Ok(client_only)
 }
 
@@ -610,7 +614,7 @@ fn server_status() -> std::result::Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> std::result::Result<String, String> {
+async fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> std::result::Result<String, String> {
     let maps       = config.effective_maps();
     let is_cluster = maps.len() > 1;
     let exe        = config.paths.ark_exe();
@@ -638,10 +642,9 @@ fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> std::re
             Err(e) => return Err(format!("Failed to start {}: {}. Exe: {}", map, e, exe)),
         }
 
-        // Stagger between cluster instances to avoid mod installation conflicts
         if is_cluster && i < maps.len() - 1 {
             let delay_ms = cluster_delay_sec.unwrap_or(60) * 1000;
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         }
     }
 
@@ -699,14 +702,19 @@ async fn stop_server(config: ServerConfig) -> std::result::Result<String, String
 }
 
 #[tauri::command]
-fn is_server_running() -> bool {
+async fn is_server_running() -> bool {
     #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    let mut cmd = Command::new("tasklist");
-    cmd.args(["/FI", "IMAGENAME eq ArkAscendedServer.exe", "/NH"]);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000);
-    matches!(cmd.output(), Ok(out) if String::from_utf8_lossy(&out.stdout).contains("ArkAscendedServer.exe"))
+    {
+        use tokio::process::Command;
+        let out = Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq ArkAscendedServer.exe", "/NH"])
+            .creation_flags(0x08000000)
+            .output()
+            .await;
+        matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).contains("ArkAscendedServer.exe"))
+    }
+    #[cfg(not(windows))]
+    { false }
 }
 
 // ── Per-instance cluster control ─────────────────────────────────────────────
@@ -760,20 +768,26 @@ fn kill_process_on_port(_port: u16) -> std::result::Result<(), String> {
 }
 
 #[tauri::command]
-fn get_cluster_instance_status(config: ServerConfig) -> std::result::Result<Vec<MapInstanceStatus>, String> {
+async fn get_cluster_instance_status(config: ServerConfig) -> std::result::Result<Vec<MapInstanceStatus>, String> {
     let maps = config.effective_maps();
-    let statuses = maps
+    let futures: Vec<_> = maps
         .iter()
         .enumerate()
         .map(|(i, map_id)| {
             let (_, _, rcon_port) = config.network.ports_for_index(i);
-            MapInstanceStatus {
+            let map_id_owned = map_id.clone();
+            let map_label = map_display_label(map_id);
+            tokio::task::spawn_blocking(move || MapInstanceStatus {
                 map_index: i,
-                map_id: map_id.clone(),
-                map_label: map_display_label(map_id),
+                map_id: map_id_owned,
+                map_label,
                 running: is_tcp_port_open(rcon_port),
-            }
+            })
         })
+        .collect();
+    let statuses = futures::future::join_all(futures).await
+        .into_iter()
+        .filter_map(|r| r.ok())
         .collect();
     Ok(statuses)
 }
@@ -854,8 +868,8 @@ async fn stop_server_instance(config: ServerConfig, map_index: usize) -> std::re
 // ── Raw config file I/O ─────────────────────────────────────────────────────
 
 #[tauri::command]
-fn read_text_file(path: String) -> std::result::Result<String, String> {
-    match std::fs::read_to_string(&path) {
+async fn read_text_file(path: String) -> std::result::Result<String, String> {
+    match tokio::fs::read_to_string(&path).await {
         Ok(content) => Ok(content),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(format!("Failed to read {}: {}", path, e)),
@@ -863,12 +877,12 @@ fn read_text_file(path: String) -> std::result::Result<String, String> {
 }
 
 #[tauri::command]
-fn write_text_file(path: String, content: String) -> std::result::Result<(), String> {
+async fn write_text_file(path: String, content: String) -> std::result::Result<(), String> {
     let p = PathBuf::from(&path);
     if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {}", e))?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| format!("Failed to create dir: {}", e))?;
     }
-    std::fs::write(&p, content).map_err(|e| format!("Failed to write {}: {}", path, e))?;
+    tokio::fs::write(&p, content).await.map_err(|e| format!("Failed to write {}: {}", path, e))?;
     Ok(())
 }
 
@@ -878,7 +892,7 @@ fn merge_config_from_ini(config: ServerConfig, ini_content: String) -> std::resu
 }
 
 #[tauri::command]
-fn restart_server(config: ServerConfig) -> std::result::Result<String, String> {
+async fn restart_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> std::result::Result<String, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -887,8 +901,8 @@ fn restart_server(config: ServerConfig) -> std::result::Result<String, String> {
             .creation_flags(0x08000000)
             .output();
     }
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    start_server(config, None)
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    start_server(config, cluster_delay_sec).await
 }
 
 #[tauri::command]
