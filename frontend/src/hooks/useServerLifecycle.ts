@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { invoke } from '../services/tauri'
 import { logger } from '../services/logger'
 import { useBackupStore } from '../stores/backupStore'
-import type { ServerConfig } from '../types'
+import type { ServerConfig, MapInstanceStatus } from '../types'
 
 interface Options {
   config:     ServerConfig | null
@@ -22,27 +22,83 @@ export interface ServerLifecycle {
   stubsRunning:     boolean
   isServerStarting: boolean
   isServerStopping: boolean
-  handleStartServer: () => Promise<void>
-  handleStopServer:  () => Promise<void>
+  mapStatuses:      MapInstanceStatus[]
+  handleStartServer: (mapIndex?: number) => Promise<void>
+  handleStopServer:  (mapIndex?: number) => Promise<void>
 }
 
 export function useServerLifecycle({ config, setSaving, setError }: Options): ServerLifecycle {
-  const [serverRunning,    setServerRunning]    = useState(false)
+  const [mapStatuses,      setMapStatuses]      = useState<MapInstanceStatus[]>([])
   const [stubsRunning,     setStubsRunning]     = useState(false)
   const [isServerStarting, setIsServerStarting] = useState(false)
   const [isServerStopping, setIsServerStopping] = useState(false)
+  const [startingMaps,     setStartingMaps]     = useState<Set<number>>(new Set())
+  const [stoppingMaps,     setStoppingMaps]     = useState<Set<number>>(new Set())
 
   const { onDemandEnabled, onDemandMaps, autoShutdownMin, clusterStartDelaySec, recordModsActive } = useBackupStore()
 
+  const maps = config?.cluster_maps?.length ? config.cluster_maps : ['TheIsland_WP']
+  const isCluster = maps.length > 1
+
+  // Placeholder statuses until first poll
+  useEffect(() => {
+    if (!config) return
+    setMapStatuses(
+      maps.map((map_id, i) => ({
+        map_index: i,
+        map_id,
+        map_label: map_id.trimEnd().replace(/_WP$/, '').replace(/_/g, ' '),
+        running: false,
+      }))
+    )
+  }, [config, maps])
+
+  const refreshStatuses = useCallback(async () => {
+    if (!config) return
+    try {
+      const statuses = await invoke<MapInstanceStatus[]>('get_cluster_instance_status', { config })
+      setMapStatuses(statuses)
+    } catch {
+      /* ignore transient poll errors */
+    }
+  }, [config])
+
+  const alwaysOnIndices = useCallback(() => {
+    if (!config) return []
+    return maps
+      .map((mapId, i) => ({ mapId, i }))
+      .filter(({ mapId }) => !onDemandEnabled || !onDemandMaps.includes(mapId))
+      .map(({ i }) => i)
+  }, [config, maps, onDemandEnabled, onDemandMaps])
+
+  const serverRunning = mapStatuses.some((s) => s.running)
+
+  // ── Poll instance status ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!config) return
+    refreshStatuses()
+    const interval = setInterval(refreshStatuses, 5_000)
+    return () => clearInterval(interval)
+  }, [config, refreshStatuses])
+
   // ── Start ────────────────────────────────────────────────────────────────────
-  const handleStartServer = useCallback(async () => {
-    if (!config || isServerStarting || serverRunning) return
+  const handleStartServer = useCallback(async (mapIndex?: number) => {
+    if (!config || isServerStarting) return
+
+    const targetIndices: number[] = mapIndex !== undefined
+      ? [mapIndex]
+      : alwaysOnIndices()
+
+    if (targetIndices.length === 0) return
+
+    // Block if all targets already running
+    const toStart = targetIndices.filter((i) => !mapStatuses.find((s) => s.map_index === i)?.running)
+    if (toStart.length === 0) return
 
     try {
       setIsServerStarting(true)
       setError(null)
 
-      // Validate active mods before launch (non-blocking warning)
       const activeMods = config.mods?.active_mods ?? []
       if (activeMods.length > 0) {
         try {
@@ -53,52 +109,52 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
             )
             if (!ok) return
           }
-        } catch { /* ignore validation errors — don't block launch */ }
+        } catch { /* ignore */ }
       }
 
-      // Auto-save so INI files are up to date before launch
       setSaving(true)
       await invoke('save_config', { config })
       setSaving(false)
 
-      const maps = config.cluster_maps?.length ? config.cluster_maps : ['TheIsland_WP']
+      // On-demand stubs for dormant maps (full start only)
+      if (mapIndex === undefined) {
+        const dormantIndices = maps
+          .map((mapId, i) => ({ mapId, i }))
+          .filter(({ mapId }) => onDemandEnabled && onDemandMaps.includes(mapId))
+          .map(({ i }) => i)
 
-      // Partition maps into always-on vs dormant stubs
-      const normalIndices:  number[] = []
-      const dormantIndices: number[] = []
-      maps.forEach((mapId, i) => {
-        if (onDemandEnabled && onDemandMaps.includes(mapId)) dormantIndices.push(i)
-        else normalIndices.push(i)
-      })
+        for (const idx of dormantIndices) {
+          try {
+            await invoke('enable_on_demand', { config, mapIndex: idx, autoShutdownMin })
+            logger.info(`On-demand stub started for map index ${idx}`)
+          } catch (err) {
+            logger.warn(`Failed to start stub for map index ${idx}`, err)
+          }
+        }
 
-      // Start on-demand stubs (just binds ports — very fast)
-      for (const idx of dormantIndices) {
-        try {
-          await invoke('enable_on_demand', { config, mapIndex: idx, autoShutdownMin })
-          logger.info(`On-demand stub started for map index ${idx}`)
-        } catch (err) {
-          logger.warn(`Failed to start stub for map index ${idx}`, err)
+        if (dormantIndices.length > 0 && toStart.length === 0) {
+          setStubsRunning(true)
         }
       }
 
-      // Launch always-on maps
-      if (normalIndices.length > 0) {
+      setStartingMaps(new Set(toStart))
+
+      if (mapIndex !== undefined || !isCluster) {
+        for (const idx of toStart) {
+          const msg = await invoke<string>('start_server_instance', { config, mapIndex: idx })
+          logger.info('Instance start', msg)
+        }
+      } else {
         const normalConfig: ServerConfig = {
           ...config,
-          cluster_maps: normalIndices.map((i) => maps[i]),
+          cluster_maps: toStart.map((i) => maps[i]),
         }
         const msg = await invoke<string>('start_server', { config: normalConfig, clusterDelaySec: clusterStartDelaySec })
-        logger.info('Server start result', msg)
-        setServerRunning(true)
-        // Record that these mods were used in a real server launch
-        recordModsActive(config.mods?.active_mods ?? [])
+        logger.info('Cluster start result', msg)
       }
 
-      // Track stub-only mode separately to avoid false crash alerts
-      if (dormantIndices.length > 0 && normalIndices.length === 0) {
-        setStubsRunning(true)
-      }
-
+      recordModsActive(config.mods?.active_mods ?? [])
+      await refreshStatuses()
       setError(null)
     } catch (err) {
       setSaving(false)
@@ -106,65 +162,68 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
       logger.error('Failed to start server', err)
       setError(`Server start failed: ${msg}`)
     } finally {
+      setStartingMaps(new Set())
       setIsServerStarting(false)
     }
-  }, [config, isServerStarting, serverRunning, onDemandEnabled, onDemandMaps, autoShutdownMin, clusterStartDelaySec, setSaving, setError])
+  }, [
+    config, isServerStarting, mapStatuses, maps, isCluster,
+    alwaysOnIndices, onDemandEnabled, onDemandMaps, autoShutdownMin,
+    clusterStartDelaySec, setSaving, setError, recordModsActive, refreshStatuses,
+  ])
 
   // ── Stop ─────────────────────────────────────────────────────────────────────
-  const handleStopServer = useCallback(async () => {
-    if (isServerStopping) return
+  const handleStopServer = useCallback(async (mapIndex?: number) => {
+    if (!config || isServerStopping) return
+
+    const runningIndices = mapStatuses.filter((s) => s.running).map((s) => s.map_index)
+    const targetIndices: number[] = mapIndex !== undefined
+      ? [mapIndex]
+      : runningIndices
+
+    if (targetIndices.length === 0) return
 
     try {
       setIsServerStopping(true)
+      setStoppingMaps(new Set(targetIndices))
 
-      // 1. RCON graceful shutdown first (saveworld + doexit) for always-on servers.
-      //    This must run BEFORE signaling the stubs so stop_server gets a chance
-      //    to do RCON while the ARK process is still alive.
-      try {
-        const msg = await invoke<string>('stop_server', { config })
-        logger.info('Server stop result', msg)
-      } catch (err) {
-        logger.warn('stop_server RCON error (continuing with stub teardown)', err)
+      if (mapIndex !== undefined || (isCluster && targetIndices.length < runningIndices.length)) {
+        for (const idx of targetIndices) {
+          try {
+            const msg = await invoke<string>('stop_server_instance', { config, mapIndex: idx })
+            logger.info('Instance stop', msg)
+          } catch (err) {
+            logger.warn(`stop_server_instance failed for index ${idx}`, err)
+          }
+        }
+      } else {
+        try {
+          const msg = await invoke<string>('stop_server', { config })
+          logger.info('Server stop result', msg)
+        } catch (err) {
+          logger.warn('stop_server RCON error (continuing with stub teardown)', err)
+        }
+        await invoke('disable_all_on_demand').catch(() => {})
+        setStubsRunning(false)
       }
 
-      // 2. Signal on-demand stubs to do their own RCON graceful shutdown.
-      //    disable_all_on_demand just sends the shutdown signal — each stub
-      //    task will do saveworld+doexit internally before exiting.
-      await invoke('disable_all_on_demand').catch(() => {})
-
+      await refreshStatuses()
       setError(null)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       logger.warn('handleStopServer error', err)
       setError(`Server stop failed: ${msg}`)
     } finally {
-      setServerRunning(false)
-      setStubsRunning(false)
+      setStoppingMaps(new Set())
       setIsServerStopping(false)
     }
-  }, [config, isServerStopping, setError])
-
-  // ── Crash-detection poll (every 5 s while ARK should be running) ────────────
-  useEffect(() => {
-    if (!serverRunning) return
-    const interval = setInterval(async () => {
-      try {
-        const running = await invoke<boolean>('is_server_running')
-        if (!running) {
-          logger.info('Server process no longer detected — updating UI state')
-          setServerRunning(false)
-          setError('El servidor se detuvo inesperadamente')
-        }
-      } catch { /* ignore transient poll errors */ }
-    }, 5_000)
-    return () => clearInterval(interval)
-  }, [serverRunning]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, isServerStopping, mapStatuses, isCluster, setError, refreshStatuses])
 
   return {
     serverRunning,
     stubsRunning,
     isServerStarting,
     isServerStopping,
+    mapStatuses,
     handleStartServer,
     handleStopServer,
   }

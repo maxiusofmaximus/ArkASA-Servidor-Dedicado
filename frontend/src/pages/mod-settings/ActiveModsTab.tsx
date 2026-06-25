@@ -3,6 +3,7 @@ import { useConfigStore } from '../../stores/configStore'
 import { useModsStore } from '../../stores/modsStore'
 import { useBackupStore } from '../../stores/backupStore'
 import { invoke } from '../../services/tauri'
+import { useI18n } from '../../i18n/useI18n'
 
 type RemovePending = { modId: string; modName: string; index: number }
 
@@ -10,6 +11,7 @@ export default function ActiveModsTab() {
   const { config, setConfig } = useConfigStore()
   const { modCache, setModInfo, getModInfo } = useModsStore()
   const store = useBackupStore()
+  const { tk } = useI18n()
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [checkingPcOnly, setCheckingPcOnly] = useState(false)
@@ -142,6 +144,9 @@ export default function ActiveModsTab() {
         backed_up_at: new Date().toISOString(),
         note: `Backup before removing mod ${removePending.modId}`,
       })
+      let configToml: string | null = null
+      try { configToml = await invoke<string>('config_to_toml', { config }) } catch { /* non-fatal */ }
+
       const filename = await invoke<string>('backup_saves', {
         serverDir: config.paths.server_dir,
         map: config.cluster_maps?.[0] || 'TheIsland_WP',
@@ -156,6 +161,7 @@ export default function ActiveModsTab() {
         icloudPath: store.icloudPath || null,
         localFolderPath: store.localFolderPath || null,
         metadataJson,
+        configToml,
       })
       store.addBackupEntry({ filename, size_bytes: 0, created_at: new Date().toISOString(), provider: store.provider })
       removeMod(removePending.index)
@@ -212,38 +218,37 @@ export default function ActiveModsTab() {
         {/* Header */}
         <div className="flex items-center gap-3 px-5 pt-5 pb-4 border-b border-red-500/25">
           <span className="text-red-400 text-xl">⚠</span>
-          <span className="text-red-300/90 font-bold tracking-widest text-sm uppercase">Advertencia: Datos del servidor</span>
+          <span className="text-red-300/90 font-bold tracking-widest text-sm uppercase">{tk('mod_remove_warning_title', 'Warning: Server Data')}</span>
         </div>
 
         {/* Body */}
         <div className="px-5 py-4 space-y-3">
           <p className="text-white/80 text-sm">
-            El mod <span className="text-ark-cyan font-semibold">"{removePending.modName}"</span>{' '}
-            <span className="text-white/50 font-mono text-xs">#{removePending.modId}</span> ha sido
-            iniciado con el servidor{' '}
-            <span className="text-red-300 font-bold">{usage?.serverLaunches ?? 0} {(usage?.serverLaunches ?? 0) === 1 ? 'vez' : 'veces'}</span>.
+            {tk('the_mod', 'The mod')} <span className="text-ark-cyan font-semibold">"{removePending.modName}"</span>{' '}
+            <span className="text-white/50 font-mono text-xs">#{removePending.modId}</span> {tk('mod_started_with_server', 'has been started with the server')}{' '}
+            <span className="text-red-300 font-bold">{usage?.serverLaunches ?? 0} {(usage?.serverLaunches ?? 0) === 1 ? tk('times_once', 'time') : tk('times_plural', 'times')}</span>.
           </p>
 
           {usage && (
             <div className="rounded-md px-3 py-2 space-y-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
               <p className="text-ark-cyan/50 text-[10px]">
-                Primer uso: <span className="text-ark-cyan/70">{new Date(usage.firstSeen).toLocaleDateString()}</span>
-                {' · '}Último: <span className="text-ark-cyan/70">{new Date(usage.lastActive).toLocaleDateString()}</span>
+                {tk('first_use', 'First use')}: <span className="text-ark-cyan/70">{new Date(usage.firstSeen).toLocaleDateString()}</span>
+                {' · '}{tk('last_active_short', 'Last')}: <span className="text-ark-cyan/70">{new Date(usage.lastActive).toLocaleDateString()}</span>
               </p>
             </div>
           )}
 
           <div className="rounded-md px-3 py-2.5 space-y-1" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
-            <p className="text-red-300/90 text-xs font-bold">Eliminarlo puede causar pérdida permanente de:</p>
+            <p className="text-red-300/90 text-xs font-bold">{tk('remove_causes_loss', 'Removing it can cause permanent loss of:')}</p>
             <ul className="text-red-300/65 text-[11px] space-y-0.5 ml-3">
-              <li>• Estructuras colocadas con este mod (mesas, máquinas, etc.)</li>
-              <li>• Items y crafteos del mod en inventarios y cofres</li>
-              <li>• Datos guardados asociados al mod en el .ark</li>
+              <li>• {tk('loss_structures', 'Structures placed with this mod (tables, machines, etc.)')}</li>
+              <li>• {tk('loss_items', 'Items and crafts from the mod in inventories and chests')}</li>
+              <li>• {tk('loss_save_data', 'Saved data associated with the mod in the .ark file')}</li>
             </ul>
           </div>
 
           <p className="text-ark-cyan/40 text-[10px]">
-            Para recuperarlo después: <span className="text-ark-cyan/60">Opciones → Backup → Restaurar</span> un backup anterior que tenga el mod activo.
+            {tk('mod_restore_hint_text', 'To restore it later: Options → Backup → Restore a previous backup that had the mod active.')}
           </p>
 
           {backupMsg && (
@@ -257,14 +262,14 @@ export default function ActiveModsTab() {
             onClick={() => { setRemovePending(null); setBackupMsg(null) }}
             className="ark-action-btn px-4 py-2 text-xs tracking-widest flex-1"
           >
-            CANCELAR
+            {tk('cancel', 'CANCEL')}
           </button>
           <button
             onClick={() => { removeMod(removePending.index); setRemovePending(null) }}
             className="px-4 py-2 text-xs font-bold tracking-widest rounded transition-all flex-1"
             style={{ background: 'rgba(239,68,68,0.15)', color: 'rgba(239,68,68,0.85)', border: '1px solid rgba(239,68,68,0.4)' }}
           >
-            ELIMINAR DE TODAS FORMAS
+            {tk('remove_anyway', 'REMOVE ANYWAY')}
           </button>
           {canBackup && (
             <button
@@ -273,12 +278,12 @@ export default function ActiveModsTab() {
               className="px-4 py-2 text-xs font-bold tracking-widest rounded transition-all w-full"
               style={{ background: 'rgba(0,200,255,0.15)', color: 'rgba(0,200,255,0.9)', border: '1px solid rgba(0,200,255,0.4)', opacity: isBackingUp ? 0.6 : 1 }}
             >
-              {isBackingUp ? '⏳ CREANDO BACKUP...' : '💾 CREAR BACKUP Y ELIMINAR'}
+              {isBackingUp ? tk('creating_backup', '⏳ CREATING BACKUP...') : tk('backup_and_remove', '💾 CREATE BACKUP AND REMOVE')}
             </button>
           )}
           {!canBackup && (
             <p className="text-ark-cyan/30 text-[10px] w-full text-center">
-              Configura un proveedor en <span className="text-ark-cyan/50">Opciones → Backup</span> para hacer backup antes de eliminar.
+              {tk('configure_backup_hint', 'Configure a provider in Options → Backup to create a backup before removing.')}
             </p>
           )}
         </div>
@@ -299,14 +304,13 @@ export default function ActiveModsTab() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Buscar entre mods activos por nombre o ID…"
+            placeholder={tk('search_active_mods', 'Search active mods by name or ID…')}
             className="flex-1 bg-transparent border border-ark-cyan/30 text-ark-cyan/90 text-sm px-3 py-1.5 rounded focus:outline-none focus:border-ark-cyan/70 placeholder-ark-cyan/30"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
               className="text-ark-cyan/40 hover:text-ark-cyan/80 text-sm px-2 transition"
-              title="Limpiar"
             >×</button>
           )}
         </div>
@@ -316,7 +320,7 @@ export default function ActiveModsTab() {
           <div className="flex items-center gap-3 bg-red-500/10 border border-red-500/40 text-red-300/80 text-xs px-4 py-2.5 rounded-lg">
             <span className="text-red-400 text-sm">⚠</span>
             <div className="flex-1">
-              <p className="font-bold text-red-300/90 mb-0.5">Mods solo-PC detectados — crashearán el servidor</p>
+              <p className="font-bold text-red-300/90 mb-0.5">{tk('pc_only_detected', 'PC-only mods detected — they will crash the server')}</p>
               <p className="text-red-300/60 text-[11px]">
                 {pcOnlyIds.map(id => modCache[id]?.name ?? id).join(', ')}
               </p>
@@ -326,7 +330,7 @@ export default function ActiveModsTab() {
               className="ark-action-btn text-[10px] px-3 py-1 flex-shrink-0"
               style={{ color: 'rgba(248,113,113,0.85)', outlineColor: 'rgba(248,113,113,0.4)' }}
             >
-              QUITAR {pcOnlyIds.length > 1 ? 'TODOS' : ''}
+              {pcOnlyIds.length > 1 ? tk('remove_all_btn', 'REMOVE ALL') : tk('remove_btn', 'REMOVE')}
             </button>
           </div>
         )}
@@ -335,7 +339,7 @@ export default function ActiveModsTab() {
         {hasDuplicates && (
           <div className="flex items-center gap-3 bg-yellow-400/10 border border-yellow-400/40 text-yellow-300/80 text-xs px-4 py-2 rounded-lg">
             <span className="flex-1">
-              ⚠ Mods duplicados: {[...duplicateNames].map(n => {
+              {tk('duplicate_mods_warning', '⚠ Duplicate mods:')} {[...duplicateNames].map(n => {
                 const id = mods.find(i => modCache[i]?.name?.toLowerCase() === n)
                 return id ? modCache[id]?.name : null
               }).filter(Boolean).join(', ')}
@@ -345,32 +349,32 @@ export default function ActiveModsTab() {
               className="ark-action-btn text-[10px] px-3 py-1 flex-shrink-0"
               style={{ color: 'rgba(251,191,36,0.8)', outlineColor: 'rgba(251,191,36,0.4)' }}
             >
-              QUITAR DUPLICADOS
+              {tk('remove_duplicates', 'REMOVE DUPLICATES')}
             </button>
           </div>
         )}
 
         {checkingPcOnly && (
-          <p className="text-ark-cyan/30 text-[10px] px-1 -mt-1 animate-pulse">Verificando compatibilidad de mods...</p>
+          <p className="text-ark-cyan/30 text-[10px] px-1 -mt-1 animate-pulse">{tk('checking_mod_compat', 'Checking mod compatibility...')}</p>
         )}
 
         {/* Mod list */}
         <div className="ark-panel rounded-lg overflow-hidden flex-1">
           <div className="bg-ark-secondary/40 px-4 py-2 border-b border-ark-cyan/20 flex items-center justify-between">
             <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">
-              Mods Activos ({q ? `${filteredIndices.length}/` : ''}{mods.length})
+              {tk('active_mods_title', 'Active Mods')} ({q ? `${filteredIndices.length}/` : ''}{mods.length})
             </span>
-            <span className="text-ark-cyan/40 text-xs">Orden de carga ↑ = mayor prioridad</span>
+            <span className="text-ark-cyan/40 text-xs">{tk('load_order_hint', 'Load order ↑ = higher priority')}</span>
           </div>
           <div className="ark-scroll overflow-y-auto" style={{ maxHeight: 'calc(100vh - 320px)' }}>
             {mods.length === 0 ? (
               <div className="p-8 text-ark-cyan/40 text-sm text-center">
                 <div className="text-2xl mb-2 opacity-40">📦</div>
-                Sin mods activos. Ve a la pestaña de búsqueda de mods para añadirlos.
+                {tk('no_active_mods', 'No active mods. Go to the mod search tab to add them.')}
               </div>
             ) : filteredIndices.length === 0 ? (
               <div className="p-8 text-ark-cyan/40 text-sm text-center">
-                No hay mods que coincidan con "{searchQuery}".
+                {tk('no_mods_match', 'No mods match "{{query}}".').replace('{{query}}', searchQuery)}
               </div>
             ) : (
               filteredIndices.map(({ id: modId, i }) => {
@@ -394,13 +398,11 @@ export default function ActiveModsTab() {
                         onClick={(e) => { e.stopPropagation(); moveUp(i) }}
                         disabled={i === 0}
                         className="text-ark-cyan/50 hover:text-ark-cyan disabled:opacity-20 text-[10px] leading-none px-0.5 transition"
-                        title="Mover arriba"
                       >▲</button>
                       <button
                         onClick={(e) => { e.stopPropagation(); moveDown(i) }}
                         disabled={i === mods.length - 1}
                         className="text-ark-cyan/50 hover:text-ark-cyan disabled:opacity-20 text-[10px] leading-none px-0.5 transition"
-                        title="Mover abajo"
                       >▼</button>
                     </div>
 
@@ -430,7 +432,7 @@ export default function ActiveModsTab() {
                         <span className="text-ark-cyan/30 text-[10px] font-mono ml-2">#{modId}</span>
                       )}
                       {isPcOnly && (
-                        <span className="text-red-400/60 text-[10px] ml-2 italic">solo PC</span>
+                        <span className="text-red-400/60 text-[10px] ml-2 italic">{tk('pc_only_tag', 'PC only')}</span>
                       )}
                     </div>
 
@@ -456,7 +458,7 @@ export default function ActiveModsTab() {
       {/* Right: preview panel */}
       <div className="w-72 ark-panel rounded-lg flex flex-col overflow-hidden" style={{ minHeight: 'calc(100vh - 260px)', maxHeight: 'calc(100vh - 260px)' }}>
         <div className="bg-ark-secondary/40 px-4 py-2 border-b border-ark-cyan/20">
-          <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">Detalles del Mod</span>
+          <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">{tk('mod_details', 'Mod Details')}</span>
         </div>
         <div className="flex-1 flex items-center justify-center p-6 overflow-y-auto">
           {selectedId ? (
@@ -473,7 +475,7 @@ export default function ActiveModsTab() {
                 <p className="text-ark-cyan/40 text-xs font-mono mt-0.5">ID: {selectedId}</p>
                 {selectedInfo?.clientOnly && (
                   <p className="text-red-400/80 text-[10px] mt-1 border border-red-500/40 bg-red-500/10 px-2 py-0.5 rounded inline-block">
-                    ⚠ Solo PC — crasheará el servidor
+                    {tk('pc_only_crash_warning', '⚠ PC-Only — will crash the server')}
                   </p>
                 )}
               </div>
@@ -488,7 +490,7 @@ export default function ActiveModsTab() {
                 </div>
               )}
               {selectedInfo?.downloadCount ? (
-                <p className="text-ark-cyan/30 text-xs">↓ {selectedInfo.downloadCount.toLocaleString()} descargas</p>
+                <p className="text-ark-cyan/30 text-xs">↓ {selectedInfo.downloadCount.toLocaleString()} {tk('downloads', 'downloads')}</p>
               ) : null}
               <div className="text-ark-cyan/40 text-xs">Orden: #{(selectedIdx ?? 0) + 1}</div>
               <button
@@ -499,8 +501,8 @@ export default function ActiveModsTab() {
               </button>
             </div>
           ) : (
-            <span className="text-ark-cyan/30 text-xs font-bold tracking-widest text-center">
-              Selecciona un mod<br/>para ver los detalles
+            <span className="text-ark-cyan/30 text-xs font-bold tracking-widest text-center whitespace-pre-line">
+              {tk('select_mod_hint', 'Select a mod\nto view details')}
             </span>
           )}
         </div>

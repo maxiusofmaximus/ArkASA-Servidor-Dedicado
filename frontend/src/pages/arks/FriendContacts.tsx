@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { invoke } from '../../services/tauri'
 import { useBackupStore } from '../../stores/backupStore'
 import type { FriendContact } from '../../types'
+import { useI18n } from '../../i18n/useI18n'
 
 export default function FriendContacts() {
   const {
@@ -12,6 +13,7 @@ export default function FriendContacts() {
     removeFriendContact,
     setActivePingContactId,
   } = useBackupStore()
+  const { tk } = useI18n()
 
   const [editingField, setEditingField] = useState<{ id: string; field: 'name' | 'ip' } | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -47,7 +49,7 @@ export default function FriendContacts() {
   }
 
   const handleAddContact = () => {
-    addFriendContact({ name: 'Amigo', ip: '' })
+    addFriendContact({ name: tk('default_contact_name', 'Friend'), ip: '' })
   }
 
   const handleRemove = async (id: string) => {
@@ -66,28 +68,27 @@ export default function FriendContacts() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">
-            Libreta de Amigos
+            {tk('friend_contacts', 'Friend Book')}
           </span>
           {activePingContactId && (
             <span className="flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block" />
-              <span className="text-green-400/70 text-[10px] font-bold tracking-widest">PING ACTIVO</span>
+              <span className="text-green-400/70 text-[10px] font-bold tracking-widest">{tk('ping_active', 'PING ACTIVE')}</span>
             </span>
           )}
         </div>
         <button
           onClick={handleAddContact}
           className="ark-action-btn text-[10px] px-2.5 py-0.5 flex items-center gap-1"
-          title="Agregar contacto"
         >
-          + Agregar
+          {tk('add_friend', '+ Add')}
         </button>
       </div>
 
       {/* Contact list */}
       {friendContacts.length === 0 ? (
         <p className="text-ark-cyan/25 text-xs py-2 text-center">
-          Sin contactos — agrega IPs de tus amigos con el botón +
+          {tk('no_contacts', 'No contacts — add your friends\' IPs with the + button')}
         </p>
       ) : (
         <div className="space-y-1.5">
@@ -117,9 +118,8 @@ export default function FriendContacts() {
                     className="flex-shrink-0 w-24 text-xs font-semibold cursor-pointer truncate"
                     style={{ color: isPinging ? 'rgba(74,222,128,0.9)' : 'rgba(255,255,255,0.7)' }}
                     onClick={() => startEdit(contact.id, 'name', contact.name)}
-                    title="Clic para editar nombre"
                   >
-                    {contact.name || 'Sin nombre'}
+                    {contact.name || tk('no_name', 'no name')}
                   </span>
                 )}
 
@@ -132,16 +132,15 @@ export default function FriendContacts() {
                     onChange={(e) => setEditValue(e.target.value)}
                     onBlur={commitEdit}
                     onKeyDown={(e) => { if (e.key === 'Enter') commitEdit() }}
-                    placeholder="100.x.x.x o hostname"
+                    placeholder="100.x.x.x"
                   />
                 ) : (
                   <span
                     className="flex-1 text-xs font-mono cursor-pointer truncate"
                     style={{ color: isPinging ? 'rgba(74,222,128,0.7)' : 'rgba(0,200,255,0.5)' }}
                     onClick={() => startEdit(contact.id, 'ip', contact.ip)}
-                    title="Clic para editar IP"
                   >
-                    {contact.ip || <span style={{ color: 'rgba(255,255,255,0.2)' }}>sin IP</span>}
+                    {contact.ip || <span style={{ color: 'rgba(255,255,255,0.2)' }}>{tk('no_ip_short', 'no IP')}</span>}
                   </span>
                 )}
 
@@ -160,7 +159,6 @@ export default function FriendContacts() {
                     border: '1px solid rgba(0,200,255,0.2)',
                     opacity: contact.ip ? 1 : 0.4,
                   }}
-                  title={isPinging ? 'Detener ping' : 'Iniciar ping keep-alive'}
                 >
                   {isPinging ? '■ STOP' : '▶ PING'}
                 </button>
@@ -170,7 +168,6 @@ export default function FriendContacts() {
                   onClick={() => handleRemove(contact.id)}
                   className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded transition-colors"
                   style={{ color: 'rgba(239,68,68,0.4)' }}
-                  title="Eliminar contacto"
                 >
                   ×
                 </button>
@@ -181,7 +178,7 @@ export default function FriendContacts() {
       )}
 
       <p className="text-ark-cyan/25 text-[10px]">
-        Clic en nombre o IP para editar · Ping mantiene la ruta Tailscale activa
+        {tk('footer_contacts_hint', 'Click name or IP to edit · Ping keeps the Tailscale route active')}
       </p>
     </div>
   )

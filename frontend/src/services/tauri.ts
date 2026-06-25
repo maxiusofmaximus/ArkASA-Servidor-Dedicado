@@ -291,6 +291,8 @@ function createMockInvoke() {
           supply_crate_loot_quality_multiplier: 1.0,
           fishing_loot_quality_multiplier: 1.0,
           platform_structure_limit: 128,
+          limit_generators_num: 0,
+          limit_generators_range: 15000.0,
           force_gacha_unhappy_in_caves: false,
           disable_friendly_fire: false,
           disable_structure_placement_collision: false,
@@ -369,10 +371,6 @@ function createMockInvoke() {
       { key: 'ark_backup_TheIsland_WP_20260612_080000.zip', name: 'ark_backup_TheIsland_WP_20260612_080000.zip', size_bytes: 298_100_000, created_at: '2026-06-12T08:00:00Z' },
       { key: 'ark_backup_TheIsland_WP_20260611_200000.zip', name: 'ark_backup_TheIsland_WP_20260611_200000.zip', size_bytes: 301_000_000, created_at: '2026-06-11T20:00:00Z' },
     ]
-    mocks['restore_backup_from_cloud'] = async (_args: any) =>
-      `Restaurado '${_args?.backupName || 'backup'}' — 42 archivos extraídos. Snapshot previo guardado como SavedArks_preRestore_*`
-    mocks['read_backup_metadata'] = async () =>
-      JSON.stringify({ server_name: 'Mi Servidor ARK', mod_ids: ['927083', '1932787', '1565001'], scope: 'map_players_tribes', backed_up_at: new Date().toISOString() })
     mocks['parse_config_from_toml'] = async (args: any) => {
       // In dev mode, return a copy of the current default config with some changes to demo the diff
       const base = mocks['get_default_config'] as any

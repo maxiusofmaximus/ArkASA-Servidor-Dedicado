@@ -3,6 +3,7 @@ import { invoke } from '../services/tauri'
 import { useBackupStore, type CloudProvider, type BackupScope } from '../stores/backupStore'
 import { useConfigStore } from '../stores/configStore'
 import RawConfigViewer from './RawConfigViewer'
+import { useI18n } from '../i18n/useI18n'
 
 interface BackupListEntry {
   key: string
@@ -17,20 +18,18 @@ interface OptionsModalProps {
 
 type OptionsTab = 'general' | 'backup' | 'config'
 
-const SCOPE_OPTIONS: { value: BackupScope; label: string; desc: string }[] = [
-  { value: 'map', label: 'Solo mapa', desc: 'Archivo .ark del mundo (más rápido)' },
-  { value: 'map_players_tribes', label: 'Mapa + Jugadores + Tribus', desc: 'Backup completo de partida (recomendado)' },
-  { value: 'full', label: 'Directorio Saved/ completo', desc: 'Todo incluyendo configs del servidor' },
-]
+// Scope options — labels resolved via i18n inside component
+const SCOPE_VALUES: BackupScope[] = ['map', 'map_players_tribes', 'full']
 
-const PROVIDERS: { value: CloudProvider; label: string; color: string; desc: string }[] = [
-  { value: 'none',         label: 'Sin proveedor',  color: '#6b7280', desc: '' },
-  { value: 's3',           label: 'S3-compatible',  color: '#f97316', desc: 'AWS S3, Backblaze B2, Wasabi, R2…' },
-  { value: 'gdrive',       label: 'Google Drive',   color: '#4ade80', desc: 'OAuth 2.0 — requiere app en GCP' },
-  { value: 'onedrive',     label: 'OneDrive',        color: '#3b82f6', desc: 'OAuth 2.0 — requiere app en Azure' },
-  { value: 'icloud',       label: 'iCloud',          color: '#a78bfa', desc: 'Carpeta local de iCloud for Windows' },
-  { value: 'local_folder', label: 'Carpeta local',  color: '#22d3ee', desc: 'Sin cuenta — sincroniza con OneDrive/GDrive local' },
-]
+// Provider colors stay static; labels/descs resolved via i18n inside component
+const PROVIDER_COLORS: Record<CloudProvider, string> = {
+  none:         '#6b7280',
+  s3:           '#f97316',
+  gdrive:       '#4ade80',
+  onedrive:     '#3b82f6',
+  icloud:       '#a78bfa',
+  local_folder: '#22d3ee',
+}
 
 const LANGUAGES: { code: string; label: string; native: string }[] = [
   { code: 'es', label: 'Español',            native: 'Español' },
@@ -65,7 +64,8 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
   const [backupMeta, setBackupMeta] = useState<Record<string, { mod_ids?: string[]; server_name?: string; note?: string } | null>>({})
 
   const store = useBackupStore()
-  const { config } = useConfigStore()
+  const { config, setConfig, setSavedConfig } = useConfigStore()
+  const { tk } = useI18n()
 
   const providerArgs = useCallback(() => ({
     provider: store.provider,
@@ -101,7 +101,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
     try {
       const entries = await invoke<BackupListEntry[]>('list_cloud_backups', providerArgs())
       setCloudList(entries)
-      if (entries.length === 0) setListError('No se encontraron backups en este proveedor.')
+      if (entries.length === 0) setListError(tk('no_backups_found', 'No backups found for this provider.'))
 
       // For local providers (icloud, local_folder), read metadata from each zip
       if (store.provider === 'local_folder' || store.provider === 'icloud') {
@@ -127,9 +127,9 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
   const handleRestore = async (entry: BackupListEntry) => {
     if (!config) return
     const confirmed = window.confirm(
-      `¿Restaurar "${entry.name}"?\n\n` +
-      `Los saves actuales se renombrarán a SavedArks_preRestore_* como snapshot de seguridad.\n\n` +
-      `Asegúrate de que el servidor NO esté en ejecución.`
+      `Restore "${entry.name}"?\n\n` +
+      `Current saves will be renamed to SavedArks_preRestore_* as a safety snapshot.\n\n` +
+      `Make sure the server is NOT running.`
     )
     if (!confirmed) return
 
@@ -162,6 +162,10 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         : store.provider === 'onedrive' ? store.onedriveAccessToken
         : undefined
 
+      // Include config.toml so the backup is self-contained and importable
+      let configToml: string | null = null
+      try { configToml = await invoke<string>('config_to_toml', { config }) } catch { /* non-fatal */ }
+
       const filename = await invoke<string>('backup_saves', {
         serverDir: config.paths.server_dir,
         map: config.cluster_maps?.[0] || 'TheIsland_WP',
@@ -176,6 +180,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         icloudPath: store.icloudPath || null,
         localFolderPath: store.localFolderPath || null,
         metadataJson: buildMetadataJson(),
+        configToml,
       })
 
       store.addBackupEntry({
@@ -184,7 +189,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         created_at: new Date().toISOString(),
         provider: store.provider,
       })
-      setBackupStatus(`✅ Backup completado: ${filename}`)
+      setBackupStatus(`✅ ${tk('backup_complete', 'Backup complete')}: ${filename}`)
     } catch (e) {
       setBackupError(`❌ ${String(e)}`)
     } finally {
@@ -223,7 +228,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
       })
       store.setGDriveField('gdriveAccessToken', tokens.access_token)
       store.setGDriveField('gdriveRefreshToken', tokens.refresh_token)
-      setAuthStatus('✅ Google Drive autorizado correctamente')
+      setAuthStatus(`✅ ${tk('gdrive_authorized', 'Google Drive authorized successfully')}`)
     } catch (e) {
       setAuthStatus(`❌ ${String(e)}`)
     } finally {
@@ -240,7 +245,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
       })
       store.setOneDriveField('onedriveAccessToken', tokens.access_token)
       store.setOneDriveField('onedriveRefreshToken', tokens.refresh_token)
-      setAuthStatus('✅ OneDrive autorizado correctamente')
+      setAuthStatus(`✅ ${tk('onedrive_authorized', 'OneDrive authorized successfully')}`)
     } catch (e) {
       setAuthStatus(`❌ ${String(e)}`)
     } finally {
@@ -274,12 +279,12 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-ark-cyan/20 flex-shrink-0">
-          <span className="text-ark-cyan font-bold tracking-widest text-sm uppercase">⚙ Opciones</span>
+          <span className="text-ark-cyan font-bold tracking-widest text-sm uppercase">{tk('options_title', '⚙ Options')}</span>
           <button
             onClick={onClose}
             className="text-ark-cyan/40 hover:text-ark-cyan/80 text-xs tracking-widest transition-colors"
           >
-            ESC / CERRAR
+            {tk('esc_close', 'ESC / CLOSE')}
           </button>
         </div>
 
@@ -295,7 +300,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                 borderBottom: tab === t ? '2px solid rgba(0,200,255,0.8)' : '2px solid transparent',
               }}
             >
-              {t === 'general' ? 'General' : t === 'backup' ? 'Backup' : 'Config INI'}
+              {t === 'general' ? tk('tab_general', 'General') : t === 'backup' ? tk('tab_backup', 'Backup') : tk('tab_config_ini', 'Config INI')}
             </button>
           ))}
         </div>
@@ -307,7 +312,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
           {tab === 'general' && (
             <>
               {/* Language selector */}
-              <Section title="Idioma / Language">
+              <Section title={tk('section_language', 'Language')}>
                 <div className="grid grid-cols-2 gap-2">
                   {LANGUAGES.map((lang) => (
                     <button
@@ -331,20 +336,16 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                   ))}
                 </div>
                 <p className="text-ark-cyan/30 text-[10px] mt-1">
-                  La preferencia se guarda. Las traducciones se aplicarán progresivamente en próximas versiones.
+                  {tk('lang_pref_note', 'Language preference is saved. Translations are applied progressively.')}
                 </p>
               </Section>
 
               {/* On-demand servers */}
-              <Section title="Servidor Bajo Demanda">
+              <Section title={tk('section_on_demand', 'On-Demand Server')}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-ark-cyan/80 text-sm">Activar modo dormido</p>
-                    <p className="text-ark-cyan/40 text-xs mt-0.5">
-                      Permite que mapas individuales aparezcan en el browser de ARK sin que el servidor esté corriendo.
-                      ARK arranca solo cuando alguien intenta conectarse. Útil para servidores locales con recursos limitados.
-                      Desactívalo si usas un servidor en la nube 24/7.
-                    </p>
+                    <p className="text-ark-cyan/80 text-sm">{tk('on_demand_title', 'Enable sleep mode')}</p>
+                    <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('on_demand_desc', 'Lets individual maps appear in the ARK browser without the server running.')}</p>
                   </div>
                   <Toggle value={store.onDemandEnabled} onChange={store.setOnDemandEnabled} />
                 </div>
@@ -352,14 +353,10 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
 
               {/* Cluster start delay — only relevant in always-on (non-on-demand) mode */}
               {!store.onDemandEnabled && (
-                <Section title="Clúster de Servidores">
+                <Section title={tk('section_cluster', 'Server Cluster')}>
                   <div>
-                    <p className="text-ark-cyan/80 text-sm">Retardo entre instancias del clúster</p>
-                    <p className="text-ark-cyan/40 text-xs mt-0.5 mb-3">
-                      Tiempo de espera entre el arranque de cada mapa en un clúster. Evita que dos instancias
-                      intenten instalar el mismo mod simultáneamente, lo que causa crashes.
-                      Solo aplica en modo activo (no dormido). Valor recomendado: 60 s.
-                    </p>
+                    <p className="text-ark-cyan/80 text-sm">{tk('cluster_delay_title', 'Delay between cluster instances')}</p>
+                    <p className="text-ark-cyan/40 text-xs mt-0.5 mb-3">{tk('cluster_delay_desc', 'Wait time between each map startup in a cluster.')}</p>
                     <div className="flex items-center gap-4">
                       <input
                         type="range"
@@ -371,7 +368,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                         className="flex-1 accent-ark-cyan"
                       />
                       <span className="text-ark-cyan/80 font-mono text-sm w-20 text-right">
-                        {store.clusterStartDelaySec === 0 ? 'Sin retardo' : `${store.clusterStartDelaySec} s`}
+                        {store.clusterStartDelaySec === 0 ? tk('no_delay', 'No delay') : `${store.clusterStartDelaySec} s`}
                       </span>
                     </div>
                   </div>
@@ -379,74 +376,73 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
               )}
 
               {/* Minimize to tray */}
-              <Section title="Comportamiento al Cerrar">
+              <Section title={tk('section_close_behavior', 'Close Behavior')}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-ark-cyan/80 text-sm">Minimizar a la bandeja del sistema</p>
-                    <p className="text-ark-cyan/40 text-xs mt-0.5">
-                      Al cerrar la ventana, la app se minimiza a la bandeja del sistema.
-                      Haz clic en el icono de la bandeja para restaurarla, o elige "Salir" para cerrarla completamente.
-                    </p>
+                    <p className="text-ark-cyan/80 text-sm">{tk('minimize_tray_title', 'Minimize to system tray')}</p>
+                    <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('minimize_tray_desc', 'When closing the window, the app minimizes to the system tray.')}</p>
                   </div>
                   <Toggle value={store.minimizeToTray} onChange={store.setMinimizeToTray} />
                 </div>
               </Section>
 
               {/* Manual save */}
-              <Section title="Guardado">
+              <Section title={tk('section_save', 'Save Settings')}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-ark-cyan/80 text-sm">Guardado manual</p>
-                    <p className="text-ark-cyan/40 text-xs mt-0.5">
-                      Por defecto los cambios se guardan automáticamente. Activa esto para guardar solo al pulsar <span className="text-ark-cyan/60 font-mono">SAVE SETTINGS</span>.
-                    </p>
+                    <p className="text-ark-cyan/80 text-sm">{tk('manual_save_title', 'Manual save')}</p>
+                    <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('manual_save_desc', 'By default changes are saved automatically. Enable this to save only when you press SAVE SETTINGS.')}</p>
                   </div>
                   <Toggle value={store.manualSave} onChange={store.setManualSave} />
                 </div>
               </Section>
 
               {/* Logs toggle */}
-              <Section title="Visor de Logs">
+              <Section title={tk('section_logs', 'Log Viewer')}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-ark-cyan/80 text-sm">Botón de logs del servidor</p>
-                    <p className="text-ark-cyan/40 text-xs mt-0.5">Muestra el botón LOGS en la barra inferior para ver ShooterGame.log en tiempo real</p>
+                    <p className="text-ark-cyan/80 text-sm">{tk('logs_btn_title', 'Server logs button')}</p>
+                    <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('logs_btn_desc', 'Shows the LOGS button in the bottom bar to view ShooterGame.log in real time')}</p>
                   </div>
                   <Toggle value={store.logsEnabled} onChange={store.setLogsEnabled} />
                 </div>
               </Section>
 
               {/* Backup scope */}
-              <Section title="Scope del Backup">
+              <Section title={tk('section_backup_scope', 'Backup Scope')}>
                 <div className="space-y-2">
-                  {SCOPE_OPTIONS.map((opt) => (
-                    <label
-                      key={opt.value}
-                      className="flex items-center gap-3 cursor-pointer p-2.5 rounded-md transition-colors"
-                      style={{
-                        background: store.backupScope === opt.value ? 'rgba(0,200,255,0.08)' : 'transparent',
-                        border: `1px solid ${store.backupScope === opt.value ? 'rgba(0,200,255,0.4)' : 'rgba(255,255,255,0.06)'}`,
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="scope"
-                        value={opt.value}
-                        checked={store.backupScope === opt.value}
-                        onChange={() => store.setBackupScope(opt.value)}
-                        className="accent-ark-cyan"
-                      />
-                      <div>
-                        <p className="text-ark-cyan/80 text-sm font-semibold">{opt.label}</p>
-                        <p className="text-ark-cyan/40 text-xs">{opt.desc}</p>
-                      </div>
-                    </label>
-                  ))}
+                  {SCOPE_VALUES.map((val) => {
+                    const labelKey = val === 'map' ? 'scope_map_label' : val === 'map_players_tribes' ? 'scope_map_players_label' : 'scope_full_label'
+                    const descKey  = val === 'map' ? 'scope_map_desc'  : val === 'map_players_tribes' ? 'scope_map_players_desc'  : 'scope_full_desc'
+                    return (
+                      <label
+                        key={val}
+                        className="flex items-center gap-3 cursor-pointer p-2.5 rounded-md transition-colors"
+                        style={{
+                          background: store.backupScope === val ? 'rgba(0,200,255,0.08)' : 'transparent',
+                          border: `1px solid ${store.backupScope === val ? 'rgba(0,200,255,0.4)' : 'rgba(255,255,255,0.06)'}`,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="scope"
+                          value={val}
+                          checked={store.backupScope === val}
+                          onChange={() => store.setBackupScope(val)}
+                          className="accent-ark-cyan"
+                        />
+                        <div>
+                          <p className="text-ark-cyan/80 text-sm font-semibold">{tk(labelKey, val)}</p>
+                          <p className="text-ark-cyan/40 text-xs">{tk(descKey, '')}</p>
+                        </div>
+                      </label>
+                    )
+                  })}
                 </div>
               </Section>
 
               {/* Max saves */}
-              <Section title="Saves a conservar">
+              <Section title={tk('section_saves_to_keep', 'Saves to Keep')}>
                 <div className="flex items-center gap-4">
                   <input
                     type="range"
@@ -457,7 +453,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     className="flex-1 accent-ark-cyan"
                   />
                   <span className="text-ark-cyan/80 font-mono text-sm w-16 text-right">
-                    {store.maxSaves === 1 ? 'Solo el último' : `Últimos ${store.maxSaves}`}
+                    {store.maxSaves === 1 ? tk('only_last_save', 'Only the last') : tk('last_n_saves', 'Last {{n}}').replace('{{n}}', String(store.maxSaves))}
                   </span>
                 </div>
               </Section>
@@ -468,35 +464,50 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
           {tab === 'backup' && (
             <>
               {/* Provider selector */}
-              <Section title="Destino del Backup">
+              <Section title={tk('section_backup_dest', 'Backup Destination')}>
                 <div className="grid grid-cols-2 gap-2">
-                  {PROVIDERS.map((p) => (
-                    <button
-                      key={p.value}
-                      onClick={() => store.setProvider(p.value)}
-                      className="rounded-md p-3 text-left transition-all"
-                      style={{
-                        background: store.provider === p.value ? `${p.color}18` : 'rgba(255,255,255,0.03)',
-                        border: `1px solid ${store.provider === p.value ? `${p.color}60` : 'rgba(255,255,255,0.08)'}`,
-                        boxShadow: store.provider === p.value ? `0 0 12px ${p.color}20` : 'none',
-                      }}
-                    >
-                      <p className="text-sm font-semibold" style={{ color: store.provider === p.value ? p.color : 'rgba(255,255,255,0.45)' }}>
-                        {p.label}
-                      </p>
-                      {p.desc && (
-                        <p className="text-[10px] mt-0.5" style={{ color: store.provider === p.value ? `${p.color}99` : 'rgba(255,255,255,0.2)' }}>
-                          {p.desc}
+                  {(Object.keys(PROVIDER_COLORS) as CloudProvider[]).map((pVal) => {
+                    const color = PROVIDER_COLORS[pVal]
+                    const label = pVal === 'none' ? tk('provider_none', 'No provider')
+                               : pVal === 'local_folder' ? tk('provider_local_folder', 'Local folder')
+                               : pVal === 'gdrive' ? 'Google Drive'
+                               : pVal === 'onedrive' ? 'OneDrive'
+                               : pVal === 'icloud' ? 'iCloud'
+                               : 'S3-compatible'
+                    const desc = pVal === 's3' ? 'AWS S3, Backblaze B2, Wasabi, R2…'
+                               : pVal === 'gdrive' ? 'OAuth 2.0 — requires GCP app'
+                               : pVal === 'onedrive' ? 'OAuth 2.0 — requires Azure app'
+                               : pVal === 'icloud' ? 'iCloud for Windows local folder'
+                               : pVal === 'local_folder' ? 'No account — sync with local OneDrive/GDrive'
+                               : ''
+                    return (
+                      <button
+                        key={pVal}
+                        onClick={() => store.setProvider(pVal)}
+                        className="rounded-md p-3 text-left transition-all"
+                        style={{
+                          background: store.provider === pVal ? `${color}18` : 'rgba(255,255,255,0.03)',
+                          border: `1px solid ${store.provider === pVal ? `${color}60` : 'rgba(255,255,255,0.08)'}`,
+                          boxShadow: store.provider === pVal ? `0 0 12px ${color}20` : 'none',
+                        }}
+                      >
+                        <p className="text-sm font-semibold" style={{ color: store.provider === pVal ? color : 'rgba(255,255,255,0.45)' }}>
+                          {label}
                         </p>
-                      )}
-                    </button>
-                  ))}
+                        {desc && (
+                          <p className="text-[10px] mt-0.5" style={{ color: store.provider === pVal ? `${color}99` : 'rgba(255,255,255,0.2)' }}>
+                            {desc}
+                          </p>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
               </Section>
 
               {/* Local folder config */}
               {store.provider === 'local_folder' && (
-                <Section title="Carpeta Local">
+                <Section title={tk('section_local_folder', 'Local Folder')}>
                   <p className="text-ark-cyan/40 text-xs mb-3">
                     Copia el backup como .zip a esta carpeta. Ponla dentro de tu carpeta sincronizada de
                     <span className="text-ark-cyan/60"> OneDrive</span>,
@@ -505,7 +516,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     sin configurar OAuth. Ejemplo: <span className="font-mono text-ark-cyan/60">C:\Users\Max\OneDrive\ARKBackups</span>
                   </p>
                   <Field
-                    label="Ruta de destino"
+                    label={tk('destination_path', 'Destination path')}
                     value={store.localFolderPath}
                     onChange={store.setLocalFolderPath}
                     placeholder="C:\Users\Max\OneDrive\ARKBackups"
@@ -515,7 +526,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
 
               {/* S3 config */}
               {store.provider === 's3' && (
-                <Section title="Configuración S3-compatible">
+                <Section title={tk('section_s3_config', 'S3-compatible Configuration')}>
                   <p className="text-ark-cyan/40 text-xs mb-3">
                     Compatible con AWS S3, Contabo Object Storage, Seenode, Cloudflare R2, Backblaze B2, Wasabi, MinIO, etc.
                   </p>
@@ -524,7 +535,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     <Field label="Bucket" value={store.s3Bucket} onChange={(v) => store.setS3Field('s3Bucket', v)} placeholder="ark-backups" />
                     <Field label="Access Key" value={store.s3AccessKey} onChange={(v) => store.setS3Field('s3AccessKey', v)} placeholder="AKIAIOSFODNN7EXAMPLE" />
                     <Field label="Secret Key" value={store.s3SecretKey} onChange={(v) => store.setS3Field('s3SecretKey', v)} placeholder="wJalrXUtnFEMI/K7MDENG/..." type="password" />
-                    <Field label="Región" value={store.s3Region} onChange={(v) => store.setS3Field('s3Region', v)} placeholder="us-east-1" />
+                    <Field label={tk('region', 'Region')} value={store.s3Region} onChange={(v) => store.setS3Field('s3Region', v)} placeholder="us-east-1" />
                   </div>
                   <div className="mt-3 flex items-center gap-3">
                     <button
@@ -532,7 +543,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                       disabled={isTesting}
                       className="ark-action-btn text-xs px-4 py-1.5"
                     >
-                      {isTesting ? '⏳ Probando...' : '🔌 Probar conexión'}
+                      {isTesting ? tk('testing', '⏳ Testing...') : tk('test_connection', '🔌 Test connection')}
                     </button>
                     {testStatus && (
                       <span className={`text-xs ${testStatus.startsWith('✅') ? 'text-green-400' : 'text-red-400'}`}>
@@ -554,7 +565,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     <Field label="Client Secret" value={store.gdriveClientSecret} onChange={(v) => store.setGDriveField('gdriveClientSecret', v)} placeholder="GOCSPX-..." type="password" />
                   </div>
                   {store.gdriveAccessToken && (
-                    <p className="text-green-400/70 text-xs mt-2">✅ Autorizado — token activo</p>
+                    <p className="text-green-400/70 text-xs mt-2">{tk('authorized', '✅ Authorized — token active')}</p>
                   )}
                   <div className="mt-3 flex items-center gap-3">
                     <button
@@ -562,7 +573,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                       disabled={isAuthing || !store.gdriveClientId || !store.gdriveClientSecret}
                       className="ark-action-btn text-xs px-4 py-1.5"
                     >
-                      {isAuthing ? '⏳ Esperando autorización...' : store.gdriveAccessToken ? '🔄 Re-autorizar' : '🔑 Autorizar con Google'}
+                      {isAuthing ? tk('waiting_auth', '⏳ Waiting for authorization...') : store.gdriveAccessToken ? tk('reauth', '🔄 Re-authorize') : tk('auth_google', '🔑 Authorize with Google')}
                     </button>
                   </div>
                   {authStatus && (
@@ -583,7 +594,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                     <Field label="Client ID (Application ID)" value={store.onedriveClientId} onChange={(v) => store.setOneDriveField('onedriveClientId', v)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
                   </div>
                   {store.onedriveAccessToken && (
-                    <p className="text-green-400/70 text-xs mt-2">✅ Autorizado — token activo</p>
+                    <p className="text-green-400/70 text-xs mt-2">{tk('authorized', '✅ Authorized — token active')}</p>
                   )}
                   <div className="mt-3 flex items-center gap-3">
                     <button
@@ -591,7 +602,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                       disabled={isAuthing || !store.onedriveClientId}
                       className="ark-action-btn text-xs px-4 py-1.5"
                     >
-                      {isAuthing ? '⏳ Esperando autorización...' : store.onedriveAccessToken ? '🔄 Re-autorizar' : '🔑 Autorizar con Microsoft'}
+                      {isAuthing ? tk('waiting_auth', '⏳ Waiting for authorization...') : store.onedriveAccessToken ? tk('reauth', '🔄 Re-authorize') : tk('auth_microsoft', '🔑 Authorize with Microsoft')}
                     </button>
                   </div>
                   {authStatus && (
@@ -604,11 +615,8 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
 
               {/* iCloud config */}
               {store.provider === 'icloud' && (
-                <Section title="iCloud Drive (carpeta local)">
-                  <p className="text-ark-cyan/40 text-xs mb-3">
-                    Requiere la app de iCloud para Windows instalada. Los archivos se copian al directorio local de iCloud Drive y se sincronizan automáticamente. Ejemplo: <span className="font-mono text-ark-cyan/60">C:\Users\Max\iCloudDrive</span>
-                  </p>
-                  <Field label="Ruta de iCloud Drive" value={store.icloudPath} onChange={store.setICloudPath} placeholder="C:\Users\Max\iCloudDrive" />
+                <Section title="iCloud Drive">
+                  <Field label={tk('icloud_path', 'iCloud Drive path')} value={store.icloudPath} onChange={store.setICloudPath} placeholder="C:\Users\Max\iCloudDrive" />
                 </Section>
               )}
 
@@ -622,10 +630,10 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                       className="ark-action-btn px-5 py-2 text-xs font-bold tracking-widest"
                       style={{ opacity: isConfigured() ? 1 : 0.4 }}
                     >
-                      {isBacking ? '⏳ Creando backup...' : '💾 BACKUP AHORA'}
+                      {isBacking ? tk('backing_up', '⏳ Creating backup...') : tk('backup_now_btn', '💾 BACKUP NOW')}
                     </button>
                     {!isConfigured() && (
-                      <span className="text-ark-cyan/40 text-xs">Completa la configuración del proveedor</span>
+                      <span className="text-ark-cyan/40 text-xs">{tk('complete_provider_config', 'Complete the provider configuration')}</span>
                     )}
                   </div>
 
@@ -633,7 +641,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                   {backupError && <p className="text-red-400/80 text-xs">{backupError}</p>}
 
                   {store.backupHistory.length > 0 && (
-                    <Section title="Historial de Backups">
+                    <Section title={tk('section_backup_history', 'Backup History')}>
                       <div className="space-y-1.5 max-h-40 overflow-y-auto">
                         {store.backupHistory.map((b, i) => (
                           <div
@@ -653,10 +661,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
 
                   {/* Restore — only for remote cloud providers */}
                   {isCloudProvider && (
-                    <Section title="Restaurar desde la Nube">
-                      <p className="text-ark-cyan/40 text-xs">
-                        Lista los backups disponibles en tu proveedor y restaura cualquiera. Los saves actuales se guardan como snapshot de seguridad antes de restaurar.
-                      </p>
+                    <Section title={tk('section_restore_cloud', 'Restore from Cloud')}>
                       <div className="flex items-center gap-3 pt-1">
                         <button
                           onClick={handleListBackups}
@@ -664,7 +669,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                           className="ark-action-btn text-xs px-4 py-1.5"
                           style={{ opacity: isConfigured() ? 1 : 0.4 }}
                         >
-                          {isListing ? '⏳ Buscando...' : '🔍 Listar backups disponibles'}
+                          {isListing ? tk('searching', '⏳ Searching...') : tk('list_backups_btn', '🔍 List available backups')}
                         </button>
                       </div>
 
@@ -706,7 +711,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                                   className="flex-shrink-0 ark-action-btn text-[10px] px-3 py-1"
                                   style={{ opacity: restoring ? 0.4 : 1 }}
                                 >
-                                  {isRestoring ? '⏳' : '⏪ Restaurar'}
+                                  {isRestoring ? tk('restoring', '⏳') : tk('restore_btn', '⏪ Restore')}
                                 </button>
                               </div>
                             )
@@ -724,11 +729,17 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
           )}
           {/* ── CONFIG TAB ── */}
           {tab === 'config' && config && (
-            <RawConfigViewer config={config} />
+            <RawConfigViewer
+              config={config}
+              onConfigSaved={(updated) => {
+                setConfig(updated)
+                setSavedConfig(updated)
+              }}
+            />
           )}
           {tab === 'config' && !config && (
             <p className="text-ark-cyan/40 text-sm text-center py-8">
-              Carga la configuración del servidor primero.
+              {tk('config_not_loaded', 'Load the server configuration first.')}
             </p>
           )}
 
@@ -737,7 +748,7 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         {/* Footer */}
         <div className="px-6 py-4 border-t border-ark-cyan/20 flex justify-end flex-shrink-0">
           <button onClick={onClose} className="ark-action-btn px-6 py-2 text-xs tracking-widest">
-            CERRAR
+            {tk('close', 'CLOSE')}
           </button>
         </div>
       </div>

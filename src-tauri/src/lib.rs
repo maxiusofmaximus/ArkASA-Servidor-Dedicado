@@ -709,6 +709,174 @@ fn is_server_running() -> bool {
     matches!(cmd.output(), Ok(out) if String::from_utf8_lossy(&out.stdout).contains("ArkAscendedServer.exe"))
 }
 
+// ── Per-instance cluster control ─────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct MapInstanceStatus {
+    map_index: usize,
+    map_id: String,
+    map_label: String,
+    running: bool,
+}
+
+fn map_display_label(map_id: &str) -> String {
+    map_id.trim_end_matches("_WP").replace('_', " ")
+}
+
+fn is_tcp_port_open(port: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+#[cfg(windows)]
+fn kill_process_on_port(port: u16) -> std::result::Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = Command::new("netstat");
+    cmd.args(["-ano"]);
+    cmd.creation_flags(0x08000000);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let port_needle = format!(":{}", port);
+    for line in text.lines() {
+        if line.contains(&port_needle) && line.contains("LISTENING") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if let Some(pid_str) = parts.last() {
+                let mut kill = Command::new("taskkill");
+                kill.args(["/F", "/PID", pid_str]);
+                kill.creation_flags(0x08000000);
+                kill.output().map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        }
+    }
+    Err(format!("No process listening on port {}", port))
+}
+
+#[cfg(not(windows))]
+fn kill_process_on_port(_port: u16) -> std::result::Result<(), String> {
+    Err("kill_process_on_port is only supported on Windows".to_string())
+}
+
+#[tauri::command]
+fn get_cluster_instance_status(config: ServerConfig) -> std::result::Result<Vec<MapInstanceStatus>, String> {
+    let maps = config.effective_maps();
+    let statuses = maps
+        .iter()
+        .enumerate()
+        .map(|(i, map_id)| {
+            let (_, _, rcon_port) = config.network.ports_for_index(i);
+            MapInstanceStatus {
+                map_index: i,
+                map_id: map_id.clone(),
+                map_label: map_display_label(map_id),
+                running: is_tcp_port_open(rcon_port),
+            }
+        })
+        .collect();
+    Ok(statuses)
+}
+
+#[tauri::command]
+fn start_server_instance(
+    config: ServerConfig,
+    map_index: usize,
+) -> std::result::Result<String, String> {
+    let maps = config.effective_maps();
+    if map_index >= maps.len() {
+        return Err(format!("Invalid map index {} (cluster has {} maps)", map_index, maps.len()));
+    }
+
+    let raw_map = &maps[map_index];
+    let map = if raw_map.trim().is_empty() {
+        "TheIsland_WP".to_string()
+    } else {
+        raw_map.trim().to_string()
+    };
+    let exe = config.paths.ark_exe();
+    let args = build_launch_args(&config, &map, map_index);
+    let (game_port, _, rcon_port) = config.network.ports_for_index(map_index);
+
+    if is_tcp_port_open(rcon_port) {
+        return Err(format!("{} is already running (RCON port {} open)", map_display_label(&map), rcon_port));
+    }
+
+    let mut cmd = Command::new(&exe);
+    cmd.arg(&args.url_params);
+    for flag in &args.flags {
+        cmd.arg(flag);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0000_0008);
+    }
+
+    log::info!("Launching ARK instance {} port={}", map, game_port);
+
+    match cmd.spawn() {
+        Ok(child) => Ok(format!("{} started (PID {}, port {})", map_display_label(&map), child.id(), game_port)),
+        Err(e) => Err(format!("Failed to start {}: {}. Exe: {}", map, e, exe)),
+    }
+}
+
+#[tauri::command]
+async fn stop_server_instance(config: ServerConfig, map_index: usize) -> std::result::Result<String, String> {
+    let maps = config.effective_maps();
+    if map_index >= maps.len() {
+        return Err(format!("Invalid map index {} (cluster has {} maps)", map_index, maps.len()));
+    }
+
+    let map_id = maps[map_index].clone();
+    let label = map_display_label(&map_id);
+    let password = &config.identification.admin_password;
+    let (_, _, rcon_port) = config.network.ports_for_index(map_index);
+    let client = RconClient::new(rcon_port, password.as_str());
+
+    match client.graceful_shutdown().await {
+        Ok(()) => {
+            log::info!("RCON graceful shutdown OK for {} (port {})", label, rcon_port);
+            Ok(format!("{} detenido correctamente (saveworld + doexit)", label))
+        }
+        Err(e) => {
+            log::warn!("RCON shutdown failed for {} (port {}): {}", label, rcon_port, e);
+            if let Err(kill_err) = kill_process_on_port(rcon_port) {
+                Err(format!("RCON failed ({}) and could not kill process: {}", e, kill_err))
+            } else {
+                Ok(format!("{} detenido (forzado por puerto {})", label, rcon_port))
+            }
+        }
+    }
+}
+
+// ── Raw config file I/O ─────────────────────────────────────────────────────
+
+#[tauri::command]
+fn read_text_file(path: String) -> std::result::Result<String, String> {
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("Failed to read {}: {}", path, e)),
+    }
+}
+
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> std::result::Result<(), String> {
+    let p = PathBuf::from(&path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {}", e))?;
+    }
+    std::fs::write(&p, content).map_err(|e| format!("Failed to write {}: {}", path, e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn merge_config_from_ini(config: ServerConfig, ini_content: String) -> std::result::Result<ServerConfig, String> {
+    Ok(ConfigLoader::merge_ini_content(&config, &ini_content))
+}
+
 #[tauri::command]
 fn restart_server(config: ServerConfig) -> std::result::Result<String, String> {
     #[cfg(windows)]
@@ -772,7 +940,37 @@ async fn detect_ips() -> DetectedIps {
 #[tauri::command]
 fn parse_config_from_toml(toml_str: String) -> Result<config::ServerConfig, String> {
     toml::from_str::<config::ServerConfig>(&toml_str)
-        .map_err(|e| format!("Error al leer el archivo TOML: {}", e))
+        .map_err(|e| format!("Failed to parse TOML: {}", e))
+}
+
+/// Serialize a ServerConfig back to TOML string (used after zip import).
+#[tauri::command]
+fn config_to_toml(config: config::ServerConfig) -> Result<String, String> {
+    toml::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))
+}
+
+/// Extract config.toml from a backup .zip and parse it into a ServerConfig.
+#[tauri::command]
+fn parse_config_from_zip(zip_data: Vec<u8>) -> Result<config::ServerConfig, String> {
+    use std::io::Cursor;
+    let cursor = Cursor::new(zip_data);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("Failed to open zip: {}", e))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)
+            .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+        let name = file.name().to_lowercase();
+        if name == "config.toml" || name.ends_with("/config.toml") {
+            let mut contents = String::new();
+            use std::io::Read;
+            file.read_to_string(&mut contents)
+                .map_err(|e| format!("Failed to read config.toml from zip: {}", e))?;
+            return toml::from_str::<config::ServerConfig>(&contents)
+                .map_err(|e| format!("Failed to parse config.toml: {}", e));
+        }
+    }
+    Err("No config.toml found inside the zip file".to_string())
 }
 
 async fn detect_public_ip() -> Option<String> {
@@ -918,9 +1116,9 @@ pub fn run() {
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::TrayIconBuilder;
 
-            let show_item = MenuItemBuilder::with_id("show", "Mostrar").build(app)?;
+            let show_item = MenuItemBuilder::with_id("show", "Show").build(app)?;
             let sep       = tauri::menu::PredefinedMenuItem::separator(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Salir").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app).items(&[&show_item, &sep, &quit_item]).build()?;
 
             let tray = TrayIconBuilder::new()
@@ -985,6 +1183,12 @@ pub fn run() {
             start_server,
             stop_server,
             is_server_running,
+            get_cluster_instance_status,
+            start_server_instance,
+            stop_server_instance,
+            read_text_file,
+            write_text_file,
+            merge_config_from_ini,
             restart_server,
             get_server_logs,
             get_server_metrics,
@@ -1005,6 +1209,8 @@ pub fn run() {
             // IP detection
             detect_ips,
             parse_config_from_toml,
+            config_to_toml,
+            parse_config_from_zip,
             // Ping / Tailscale
             start_ping,
             stop_ping,

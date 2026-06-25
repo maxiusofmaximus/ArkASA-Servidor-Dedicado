@@ -50,12 +50,14 @@ pub async fn backup_saves(
     local_folder_path: Option<String>,
     // Optional JSON blob written as ark-metadata.json inside the zip
     metadata_json: Option<String>,
+    // Optional config.toml content — included as config.toml so backups are self-contained
+    config_toml: Option<String>,
 ) -> Result<String, String> {
     // 1. Collect files
     let files = collect_files(&server_dir, &map, &scope);
     if files.is_empty() {
         return Err(format!(
-            "No se encontraron archivos de guardado en {}/ShooterGame/Saved/",
+            "No save files found in {}/ShooterGame/Saved/",
             server_dir
         ));
     }
@@ -64,7 +66,7 @@ pub async fn backup_saves(
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let filename = format!("ark_backup_{}_{}.zip", map, timestamp);
     let zip_path = std::env::temp_dir().join(&filename);
-    create_zip(&files, &zip_path, metadata_json.as_deref())?;
+    create_zip(&files, &zip_path, metadata_json.as_deref(), config_toml.as_deref())?;
 
     // 3. Upload
     match provider.as_str() {
@@ -412,7 +414,7 @@ fn collect_files(server_dir: &str, map: &str, scope: &str) -> Vec<(PathBuf, Stri
 
 // ─── ZIP creation ───────────────────────────────────────────
 
-fn create_zip(files: &[(PathBuf, String)], zip_path: &Path, metadata_json: Option<&str>) -> Result<(), String> {
+fn create_zip(files: &[(PathBuf, String)], zip_path: &Path, metadata_json: Option<&str>, config_toml: Option<&str>) -> Result<(), String> {
     let file = std::fs::File::create(zip_path)
         .map_err(|e| format!("Cannot create zip: {}", e))?;
 
@@ -421,7 +423,15 @@ fn create_zip(files: &[(PathBuf, String)], zip_path: &Path, metadata_json: Optio
         .compression_method(zip::CompressionMethod::Deflated)
         .compression_level(Some(6));
 
-    // Write metadata first so it's easy to inspect
+    // Write config.toml first so the backup is self-contained and importable
+    if let Some(toml) = config_toml {
+        zip.start_file("config.toml", options)
+            .map_err(|e| format!("Zip config.toml error: {}", e))?;
+        zip.write_all(toml.as_bytes())
+            .map_err(|e| format!("Zip config.toml write error: {}", e))?;
+    }
+
+    // Write metadata so it's easy to inspect
     if let Some(meta) = metadata_json {
         zip.start_file("ark-metadata.json", options)
             .map_err(|e| format!("Zip metadata error: {}", e))?;

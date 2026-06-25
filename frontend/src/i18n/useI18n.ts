@@ -1,6 +1,6 @@
 import { useBackupStore } from '../stores/backupStore'
 import { translateLabel, getTranslation, labelToKey } from './translations'
-import tooltips from './tooltips'
+import { getTooltip } from './tooltips'
 
 export interface I18n {
   /** Translate a human-readable label (auto-normalizes to key). */
@@ -19,7 +19,7 @@ export function useI18n(): I18n {
   const tk = (key: string, fallback = ''): string => getTranslation(lang, key, fallback)
   const tip = (label: string): string | undefined => {
     const key = labelToKey(label)
-    return tooltips[key]
+    return getTooltip(lang, key)
   }
 
   return { t, tk, tip, lang }

@@ -18,6 +18,12 @@ export interface ModUsageRecord {
   serverLaunches: number // how many successful server starts included this mod
 }
 
+export interface CustomConfigTab {
+  id: string
+  label: string
+  path: string
+}
+
 interface BackupStore {
   // General options
   language: string          // 'en' | 'es' | 'fr' | 'zh' | 'ja' | 'ko' | 'pt' | 'de' | 'it' | 'ru'
@@ -70,6 +76,9 @@ interface BackupStore {
   // Mod usage tracking (persisted — survives restarts)
   modUsageHistory: Record<string, ModUsageRecord>
 
+  // Extra raw config files in Options → Config INI
+  customConfigTabs: CustomConfigTab[]
+
   // Actions
   setLanguage: (v: string) => void
   setLogsEnabled: (v: boolean) => void
@@ -98,6 +107,8 @@ interface BackupStore {
 
   // Mod usage actions
   recordModsActive: (modIds: string[]) => void
+  addCustomConfigTab: (tab: CustomConfigTab) => void
+  removeCustomConfigTab: (id: string) => void
 }
 
 export const useBackupStore = create<BackupStore>()(
@@ -132,6 +143,7 @@ export const useBackupStore = create<BackupStore>()(
       friendContacts: [],
       activePingContactId: null,
       modUsageHistory: {},
+      customConfigTabs: [],
 
       setLanguage: (v) => set({ language: v }),
       setLogsEnabled: (v) => set({ logsEnabled: v }),
@@ -191,6 +203,17 @@ export const useBackupStore = create<BackupStore>()(
         }
         return { modUsageHistory: next }
       }),
+
+      addCustomConfigTab: (tab) =>
+        set((s) => ({
+          customConfigTabs: s.customConfigTabs.some((t) => t.id === tab.id)
+            ? s.customConfigTabs
+            : [...s.customConfigTabs, tab],
+        })),
+      removeCustomConfigTab: (id) =>
+        set((s) => ({
+          customConfigTabs: s.customConfigTabs.filter((t) => t.id !== id),
+        })),
     }),
     { name: 'ark-backup-config' }
   )

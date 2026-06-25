@@ -191,6 +191,8 @@ impl ConfigPersister {
         s.push_str(&format!("SupplyCrateLootQualityMultiplier={}\n",         adv.supply_crate_loot_quality_multiplier));
         s.push_str(&format!("FishingLootQualityMultiplier={}\n",             adv.fishing_loot_quality_multiplier));
         s.push_str(&format!("PlatformSaddleBuildAreaBoundsMultiplier={}\n",  adv.platform_structure_limit));
+        s.push_str(&format!("LimitGeneratorsNum={}\n",                       adv.limit_generators_num));
+        s.push_str(&format!("LimitGeneratorsRange={}\n",                     adv.limit_generators_range));
         s.push_str(&format!("bDisableFriendlyFire={}\n",                     b(adv.disable_friendly_fire)));
 
         // ── Per-level stat multipliers — Wild Dinos (indices 0-9) ────

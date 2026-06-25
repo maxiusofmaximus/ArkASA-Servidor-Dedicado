@@ -152,6 +152,8 @@ const FIELD_META: Record<string, { label: string; category: string }> = {
   'advanced.disable_dino_riding':                   { label: 'Sin montura de dinos',       category: 'Avanzado' },
   'advanced.disable_dino_taming':                   { label: 'Sin domado de dinos',        category: 'Avanzado' },
   'advanced.platform_structure_limit':              { label: 'Límite de estructuras en plataforma', category: 'Avanzado' },
+  'advanced.limit_generators_num':                  { label: 'Límite de generadores',              category: 'Estructuras' },
+  'advanced.limit_generators_range':                { label: 'Radio límite de generadores',        category: 'Estructuras' },
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

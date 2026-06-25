@@ -257,12 +257,21 @@ export interface AdvancedConfig {
   supply_crate_loot_quality_multiplier: number
   fishing_loot_quality_multiplier: number
   platform_structure_limit: number
+  limit_generators_num: number
+  limit_generators_range: number
   force_gacha_unhappy_in_caves: boolean
   disable_friendly_fire: boolean
   disable_structure_placement_collision: boolean
   only_allow_specific_engrams: boolean
   auto_unlock_engrams: number[]
   custom_config: Record<string, string>
+}
+
+export interface MapInstanceStatus {
+  map_index: number
+  map_id: string
+  map_label: string
+  running: boolean
 }
 
 // Main server configuration

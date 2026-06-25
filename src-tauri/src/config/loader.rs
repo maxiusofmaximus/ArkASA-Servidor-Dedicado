@@ -54,23 +54,27 @@ impl ConfigLoader {
     }
 
     fn parse_ini_to_config(content: &str) -> Result<ServerConfig> {
-        let mut config = ServerConfig::default();
+        Ok(Self::merge_ini_content(&ServerConfig::default(), content))
+    }
+
+    /// Merge INI key=value lines into an existing config (unknown keys → custom_config).
+    pub fn merge_ini_content(base: &ServerConfig, content: &str) -> ServerConfig {
+        let mut config = base.clone();
 
         for line in content.lines() {
             let trimmed = line.trim();
-
-            // Skip comments and empty lines
-            if trimmed.is_empty() || trimmed.starts_with(';') {
+            if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') {
                 continue;
             }
-
-            // Parse key=value pairs
+            if trimmed.starts_with('[') {
+                continue;
+            }
             if let Some((key, value)) = Self::parse_ini_line(trimmed) {
                 Self::apply_ini_value(&mut config, key, value);
             }
         }
 
-        Ok(config)
+        config
     }
 
     fn parse_ini_line(line: &str) -> Option<(&str, &str)> {
@@ -134,6 +138,12 @@ impl ConfigLoader {
             }
             "AllowFlyerCarry" => {
                 config.advanced.allow_flyer_carry = value.parse().unwrap_or(true)
+            }
+            "LimitGeneratorsNum" => {
+                config.advanced.limit_generators_num = value.parse().unwrap_or(0)
+            }
+            "LimitGeneratorsRange" => {
+                config.advanced.limit_generators_range = value.parse().unwrap_or(15000.0)
             }
 
             _ => {

@@ -7,6 +7,7 @@ import { useBackupStore } from '../../stores/backupStore'
 import ConnectionManager from './ConnectionManager'
 import FriendContacts from './FriendContacts'
 import type { ServerConfig } from '../../types'
+import { useI18n } from '../../i18n/useI18n'
 
 interface ArksTabProps {
   config: ServerConfig
@@ -44,6 +45,7 @@ export default function ArksTab({ config }: ArksTabProps) {
   const updateNetwork = useConfigUpdate('network')
   const { setConfig } = useConfigStore()
   const { onDemandEnabled, onDemandMaps, toggleOnDemandMap, autoShutdownMin, setAutoShutdownMin } = useBackupStore()
+  const { tk } = useI18n()
 
 
   const selectedMaps: string[] = config.cluster_maps?.length
@@ -141,19 +143,19 @@ export default function ArksTab({ config }: ArksTabProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase">
-                {isCluster ? 'Cluster de Mapas' : 'Mapa del Servidor'}
+                {isCluster ? tk('cluster_maps', 'Map Cluster') : tk('server_map', 'Server Map')}
               </span>
               {isCluster && (
                 <span
                   className="text-[9px] font-bold tracking-widest px-1.5 py-0.5 rounded"
                   style={{ background: 'rgba(0,200,255,0.15)', color: 'rgba(0,200,255,0.9)', border: '1px solid rgba(0,200,255,0.35)' }}
                 >
-                  {selectedMaps.length} INSTANCIAS
+                  {tk('n_instances', '{{count}} INSTANCES').replace('{{count}}', String(selectedMaps.length))}
                 </span>
               )}
             </div>
             <span className="text-ark-cyan/30 text-[10px]">
-              {isCluster ? 'clic para añadir/quitar' : selectedMaps[0]}
+              {isCluster ? tk('click_to_add_remove', 'click to add/remove') : selectedMaps[0]}
             </span>
           </div>
 
@@ -221,12 +223,12 @@ export default function ArksTab({ config }: ArksTabProps) {
                 className="grid text-[10px] font-bold tracking-widest px-3 py-1.5"
                 style={{ gridTemplateColumns: '1fr 3rem 4rem 4rem 4rem 5.5rem', background: 'rgba(0,200,255,0.08)', color: 'rgba(0,200,255,0.55)' }}
               >
-                <span>MAPA</span>
+                <span>{tk('map_col', 'MAP')}</span>
                 <span className="text-center">#</span>
                 <span className="text-right">GAME</span>
                 <span className="text-right">QUERY</span>
                 <span className="text-right">RCON</span>
-                <span className="text-right">MODO</span>
+                <span className="text-right">{tk('mode_col', 'MODE')}</span>
               </div>
 
               {selectedMaps.map((mapId, i) => {
@@ -234,7 +236,7 @@ export default function ArksTab({ config }: ArksTabProps) {
                 const gamePort  = (config.network?.port       ?? 7777)  + i * 2
                 const queryPort = (config.network?.query_port ?? 27015) + i
                 const rconPort  = (config.network?.rcon_port  ?? 27020) + i
-                const baseName  = config.identification?.session_name || 'Servidor'
+                const baseName  = config.identification?.session_name || tk('server_label', 'Server')
                 const mapLabel  = mapId.replace(/_WP$/, '')
                 const sessionName = i === 0 ? baseName : `${baseName} · ${mapLabel}`
                 const isDormant = onDemandEnabled && onDemandMaps.includes(mapId)
@@ -243,9 +245,9 @@ export default function ArksTab({ config }: ArksTabProps) {
                   <div key={mapId} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                     {/* Session name shown in browser */}
                     <div className="px-3 pt-1.5 text-[10px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                      Nombre en browser:{' '}
+                      {tk('browser_name', 'Browser name')}:{' '}
                       <span className="font-mono" style={{ color: mapInfo?.color ?? '#aaa' }}>
-                        {isDormant ? `${sessionName} [DORMIDO]` : sessionName}
+                        {isDormant ? `${sessionName} [${tk('dormant_label', '💤 DORMANT').replace('💤 ', '')}]` : sessionName}
                       </span>
                     </div>
                     <div
@@ -262,7 +264,7 @@ export default function ArksTab({ config }: ArksTabProps) {
                         {onDemandEnabled ? (
                           <button
                             onClick={() => toggleOnDemandMap(mapId)}
-                            title={isDormant ? 'Modo dormido: inicia al conectar' : 'Modo siempre activo'}
+                            title={isDormant ? tk('dormant_mode_hint', 'Sleep mode: starts on connect') : tk('active_mode_hint', 'Always-on mode')}
                             className="flex items-center gap-1 text-[9px] font-bold tracking-wider px-2 py-0.5 rounded transition-all"
                             style={isDormant ? {
                               background: 'rgba(99,102,241,0.2)',
@@ -274,11 +276,11 @@ export default function ArksTab({ config }: ArksTabProps) {
                               border: '1px solid rgba(255,255,255,0.1)',
                             }}
                           >
-                            {isDormant ? '🌙 DORMIDO' : '▶ ACTIVO'}
+                            {isDormant ? tk('dormant_label', '💤 DORMANT') : tk('active_label', '⚡ ACTIVE')}
                           </button>
                         ) : (
                           <span className="text-[9px] font-bold tracking-wider px-2 py-0.5" style={{ color: 'rgba(255,255,255,0.15)' }}>
-                            ▶ ACTIVO
+                            {tk('active_label', '⚡ ACTIVE')}
                           </span>
                         )}
                       </div>
@@ -294,7 +296,7 @@ export default function ArksTab({ config }: ArksTabProps) {
                   style={{ borderTop: '1px solid rgba(99,102,241,0.2)', background: 'rgba(99,102,241,0.05)' }}
                 >
                   <span className="text-[10px] font-bold tracking-widest" style={{ color: 'rgba(165,180,252,0.7)' }}>
-                    🌙 AUTO-APAGAR TRAS
+                    {tk('auto_shutdown_after', '🌙 AUTO-SHUTDOWN AFTER')}
                   </span>
                   <div className="flex items-center gap-1.5">
                     <input
@@ -305,7 +307,7 @@ export default function ArksTab({ config }: ArksTabProps) {
                       onChange={(e) => setAutoShutdownMin(Math.max(0, parseInt(e.target.value) || 0))}
                       className="w-16 bg-transparent border border-ark-cyan/30 text-ark-cyan/90 text-xs px-2 py-0.5 rounded focus:outline-none focus:border-ark-cyan/70 text-center font-mono"
                     />
-                    <span className="text-[10px]" style={{ color: 'rgba(165,180,252,0.5)' }}>min vacío (0 = nunca)</span>
+                    <span className="text-[10px]" style={{ color: 'rgba(165,180,252,0.5)' }}>{tk('min_empty', 'min empty (0 = never)')}</span>
                   </div>
                 </div>
               )}
@@ -314,10 +316,10 @@ export default function ArksTab({ config }: ArksTabProps) {
                 className="px-3 py-1.5 text-[10px]"
                 style={{ borderTop: '1px solid rgba(255,255,255,0.05)', color: 'rgba(0,200,255,0.4)' }}
               >
-                Los jugadores viajan entre servidores desde los obeliscos / terminales del juego.
+                {tk('cluster_travel_hint', 'Players travel between servers from obelisks / game terminals.')}
                 {onDemandEnabled && onDemandMaps.some((m) => selectedMaps.includes(m)) && (
                   <span style={{ color: 'rgba(165,180,252,0.55)' }}>
-                    {' '}· Mapas <span style={{ color: 'rgba(165,180,252,0.8)' }}>DORMIDOS</span> aparecen en el browser pero inician ARK solo al conectar.
+                    {' '}· {tk('dormant_browser_hint', 'DORMANT maps appear in the browser but start ARK only on connect.')}
                   </span>
                 )}
               </div>

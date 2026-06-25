@@ -1,17 +1,21 @@
 import React, { useState, useRef } from 'react'
 import Tooltip from './Tooltip'
 import { useI18n } from '../i18n/useI18n'
+import { invoke } from '../services/tauri'
+import type { ServerConfig } from '../types'
 
 interface ActionBarProps {
   onSave?: () => Promise<void> | void
   onReset?: () => void
   onBack?: () => void
   onChooseDifficulty?: () => void
-  onStartServer?: () => void
-  onStopServer?: () => void
+  onStartServer?: (mapIndex?: number) => void
+  onStopServer?: (mapIndex?: number) => void
   onOpenOptions?: () => void
   onToggleLogs?: () => void
   onImportConfig?: (tomlText: string) => void
+  onImportError?: (msg: string) => void
+  mapStatuses?: import('../types').MapInstanceStatus[]
   isSaving?: boolean
   autoSave?: boolean
   isServerRunning?: boolean
@@ -36,6 +40,7 @@ export default function ActionBar({
   onOpenOptions,
   onToggleLogs,
   onImportConfig,
+  onImportError,
   isSaving = false,
   autoSave = true,
   isServerRunning = false,
@@ -47,9 +52,12 @@ export default function ActionBar({
   canRedo = false,
   onUndo,
   onRedo,
+  mapStatuses = [],
   variant = 'default',
 }: ActionBarProps) {
   const [saveOk, setSaveOk] = useState(false)
+  const [startMenuOpen, setStartMenuOpen] = useState(false)
+  const [stopMenuOpen, setStopMenuOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { tk, tip } = useI18n()
 
@@ -65,17 +73,43 @@ export default function ActionBar({
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !onImportConfig) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const text = ev.target?.result
-      if (typeof text === 'string') onImportConfig(text)
+    const isZip = file.name.toLowerCase().endsWith('.zip')
+    if (isZip) {
+      const reader = new FileReader()
+      reader.onload = async (ev) => {
+        const buf = ev.target?.result
+        if (!(buf instanceof ArrayBuffer)) return
+        const bytes = Array.from(new Uint8Array(buf))
+        try {
+          const config = await invoke<ServerConfig>('parse_config_from_zip', { zipData: bytes })
+          // Re-serialize to TOML is not needed — pass config JSON through a round-trip
+          // by serializing the parsed config back to TOML via Rust
+          const tomlText = await invoke<string>('config_to_toml', { config })
+          onImportConfig(tomlText)
+        } catch (err) {
+          onImportError?.(`Failed to extract config from zip: ${String(err)}`)
+        }
+      }
+      reader.readAsArrayBuffer(file)
+    } else {
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const text = ev.target?.result
+        if (typeof text === 'string') onImportConfig(text)
+      }
+      reader.readAsText(file)
     }
-    reader.readAsText(file)
     e.target.value = ''
   }
 
-  const startDisabled = isServerStarting || isServerRunning
+  const startDisabled = isServerStarting
   const stopDisabled  = isServerStopping
+
+  const runningMaps = mapStatuses.filter((s) => s.running)
+  const stoppedMaps = mapStatuses.filter((s) => !s.running)
+  const isCluster = mapStatuses.length > 1
+  const anyRunning = runningMaps.length > 0
+  const anyStopped = stoppedMaps.length > 0
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-20 ark-panel border-t border-ark-cyan/40 px-6 py-3 flex items-center justify-between">
@@ -121,7 +155,7 @@ export default function ActionBar({
             </Tooltip>
 
             {/* Undo / Redo */}
-            <Tooltip content="Deshacer último cambio (Ctrl+Z)">
+            <Tooltip content={tk('undo_tooltip', 'Undo last change (Ctrl+Z)')}>
               <button
                 onClick={onUndo}
                 disabled={!canUndo}
@@ -131,7 +165,7 @@ export default function ActionBar({
                 ↩
               </button>
             </Tooltip>
-            <Tooltip content="Rehacer cambio desecho (Ctrl+Y)">
+            <Tooltip content={tk('redo_tooltip', 'Redo change (Ctrl+Y)')}>
               <button
                 onClick={onRedo}
                 disabled={!canRedo}
@@ -171,7 +205,7 @@ export default function ActionBar({
         {/* Import config */}
         {onImportConfig && (
           <>
-            <input ref={fileInputRef} type="file" accept=".toml" className="hidden" onChange={handleFileSelect} />
+            <input ref={fileInputRef} type="file" accept=".toml,.zip" className="hidden" onChange={handleFileSelect} />
             <Tooltip content={tip('import_config') ?? ''}>
               <button
                 onClick={() => fileInputRef.current?.click()}
@@ -218,32 +252,115 @@ export default function ActionBar({
           - DEDICATED SERVER -
         </span>
 
-        {isServerRunning || isServerStopping ? (
-          <Tooltip content={tip('stop_server') ?? ''}>
-            <button
-              onClick={onStopServer}
-              disabled={stopDisabled}
-              className="ark-action-btn px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background:  stopDisabled ? 'rgba(239,68,68,0.07)' : 'rgba(239,68,68,0.15)',
-                color:       'rgba(239,68,68,0.9)',
-                outlineColor:'rgba(239,68,68,0.6)',
-                boxShadow:   stopDisabled ? 'none' : '0 0 12px rgba(239,68,68,0.3)',
-              }}
-            >
-              {isServerStopping ? tk('stopping', '■ DETENIENDO...') : tk('stop_server', '■ DETENER SERVIDOR')}
-            </button>
-          </Tooltip>
-        ) : (
-          <Tooltip content={tip('start_server') ?? ''}>
-            <button
-              onClick={onStartServer}
-              disabled={startDisabled}
-              className="ark-action-btn ark-action-btn-amber-active px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isServerStarting ? tk('starting', '▶ INICIANDO...') : tk('start_server', '▶ SERVIDOR DEDICADO')}
-            </button>
-          </Tooltip>
+        {/* Start — show when stopped instances exist */}
+        {anyStopped && (
+          <div className="relative flex">
+            <Tooltip content={tip('start_server') ?? ''}>
+              <button
+                onClick={() => onStartServer?.()}
+                disabled={startDisabled}
+                className="ark-action-btn ark-action-btn-amber-active px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ borderRight: isCluster ? 'none' : undefined, borderRadius: isCluster ? '4px 0 0 4px' : undefined }}
+              >
+                {isServerStarting
+                  ? tk('starting', '▶ INICIANDO...')
+                  : isCluster && anyRunning
+                    ? tk('start_all_stopped', '▶ INICIAR DETENIDOS')
+                    : tk('start_server', '▶ SERVIDOR DEDICADO')}
+              </button>
+            </Tooltip>
+            {isCluster && (
+              <button
+                onClick={() => setStartMenuOpen((o) => !o)}
+                disabled={startDisabled}
+                className="ark-action-btn ark-action-btn-amber-active px-2 py-2 disabled:opacity-50"
+                style={{ borderLeft: '1px solid rgba(251,191,36,0.25)', borderRadius: '0 4px 4px 0' }}
+                aria-label="Start menu"
+              >
+                ▼
+              </button>
+            )}
+            {startMenuOpen && (
+              <div
+                className="absolute bottom-full right-0 mb-1 min-w-[200px] rounded-md py-1 z-30 ark-panel"
+                style={{ border: '1px solid rgba(0,200,255,0.25)' }}
+              >
+                {stoppedMaps.map((m) => (
+                  <button
+                    key={m.map_index}
+                    className="w-full text-left px-4 py-2 text-xs text-ark-cyan/80 hover:bg-ark-cyan/10"
+                    onClick={() => {
+                      setStartMenuOpen(false)
+                      onStartServer?.(m.map_index)
+                    }}
+                  >
+                    ▶ {m.map_label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Stop — show when any instance is running */}
+        {anyRunning && (
+          <div className="relative flex">
+            <Tooltip content={tip('stop_server') ?? ''}>
+              <button
+                onClick={() => onStopServer?.()}
+                disabled={stopDisabled}
+                className="ark-action-btn px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  background:  stopDisabled ? 'rgba(239,68,68,0.07)' : 'rgba(239,68,68,0.15)',
+                  color:       'rgba(239,68,68,0.9)',
+                  outlineColor:'rgba(239,68,68,0.6)',
+                  boxShadow:   stopDisabled ? 'none' : '0 0 12px rgba(239,68,68,0.3)',
+                  borderRight: isCluster ? 'none' : undefined,
+                  borderRadius: isCluster ? '4px 0 0 4px' : undefined,
+                }}
+              >
+                {isServerStopping
+                  ? tk('stopping', '■ DETENIENDO...')
+                  : tk('stop_server', '■ DETENER SERVIDOR')}
+              </button>
+            </Tooltip>
+            {isCluster && (
+              <button
+                onClick={() => setStopMenuOpen((o) => !o)}
+                disabled={stopDisabled}
+                className="ark-action-btn px-2 py-2 disabled:opacity-50"
+                style={{
+                  background: stopDisabled ? 'rgba(239,68,68,0.07)' : 'rgba(239,68,68,0.15)',
+                  color: 'rgba(239,68,68,0.9)',
+                  outlineColor: 'rgba(239,68,68,0.6)',
+                  borderLeft: '1px solid rgba(239,68,68,0.35)',
+                  borderRadius: '0 4px 4px 0',
+                }}
+                aria-label="Stop menu"
+              >
+                ▼
+              </button>
+            )}
+            {stopMenuOpen && (
+              <div
+                className="absolute bottom-full right-0 mb-1 min-w-[200px] rounded-md py-1 z-30 ark-panel"
+                style={{ border: '1px solid rgba(239,68,68,0.25)' }}
+              >
+                {runningMaps.map((m) => (
+                  <button
+                    key={m.map_index}
+                    className="w-full text-left px-4 py-2 text-xs text-red-300/80 hover:bg-red-500/10"
+                    onClick={() => {
+                      setStopMenuOpen(false)
+                      onStopServer?.(m.map_index)
+                    }}
+                  >
+                    ■ {m.map_label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -382,27 +382,34 @@ Section "$(SEC_APP_NAME)" SEC_APP
     ExecWait '"$TEMP\ark-app-setup.exe" /S' $0
     Delete "$TEMP\ark-app-setup.exe"
 
+    ; Read the actual install location written by the inner NSIS installer
+    ; Tauri v2 NSIS writes to HKCU uninstall key with value "InstallLocation"
+    Var /GLOBAL AppExePath
+    ReadRegStr $AppExePath HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARK ASA Config Manager" "InstallLocation"
+    ${If} $AppExePath == ""
+        ; Fallback: Tauri v2 default per-user install path
+        StrCpy $AppExePath "$LOCALAPPDATA\ARK ASA Config Manager"
+    ${EndIf}
+    StrCpy $AppExePath "$AppExePath\ark-asa-config.exe"
+
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     WriteRegStr   HKLM "Software\ARKASAConfigManager" "InstallDir" "$INSTDIR"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "DisplayName"     "ARK ASA Configuration Manager"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-    WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "DisplayVersion"  "1.3"
+    WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "DisplayVersion"  "1.4"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "Publisher"       "ARK ASA Config Manager"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "URLInfoAbout"    "https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ARKASAConfigManager" "NoRepair" 1
 
     ${If} $CreateDesktopShortcut == ${BST_CHECKED}
-        CreateShortcut "$DESKTOP\ARK ASA Config Manager.lnk" \
-            "$PROGRAMFILES64\ARK ASA Config Manager\ark-asa-config.exe"
+        CreateShortcut "$DESKTOP\ARK ASA Config Manager.lnk" "$AppExePath"
     ${EndIf}
     ${If} $CreateStartMenuShortcut == ${BST_CHECKED}
         CreateDirectory "$SMPROGRAMS\ARK ASA Config Manager"
-        CreateShortcut "$SMPROGRAMS\ARK ASA Config Manager\ARK ASA Config Manager.lnk" \
-            "$PROGRAMFILES64\ARK ASA Config Manager\ark-asa-config.exe"
-        CreateShortcut "$SMPROGRAMS\ARK ASA Config Manager\Uninstall.lnk" \
-            "$INSTDIR\Uninstall.exe"
+        CreateShortcut "$SMPROGRAMS\ARK ASA Config Manager\ARK ASA Config Manager.lnk" "$AppExePath"
+        CreateShortcut "$SMPROGRAMS\ARK ASA Config Manager\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
     ${EndIf}
 SectionEnd
 

@@ -1,53 +1,35 @@
 import { useState } from 'react'
 import { invoke } from '../../services/tauri'
 import type { ServerConfig, ConnectionMethod, NetworkConfig, DetectedIps } from '../../types'
+import { useI18n } from '../../i18n/useI18n'
 
 interface ConnectionManagerProps {
   config: ServerConfig
   updateNetwork: (field: keyof NetworkConfig, value: string) => void
 }
 
-type MethodMeta = {
-  label: string
-  field: keyof Pick<NetworkConfig, 'tailscale_ip' | 'public_ip' | 'duckdns_host' | 'local_ip' | 'manual_ip'>
-  placeholder: string
-  hint: string
-}
-
-const METHODS: Record<ConnectionMethod, MethodMeta> = {
-  tailscale: {
-    label: 'Tailscale',
-    field: 'tailscale_ip',
-    placeholder: '100.x.x.x',
-    hint: 'VPN — amigos deben tener Tailscale instalado y estar en tu red',
-  },
-  public: {
-    label: 'IP Pública',
-    field: 'public_ip',
-    placeholder: '181.237.x.x',
-    hint: 'IP pública directa — requiere port forwarding en el router',
-  },
-  duckdns: {
-    label: 'DuckDNS',
-    field: 'duckdns_host',
-    placeholder: 'ark-max.duckdns.org',
-    hint: 'Hostname DNS fijo — actualizado automáticamente aunque cambie la IP pública',
-  },
-  local: {
-    label: 'IP Local',
-    field: 'local_ip',
-    placeholder: '192.168.x.x',
-    hint: 'Solo LAN — amigos deben estar en la misma red Wi-Fi/ethernet',
-  },
-  manual: {
-    label: 'Manual',
-    field: 'manual_ip',
-    placeholder: 'cualquier IP o hostname',
-    hint: 'Cualquier valor personalizado — también usado si solo tienes el campo antiguo',
-  },
-}
-
 const METHOD_ORDER: ConnectionMethod[] = ['tailscale', 'public', 'duckdns', 'local', 'manual']
+const METHOD_FIELDS: Record<ConnectionMethod, keyof Pick<NetworkConfig, 'tailscale_ip' | 'public_ip' | 'duckdns_host' | 'local_ip' | 'manual_ip'>> = {
+  tailscale: 'tailscale_ip',
+  public:    'public_ip',
+  duckdns:   'duckdns_host',
+  local:     'local_ip',
+  manual:    'manual_ip',
+}
+const METHOD_PLACEHOLDERS: Record<ConnectionMethod, string> = {
+  tailscale: '100.x.x.x',
+  public:    '181.237.x.x',
+  duckdns:   'ark-max.duckdns.org',
+  local:     '192.168.x.x',
+  manual:    '...',
+}
+const METHOD_LABELS: Record<ConnectionMethod, string> = {
+  tailscale: 'Tailscale',
+  public:    'Public IP',
+  duckdns:   'DuckDNS',
+  local:     'Local IP',
+  manual:    'Manual',
+}
 
 function effectiveIp(n: NetworkConfig): string {
   const map: Record<ConnectionMethod, string> = {
@@ -63,8 +45,8 @@ function effectiveIp(n: NetworkConfig): string {
 export default function ConnectionManager({ config, updateNetwork }: ConnectionManagerProps) {
   const net = config.network
   const method = net.connection_method ?? 'manual'
-  const meta = METHODS[method]
   const ip = effectiveIp(net)
+  const { tk } = useI18n()
 
   const [detecting, setDetecting] = useState(false)
   const [detectMsg, setDetectMsg] = useState<string | null>(null)
@@ -75,10 +57,10 @@ export default function ConnectionManager({ config, updateNetwork }: ConnectionM
     try {
       const ips = await invoke<DetectedIps>('detect_ips')
       const found: string[] = []
-      if (ips.public_ip)    { updateNetwork('public_ip',    ips.public_ip);    found.push(`Pública: ${ips.public_ip}`) }
+      if (ips.public_ip)    { updateNetwork('public_ip',    ips.public_ip);    found.push(`${tk('public_ip_label', 'Public')}: ${ips.public_ip}`) }
       if (ips.tailscale_ip) { updateNetwork('tailscale_ip', ips.tailscale_ip); found.push(`Tailscale: ${ips.tailscale_ip}`) }
       if (ips.local_ip)     { updateNetwork('local_ip',     ips.local_ip);     found.push(`Local: ${ips.local_ip}`) }
-      setDetectMsg(found.length > 0 ? found.join(' · ') : 'No se detectaron IPs automáticamente')
+      setDetectMsg(found.length > 0 ? found.join(' · ') : tk('no_ip_detected', 'No IPs detected automatically'))
     } catch (e) {
       setDetectMsg(`Error: ${String(e)}`)
     } finally {
@@ -86,12 +68,20 @@ export default function ConnectionManager({ config, updateNetwork }: ConnectionM
     }
   }
 
+  const hintKey: Record<ConnectionMethod, string> = {
+    tailscale: 'method_tailscale_hint',
+    public:    'method_public_hint',
+    duckdns:   'method_duckdns_hint',
+    local:     'method_local_hint',
+    manual:    'method_manual_hint',
+  }
+
   return (
     <div className="ark-panel rounded-lg p-4 space-y-3">
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <span className="text-ark-cyan/70 text-xs font-bold tracking-widest uppercase flex-shrink-0">
-          Conexión del Servidor
+          {tk('server_connection', 'Server Connection')}
         </span>
         <div className="flex items-center gap-2 min-w-0">
           {ip ? (
@@ -103,16 +93,15 @@ export default function ConnectionManager({ config, updateNetwork }: ConnectionM
             </span>
           ) : (
             <span className="text-[10px] truncate" style={{ color: 'rgba(255,255,255,0.2)' }}>
-              sin -ip
+              {tk('no_ip', 'no -ip')}
             </span>
           )}
           <button
             onClick={handleDetect}
             disabled={detecting}
             className="flex-shrink-0 ark-action-btn text-[10px] px-2.5 py-0.5"
-            title="Detectar automáticamente IP pública, Tailscale y local"
           >
-            {detecting ? '⏳' : '🔍 Detectar'}
+            {detecting ? '⏳' : `🔍 ${tk('detect', 'Detect')}`}
           </button>
         </div>
       </div>
@@ -146,7 +135,7 @@ export default function ConnectionManager({ config, updateNetwork }: ConnectionM
                 border: '1px solid rgba(255,255,255,0.1)',
               }}
             >
-              {METHODS[m].label}
+              {METHOD_LABELS[m]}
             </button>
           )
         })}
@@ -156,12 +145,12 @@ export default function ConnectionManager({ config, updateNetwork }: ConnectionM
       <div className="space-y-1">
         <input
           type="text"
-          value={(net[meta.field] as string) ?? ''}
-          onChange={(e) => updateNetwork(meta.field, e.target.value)}
-          placeholder={meta.placeholder}
+          value={(net[METHOD_FIELDS[method]] as string) ?? ''}
+          onChange={(e) => updateNetwork(METHOD_FIELDS[method], e.target.value)}
+          placeholder={METHOD_PLACEHOLDERS[method]}
           className="w-full bg-transparent border border-ark-cyan/30 text-ark-cyan/90 text-sm px-3 py-1.5 rounded focus:outline-none focus:border-ark-cyan/70 placeholder-ark-cyan/25 font-mono"
         />
-        <p className="text-ark-cyan/35 text-[10px] leading-relaxed">{meta.hint}</p>
+        <p className="text-ark-cyan/35 text-[10px] leading-relaxed">{tk(hintKey[method], '')}</p>
       </div>
     </div>
   )

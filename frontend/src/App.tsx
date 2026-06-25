@@ -7,6 +7,7 @@ import { useBackupStore } from './stores/backupStore'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
 import { useAutoSave } from './hooks/useAutoSave'
 import { useTauriEvents } from './hooks/useTauriEvents'
+import { useI18n } from './i18n/useI18n'
 
 // Layout & chrome
 import ArkLayout from './components/ArkLayout'
@@ -82,11 +83,12 @@ function App() {
           undo, redo, historyIndex, history } = useConfigStore()
   const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore()
   const { logsEnabled, minimizeToTray, manualSave } = useBackupStore()
+  const { tk } = useI18n()
 
   // ── Diff viewer state ─────────────────────────────────────────────────────
   const [diffEntries,  setDiffEntries]  = useState<DiffEntry[]>([])
   const [diffTitle,    setDiffTitle]    = useState<string>()
-  const [diffApplyLabel, setDiffApplyLabel] = useState<string>('Aplicar cambios')
+  const [diffApplyLabel, setDiffApplyLabel] = useState<string>(tk('apply_changes', 'Apply Changes'))
   const [pendingApply, setPendingApply] = useState<(() => void) | null>(null)
 
   // ── Auto-dismiss error after 3 s ──────────────────────────────────────────
@@ -113,6 +115,7 @@ function App() {
   const {
     serverRunning, stubsRunning,
     isServerStarting, isServerStopping,
+    mapStatuses,
     handleStartServer, handleStopServer,
   } = useServerLifecycle({ config, setSaving, setError })
 
@@ -120,8 +123,8 @@ function App() {
   useTauriEvents({
     config,
     minimizeToTray,
-    onDemandWaking: (map) => setWakeInfo(`⏳ ${map.replace('_WP', '')} está iniciando… reconéctate en ~5 min`),
-    onDemandReady:  (map) => setWakeInfo(`✅ ${map.replace('_WP', '')} está listo — conéctate ahora`),
+    onDemandWaking: (map) => setWakeInfo(`⏳ ${tk('on_demand_waking', '{{name}} is starting… reconnect in ~5 min').replace('{{name}}', map.replace('_WP', ''))}`),
+    onDemandReady:  (map) => setWakeInfo(`✅ ${tk('on_demand_ready', '{{name}} is ready — connect now').replace('{{name}}', map.replace('_WP', ''))}`),
   })
 
   // Escape → toggle Options (unless DifficultyModal is open)
@@ -199,8 +202,8 @@ function App() {
       const diffs = computeDiff(savedConfig, config)
       if (diffs.length >= 6) {
         setDiffEntries(diffs)
-        setDiffTitle(`Guardar Configuración — ${diffs.length} cambios`)
-        setDiffApplyLabel('Guardar todo')
+        setDiffTitle(`${tk('save_settings', 'Save Settings')} — ${diffs.length} ${diffs.length === 1 ? tk('save_count_singular', 'change') : tk('save_count_plural', 'changes')}`)
+        setDiffApplyLabel(tk('save_all', 'SAVE ALL'))
         setPendingApply(() => doSave)
         return
       }
@@ -223,21 +226,21 @@ function App() {
       const imported: ServerConfig = await invoke('parse_config_from_toml', { tomlStr: tomlText })
       const diffs = computeDiff(config, imported)
       if (diffs.length === 0) {
-        setError('El archivo importado es idéntico a la configuración actual.')
+        setError(tk('import_identical', 'The imported file is identical to the current configuration.'))
         return
       }
       setDiffEntries(diffs)
-      setDiffTitle(`Importar Configuración — ${diffs.length} cambios`)
-      setDiffApplyLabel('Aplicar importación')
+      setDiffTitle(`${tk('import_config', 'Import Config')} — ${diffs.length} ${diffs.length === 1 ? tk('save_count_singular', 'change') : tk('save_count_plural', 'changes')}`)
+      setDiffApplyLabel(tk('apply_changes', 'Apply Changes'))
       setPendingApply(() => () => {
         setConfig(imported)
         setSavedConfig(imported)
         invoke('save_config', { config: imported }).catch((e) =>
-          setError(`Error al guardar: ${e}`)
+          setError(`Failed to save: ${e}`)
         )
       })
     } catch (err) {
-      setError(`Error al importar: ${err instanceof Error ? err.message : String(err)}`)
+      setError(`${tk('import_error', 'Import error')}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -320,6 +323,7 @@ function App() {
         onOpenOptions={() => setShowOptionsModal(true)}
         onToggleLogs={() => setShowLogsPanel((p) => !p)}
         onImportConfig={handleImportConfig}
+        mapStatuses={mapStatuses}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
         onUndo={undo}
