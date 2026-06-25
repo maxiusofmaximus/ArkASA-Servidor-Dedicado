@@ -24,7 +24,7 @@ export interface CustomConfigTab {
   path: string
 }
 
-interface BackupStore {
+export interface BackupStore {
   // General options
   language: string          // 'en' | 'es' | 'fr' | 'zh' | 'ja' | 'ko' | 'pt' | 'de' | 'it' | 'ru'
   logsEnabled: boolean

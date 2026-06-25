@@ -28,7 +28,10 @@ impl SteamCmdInstaller {
     }
 
     async fn run_steamcmd(&self, args: &[&str]) -> Result<()> {
+        #[cfg(target_os = "windows")]
         let steamcmd_exe = self.steam_cmd_dir.join("steamcmd.exe");
+        #[cfg(not(target_os = "windows"))]
+        let steamcmd_exe = self.steam_cmd_dir.join("steamcmd.sh");
 
         if !steamcmd_exe.exists() {
             return Err(Error::ProcessError(

@@ -8,7 +8,7 @@ interface NavSnapshot {
   modSettingsSubTab: ModSettingsSubTab
 }
 
-interface UiStore {
+export interface UiStore {
   primaryTab: PrimaryTab
   gameRulesSubTab: GameRulesSubTab
   advancedSubTab: AdvancedSubTab

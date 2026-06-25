@@ -1,5 +1,6 @@
 import React from 'react'
-import { useUiStore } from '../stores/uiStore'
+import { useUiStore, type UiStore } from '../stores/uiStore'
+import { useShallow } from 'zustand/react/shallow'
 import type { GameRulesSubTab, AdvancedSubTab, ModSettingsSubTab, PrimaryTab } from '../types'
 
 interface SubNavProps {
@@ -45,7 +46,13 @@ function SubNavBar({ children }: { children: React.ReactNode }) {
 }
 
 export default function SubNav({ primaryTab }: SubNavProps) {
-  const { gameRulesSubTab, setGameRulesSubTab, advancedSubTab, setAdvancedSubTab, modSettingsSubTab, setModSettingsSubTab } = useUiStore()
+  const { gameRulesSubTab, setGameRulesSubTab, advancedSubTab, setAdvancedSubTab, modSettingsSubTab, setModSettingsSubTab } = useUiStore(
+    useShallow((s: UiStore) => ({
+      gameRulesSubTab: s.gameRulesSubTab, setGameRulesSubTab: s.setGameRulesSubTab,
+      advancedSubTab: s.advancedSubTab, setAdvancedSubTab: s.setAdvancedSubTab,
+      modSettingsSubTab: s.modSettingsSubTab, setModSettingsSubTab: s.setModSettingsSubTab,
+    }))
+  )
 
   if (primaryTab === 'game_rules') {
     return (

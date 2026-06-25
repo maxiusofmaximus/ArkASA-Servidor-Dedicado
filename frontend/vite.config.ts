@@ -7,9 +7,13 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    warmup: {
+      clientFiles: ['./src/App.tsx', './src/main.tsx'],
+    },
   },
   build: {
     target: 'esnext',
+    cssMinify: 'lightningcss',
     minify: 'esbuild',
     sourcemap: false,
   },

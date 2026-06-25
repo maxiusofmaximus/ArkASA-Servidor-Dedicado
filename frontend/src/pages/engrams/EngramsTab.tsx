@@ -1,12 +1,13 @@
 import React, { useState, useMemo } from 'react'
-import { useConfigStore } from '../../stores/configStore'
+import { useConfigStore, type ConfigStore } from '../../stores/configStore'
+import { useShallow } from 'zustand/react/shallow'
 import type { AdvancedConfig } from '../../types'
 import { ENGRAMS_DB } from './data/engrams-db'
 
 const CATEGORIES = ['All', ...Array.from(new Set(ENGRAMS_DB.map(e => e.category)))]
 
 export default function EngramsTab() {
-  const { config, setConfig } = useConfigStore()
+  const { config, setConfig } = useConfigStore(useShallow((s: ConfigStore) => ({ config: s.config, setConfig: s.setConfig })))
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [customId, setCustomId] = useState('')

@@ -348,16 +348,22 @@ impl NetworkConfig {
 }
 
 impl PathsConfig {
-    /// Absolute path to ArkAscendedServer.exe derived from server_dir.
+    /// Absolute path to ArkAscendedServer derived from server_dir.
     pub fn ark_exe(&self) -> String {
-        let dir = self.server_dir.trim_end_matches('\\');
-        format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", dir)
+        let dir = self.server_dir.trim_end_matches(|c| c == '\\' || c == '/');
+        #[cfg(target_os = "windows")]
+        { format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", dir) }
+        #[cfg(not(target_os = "windows"))]
+        { format!("{}/ShooterGame/Binaries/Linux/ArkAscendedServer", dir) }
     }
 
     /// Cluster save directory (sibling of ShooterGame).
     pub fn cluster_dir(&self) -> String {
-        let dir = self.server_dir.trim_end_matches('\\');
-        format!("{}\\clusters", dir)
+        let dir = self.server_dir.trim_end_matches(|c| c == '\\' || c == '/');
+        #[cfg(target_os = "windows")]
+        { format!("{}\\clusters", dir) }
+        #[cfg(not(target_os = "windows"))]
+        { format!("{}/clusters", dir) }
     }
 }
 
@@ -554,13 +560,22 @@ impl Default for ModsConfig {
 
 impl Default for PathsConfig {
     fn default() -> Self {
-        Self {
+        #[cfg(target_os = "windows")]
+        { Self {
             steam_cmd_dir: "C:\\ASA\\steamcmd".to_string(),
             server_dir: "C:\\ASA\\server".to_string(),
             backup_dir: "C:\\ASA\\backups".to_string(),
             game_ini_path: "C:\\ASA\\server\\ShooterGame\\Saved\\Config\\WindowsServer\\Game.ini".to_string(),
             gamesettings_ini_path: "C:\\ASA\\server\\ShooterGame\\Saved\\Config\\WindowsServer\\GameUserSettings.ini".to_string(),
-        }
+        }}
+        #[cfg(not(target_os = "windows"))]
+        { Self {
+            steam_cmd_dir: "/usr/games/steamcmd".to_string(),
+            server_dir: "/opt/asa/server".to_string(),
+            backup_dir: "/opt/asa/backups".to_string(),
+            game_ini_path: "/opt/asa/server/ShooterGame/Saved/Config/LinuxServer/Game.ini".to_string(),
+            gamesettings_ini_path: "/opt/asa/server/ShooterGame/Saved/Config/LinuxServer/GameUserSettings.ini".to_string(),
+        }}
     }
 }
 

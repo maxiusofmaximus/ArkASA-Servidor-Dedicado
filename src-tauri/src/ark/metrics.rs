@@ -117,7 +117,7 @@ impl ProcessMetrics {
 
         Ok(ProcessMetrics {
             pid,
-            name: "ArkAscendedServer.exe".to_string(),
+            name: if cfg!(target_os = "windows") { "ArkAscendedServer.exe" } else { "ArkAscendedServer" }.to_string(),
             cpu_percent: 25.0,
             memory_mb: 4096,
             threads: 128,

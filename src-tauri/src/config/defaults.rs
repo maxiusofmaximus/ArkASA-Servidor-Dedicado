@@ -61,11 +61,27 @@ impl AppConfig {
 
 // Server configuration defaults
 pub mod server_defaults {
+    #[cfg(target_os = "windows")]
     pub const STEAMCMD_DIR: &str = "C:\\steamcmd";
+    #[cfg(target_os = "windows")]
     pub const SERVER_DIR: &str = "C:\\ASA\\server";
+    #[cfg(target_os = "windows")]
     pub const BACKUP_DIR: &str = "C:\\ASA\\backups";
+    #[cfg(target_os = "windows")]
     pub const GAME_INI_PATH: &str = "C:\\ASA\\server\\ShooterGame\\Saved\\Config\\WindowsServer\\Game.ini";
+    #[cfg(target_os = "windows")]
     pub const GAMESETTINGS_INI_PATH: &str = "C:\\ASA\\server\\ShooterGame\\Saved\\Config\\WindowsServer\\GameUserSettings.ini";
+
+    #[cfg(not(target_os = "windows"))]
+    pub const STEAMCMD_DIR: &str = "/usr/games/steamcmd";
+    #[cfg(not(target_os = "windows"))]
+    pub const SERVER_DIR: &str = "/opt/asa/server";
+    #[cfg(not(target_os = "windows"))]
+    pub const BACKUP_DIR: &str = "/opt/asa/backups";
+    #[cfg(not(target_os = "windows"))]
+    pub const GAME_INI_PATH: &str = "/opt/asa/server/ShooterGame/Saved/Config/LinuxServer/Game.ini";
+    #[cfg(not(target_os = "windows"))]
+    pub const GAMESETTINGS_INI_PATH: &str = "/opt/asa/server/ShooterGame/Saved/Config/LinuxServer/GameUserSettings.ini";
 
     // Game defaults
     pub const DEFAULT_PORT: u16 = 7777;

@@ -35,41 +35,71 @@ impl ProcessManager {
     }
 
     pub async fn kill_process(process_id: u32) -> Result<()> {
-        let output = Command::new("taskkill")
-            .arg("/PID")
-            .arg(process_id.to_string())
-            .arg("/F")
-            .output()
-            .await
-            .map_err(|e| Error::ProcessError(format!("Failed to kill process: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::ProcessError(format!("Failed to kill process: {}", stderr)));
+        #[cfg(windows)]
+        {
+            let output = Command::new("taskkill")
+                .arg("/PID")
+                .arg(process_id.to_string())
+                .arg("/F")
+                .output()
+                .await
+                .map_err(|e| Error::ProcessError(format!("Failed to kill process: {}", e)))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(Error::ProcessError(format!("Failed to kill process: {}", stderr)));
+            }
         }
-
+        #[cfg(not(windows))]
+        {
+            let output = Command::new("kill")
+                .arg("-9")
+                .arg(process_id.to_string())
+                .output()
+                .await
+                .map_err(|e| Error::ProcessError(format!("Failed to kill process: {}", e)))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(Error::ProcessError(format!("Failed to kill process: {}", stderr)));
+            }
+        }
         Ok(())
     }
 
     pub async fn get_child_processes(parent_id: u32) -> Result<Vec<u32>> {
-        let output = Command::new("wmic")
-            .arg("process")
-            .arg("where")
-            .arg(format!("ParentProcessId={}", parent_id))
-            .arg("get")
-            .arg("ProcessId")
-            .output()
-            .await
-            .map_err(|e| Error::ProcessError(format!("Failed to get child processes: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let child_pids: Vec<u32> = stdout
-            .lines()
-            .skip(1)
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .collect();
-
-        Ok(child_pids)
+        #[cfg(windows)]
+        {
+            let output = Command::new("wmic")
+                .arg("process")
+                .arg("where")
+                .arg(format!("ParentProcessId={}", parent_id))
+                .arg("get")
+                .arg("ProcessId")
+                .output()
+                .await
+                .map_err(|e| Error::ProcessError(format!("Failed to get child processes: {}", e)))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let child_pids: Vec<u32> = stdout
+                .lines()
+                .skip(1)
+                .filter_map(|line| line.trim().parse::<u32>().ok())
+                .collect();
+            Ok(child_pids)
+        }
+        #[cfg(not(windows))]
+        {
+            let output = Command::new("pgrep")
+                .arg("-P")
+                .arg(parent_id.to_string())
+                .output()
+                .await
+                .map_err(|e| Error::ProcessError(format!("Failed to get child processes: {}", e)))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let child_pids: Vec<u32> = stdout
+                .lines()
+                .filter_map(|line| line.trim().parse::<u32>().ok())
+                .collect();
+            Ok(child_pids)
+        }
     }
 }
 
@@ -130,15 +160,21 @@ impl ProcessMgr for ProcessManager {
     }
 
     async fn is_running(&self, process_id: u32) -> Result<bool> {
-        let output = Command::new("tasklist")
-            .arg("/FI")
-            .arg(format!("PID eq {}", process_id))
-            .output()
-            .await
-            .map_err(|e| Error::ProcessError(format!("Failed to check process: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.contains(&process_id.to_string()))
+        #[cfg(windows)]
+        {
+            let output = Command::new("tasklist")
+                .arg("/FI")
+                .arg(format!("PID eq {}", process_id))
+                .output()
+                .await
+                .map_err(|e| Error::ProcessError(format!("Failed to check process: {}", e)))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout.contains(&process_id.to_string()))
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(std::path::Path::new(&format!("/proc/{}", process_id)).exists())
+        }
     }
 
     async fn get_status(&self) -> Result<ServerStatus> {

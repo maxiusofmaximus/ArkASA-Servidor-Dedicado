@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { invoke } from '../../services/tauri'
-import { useBackupStore } from '../../stores/backupStore'
+import { useBackupStore, type BackupStore } from '../../stores/backupStore'
+import { useShallow } from 'zustand/react/shallow'
 import type { FriendContact } from '../../types'
 import { useI18n } from '../../i18n/useI18n'
 
@@ -12,7 +13,16 @@ export default function FriendContacts() {
     updateFriendContact,
     removeFriendContact,
     setActivePingContactId,
-  } = useBackupStore()
+  } = useBackupStore(
+    useShallow((s: BackupStore) => ({
+      friendContacts: s.friendContacts,
+      activePingContactId: s.activePingContactId,
+      addFriendContact: s.addFriendContact,
+      updateFriendContact: s.updateFriendContact,
+      removeFriendContact: s.removeFriendContact,
+      setActivePingContactId: s.setActivePingContactId,
+    }))
+  )
   const { tk } = useI18n()
 
   const [editingField, setEditingField] = useState<{ id: string; field: 'name' | 'ip' } | null>(null)

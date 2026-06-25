@@ -51,8 +51,8 @@ impl CLI {
             }
             "status" => Ok(Command::Status),
             "install" => {
-                let steam_cmd = PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("C:\\steamcmd"));
-                let server_dir = PathBuf::from(args.get(3).map(|s| s.as_str()).unwrap_or("C:\\ASA\\server"));
+                let steam_cmd = PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or(if cfg!(target_os = "windows") { "C:\\steamcmd" } else { "/usr/games/steamcmd" }));
+                let server_dir = PathBuf::from(args.get(3).map(|s| s.as_str()).unwrap_or(if cfg!(target_os = "windows") { "C:\\ASA\\server" } else { "/opt/asa/server" }));
                 Ok(Command::Install { steam_cmd_dir: steam_cmd, server_dir })
             }
             "config" => {

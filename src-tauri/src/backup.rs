@@ -896,13 +896,23 @@ fn parse_query_param(url_path: &str, param: &str) -> Option<String> {
 }
 
 fn open_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .creation_flags(0x08000000)
-        .spawn()
-        .map_err(|e| format!("Cannot open browser: {}", e))?;
-    let _ = app; // Keep app handle parameter for future use
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| format!("Cannot open browser: {}", e))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Cannot open browser: {}", e))?;
+    }
+    let _ = app;
     Ok(())
 }
 

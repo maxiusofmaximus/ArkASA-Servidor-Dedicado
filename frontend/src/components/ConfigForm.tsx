@@ -1,6 +1,7 @@
 import { invoke } from '../services/tauri'
 import { useState } from 'react'
-import { useConfigStore } from '../stores/configStore'
+import { useConfigStore, type ConfigStore } from '../stores/configStore'
+import { useShallow } from 'zustand/react/shallow'
 import type { ServerConfig, PrimaryTab } from '../types'
 import GeneralSettings from '../pages/GeneralSettings'
 import GameplaySettings from '../pages/GameplaySettings'
@@ -18,7 +19,7 @@ export default function ConfigForm({
   activeTab,
   onConfigChange,
 }: ConfigFormProps) {
-  const { setSaving } = useConfigStore()
+  const setSaving = useConfigStore(useShallow((s: ConfigStore) => s.setSaving))
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 

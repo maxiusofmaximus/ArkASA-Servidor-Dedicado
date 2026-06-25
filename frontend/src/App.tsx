@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback, type ReactNode } from 'react'
+import { useEffect, useState, useCallback, lazy, Suspense, type ReactNode } from 'react'
 import { initializeTauri, invoke, getTauriStatus } from './services/tauri'
 import { logger } from './services/logger'
-import { useConfigStore } from './stores/configStore'
-import { useUiStore } from './stores/uiStore'
-import { useBackupStore } from './stores/backupStore'
+import { useConfigStore, type ConfigStore } from './stores/configStore'
+import { useUiStore, type UiStore } from './stores/uiStore'
+import { useBackupStore, type BackupStore } from './stores/backupStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
 import { useAutoSave } from './hooks/useAutoSave'
 import { useTauriEvents } from './hooks/useTauriEvents'
@@ -23,24 +24,24 @@ import LogsViewer from './components/LogsViewer'
 import { computeDiff } from './utils/configDiff'
 import type { DiffEntry } from './utils/configDiff'
 
-// Tab pages
-import ArksTab from './pages/arks/ArksTab'
-import PlayerTab from './pages/game-rules/PlayerTab'
-import CreatureTab from './pages/game-rules/CreatureTab'
-import StructureTab from './pages/game-rules/StructureTab'
-import WorldRulesTab from './pages/game-rules/WorldRulesTab'
-import RulesTab from './pages/game-rules/RulesTab'
-import PveTab from './pages/advanced/PveTab'
-import PvpTab from './pages/advanced/PvpTab'
-import WorldAdvancedTab from './pages/advanced/WorldAdvancedTab'
-import WildDinoTab from './pages/advanced/WildDinoTab'
-import TamedDinoTab from './pages/advanced/TamedDinoTab'
-import PlayerStatsTab from './pages/advanced/PlayerStatsTab'
-import XpMultipliersTab from './pages/advanced/XpMultipliersTab'
-import MiscTab from './pages/advanced/MiscTab'
-import ActiveModsTab from './pages/mod-settings/ActiveModsTab'
-import AvailableModsTab from './pages/mod-settings/AvailableModsTab'
-import EngramsTab from './pages/engrams/EngramsTab'
+// Tab pages (lazy-loaded for code splitting)
+const ArksTab = lazy(() => import('./pages/arks/ArksTab'))
+const PlayerTab = lazy(() => import('./pages/game-rules/PlayerTab'))
+const CreatureTab = lazy(() => import('./pages/game-rules/CreatureTab'))
+const StructureTab = lazy(() => import('./pages/game-rules/StructureTab'))
+const WorldRulesTab = lazy(() => import('./pages/game-rules/WorldRulesTab'))
+const RulesTab = lazy(() => import('./pages/game-rules/RulesTab'))
+const PveTab = lazy(() => import('./pages/advanced/PveTab'))
+const PvpTab = lazy(() => import('./pages/advanced/PvpTab'))
+const WorldAdvancedTab = lazy(() => import('./pages/advanced/WorldAdvancedTab'))
+const WildDinoTab = lazy(() => import('./pages/advanced/WildDinoTab'))
+const TamedDinoTab = lazy(() => import('./pages/advanced/TamedDinoTab'))
+const PlayerStatsTab = lazy(() => import('./pages/advanced/PlayerStatsTab'))
+const XpMultipliersTab = lazy(() => import('./pages/advanced/XpMultipliersTab'))
+const MiscTab = lazy(() => import('./pages/advanced/MiscTab'))
+const ActiveModsTab = lazy(() => import('./pages/mod-settings/ActiveModsTab'))
+const AvailableModsTab = lazy(() => import('./pages/mod-settings/AvailableModsTab'))
+const EngramsTab = lazy(() => import('./pages/engrams/EngramsTab'))
 
 import type { ServerConfig, GameRulesSubTab, AdvancedSubTab } from './types'
 
@@ -80,9 +81,27 @@ function App() {
   const [showLogsPanel,       setShowLogsPanel]       = useState(false)
 
   const { config, savedConfig, setConfig, setSavedConfig, isSaving, setSaving,
-          undo, redo, historyIndex, history } = useConfigStore()
-  const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore()
-  const { logsEnabled, minimizeToTray, manualSave } = useBackupStore()
+          undo, redo, historyIndex, history } = useConfigStore(
+            useShallow((s: ConfigStore) => ({
+              config: s.config, savedConfig: s.savedConfig,
+              setConfig: s.setConfig, setSavedConfig: s.setSavedConfig,
+              isSaving: s.isSaving, setSaving: s.setSaving,
+              undo: s.undo, redo: s.redo,
+              historyIndex: s.historyIndex, history: s.history,
+            }))
+          )
+  const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore(
+            useShallow((s: UiStore) => ({
+              primaryTab: s.primaryTab, setPrimaryTab: s.setPrimaryTab,
+              gameRulesSubTab: s.gameRulesSubTab, advancedSubTab: s.advancedSubTab,
+              modSettingsSubTab: s.modSettingsSubTab, goBack: s.goBack,
+            }))
+          )
+  const { logsEnabled, minimizeToTray, manualSave } = useBackupStore(
+            useShallow((s: BackupStore) => ({
+              logsEnabled: s.logsEnabled, minimizeToTray: s.minimizeToTray, manualSave: s.manualSave,
+            }))
+          )
   const { tk } = useI18n()
 
   // ── Diff viewer state ─────────────────────────────────────────────────────
@@ -263,14 +282,17 @@ function App() {
   // ── Page renderer (registry pattern — OCP) ────────────────────────────────
   const renderPage = useCallback((): ReactNode => {
     if (!config) return null
-    switch (primaryTab) {
-      case 'arks':         return <ArksTab config={config} />
-      case 'engrams':      return <EngramsTab />
-      case 'mod_settings': return modSettingsSubTab === 'active_mods' ? <ActiveModsTab /> : <AvailableModsTab />
-      case 'game_rules':   return GAME_RULES_TABS[gameRulesSubTab]?.(config) ?? null
-      case 'advanced':     return ADVANCED_TABS[advancedSubTab]?.(config) ?? null
-      default:             return null
-    }
+    const page = (() => {
+      switch (primaryTab) {
+        case 'arks':         return <ArksTab config={config} />
+        case 'engrams':      return <EngramsTab />
+        case 'mod_settings': return modSettingsSubTab === 'active_mods' ? <ActiveModsTab /> : <AvailableModsTab />
+        case 'game_rules':   return GAME_RULES_TABS[gameRulesSubTab]?.(config) ?? null
+        case 'advanced':     return ADVANCED_TABS[advancedSubTab]?.(config) ?? null
+        default:             return null
+      }
+    })()
+    return <Suspense fallback={<div className="text-ark-cyan text-center py-8">Loading…</div>}>{page}</Suspense>
   }, [config, primaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab])
 
   // ── Render ────────────────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
 import React from 'react'
-import { useConfigStore } from '../stores/configStore'
+import { useConfigStore, type ConfigStore } from '../stores/configStore'
+import { useShallow } from 'zustand/react/shallow'
 
 interface ArkLayoutProps {
   children: React.ReactNode
 }
 
 export default function ArkLayout({ children }: ArkLayoutProps) {
-  const { config } = useConfigStore()
+  const config = useConfigStore(useShallow((s: ConfigStore) => s.config))
   const serverName = config?.identification?.session_name || 'ARK SERVER'
 
   return (

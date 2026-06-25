@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useConfigStore } from '../../stores/configStore'
-import { useModsStore, type ModInfo } from '../../stores/modsStore'
+import { useConfigStore, type ConfigStore } from '../../stores/configStore'
+import { useModsStore, type ModInfo, type ModsStore } from '../../stores/modsStore'
 import { invoke } from '../../services/tauri'
+import { useShallow } from 'zustand/react/shallow'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -37,8 +38,10 @@ const PAGE_SIZE = 50
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function AvailableModsTab() {
-  const { config, setConfig } = useConfigStore()
-  const { modCache, setModInfo, apiKey: storedKey, setApiKey: storeApiKey } = useModsStore()
+  const { config, setConfig } = useConfigStore(useShallow((s: ConfigStore) => ({ config: s.config, setConfig: s.setConfig })))
+  const { modCache, setModInfo, apiKey: storedKey, setApiKey: storeApiKey } = useModsStore(
+    useShallow((s: ModsStore) => ({ modCache: s.modCache, setModInfo: s.setModInfo, apiKey: s.apiKey, setApiKey: s.setApiKey }))
+  )
 
   // API key — initialise from persisted store so it survives tab switches
   const [apiKey, setApiKeyState] = useState<string | null>(null)

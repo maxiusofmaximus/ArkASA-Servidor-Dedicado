@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react'
-import { useConfigStore } from '../../stores/configStore'
-import { useModsStore } from '../../stores/modsStore'
+import { useConfigStore, type ConfigStore } from '../../stores/configStore'
+import { useModsStore, type ModsStore } from '../../stores/modsStore'
 import { useBackupStore } from '../../stores/backupStore'
+import { useShallow } from 'zustand/react/shallow'
 import { invoke } from '../../services/tauri'
 import { useI18n } from '../../i18n/useI18n'
 
 type RemovePending = { modId: string; modName: string; index: number }
 
 export default function ActiveModsTab() {
-  const { config, setConfig } = useConfigStore()
-  const { modCache, setModInfo, getModInfo } = useModsStore()
+  const { config, setConfig } = useConfigStore(useShallow((s: ConfigStore) => ({ config: s.config, setConfig: s.setConfig })))
+  const { modCache, setModInfo, getModInfo } = useModsStore(useShallow((s: ModsStore) => ({ modCache: s.modCache, setModInfo: s.setModInfo, getModInfo: s.getModInfo })))
   const store = useBackupStore()
   const { tk } = useI18n()
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null)

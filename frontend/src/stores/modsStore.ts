@@ -11,7 +11,7 @@ export interface ModInfo {
   clientOnly?: boolean
 }
 
-interface ModsStore {
+export interface ModsStore {
   modCache: Record<string, ModInfo>
   apiKey: string  // persisted so AvailableModsTab doesn't re-prompt on every tab switch
   setModInfo: (id: string, info: ModInfo) => void

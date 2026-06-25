@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useConfigStore } from '../stores/configStore'
+import { useConfigStore, type ConfigStore } from '../stores/configStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useI18n } from '../i18n/useI18n'
 import { useBackupActions } from '../hooks/useBackupActions'
 import GeneralTab from './options/GeneralTab'
@@ -14,7 +15,7 @@ type OptionsTab = 'general' | 'backup' | 'config'
 
 export default function OptionsModal({ onClose }: OptionsModalProps) {
   const [tab, setTab] = useState<OptionsTab>('general')
-  const { config, setConfig, setSavedConfig } = useConfigStore()
+  const { config, setConfig, setSavedConfig } = useConfigStore(useShallow((s: ConfigStore) => ({ config: s.config, setConfig: s.setConfig, setSavedConfig: s.setSavedConfig })))
   const { tk } = useI18n()
   const backupActions = useBackupActions(config)
 

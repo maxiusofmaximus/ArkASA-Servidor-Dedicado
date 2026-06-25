@@ -3,9 +3,10 @@ import type { ServerConfig } from '../types'
 import { invoke } from '../services/tauri'
 import { generateGameUserSettings, generateGameIni, generateToml } from '../services/configGenerators'
 import { type ConfigSaveStrategy, TomlSaveStrategy, IniSaveStrategy, CustomFileSaveStrategy } from '../services/configSaveStrategies'
-import { useBackupStore } from '../stores/backupStore'
+import { useBackupStore, type BackupStore } from '../stores/backupStore'
 import { useI18n } from '../i18n/useI18n'
 import { useTextHistory } from '../hooks/useTextHistory'
+import { useShallow } from 'zustand/react/shallow'
 import ConfigFormEditor from './ConfigFormEditor'
 
 interface RawConfigViewerProps {
@@ -45,7 +46,9 @@ function getSaveStrategy(tab: BuiltinTab | undefined, customPath: string | null,
 }
 
 export default function RawConfigViewer({ config, onConfigSaved }: RawConfigViewerProps) {
-  const { customConfigTabs, addCustomConfigTab, removeCustomConfigTab } = useBackupStore()
+  const { customConfigTabs, addCustomConfigTab, removeCustomConfigTab } = useBackupStore(
+    useShallow((s: BackupStore) => ({ customConfigTabs: s.customConfigTabs, addCustomConfigTab: s.addCustomConfigTab, removeCustomConfigTab: s.removeCustomConfigTab }))
+  )
   const { tk } = useI18n()
 
   const [activeTab, setActiveTab] = useState<string>('gameusersettings')

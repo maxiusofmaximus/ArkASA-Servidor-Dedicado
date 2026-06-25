@@ -49,10 +49,10 @@ impl ArkServerImpl {
     }
 
     fn get_server_executable(&self, config: &ServerConfig) -> String {
-        format!(
-            "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
-            config.paths.server_dir
-        )
+        #[cfg(target_os = "windows")]
+        { format!("{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe", config.paths.server_dir) }
+        #[cfg(not(target_os = "windows"))]
+        { format!("{}/ShooterGame/Binaries/Linux/ArkAscendedServer", config.paths.server_dir) }
     }
 }
 

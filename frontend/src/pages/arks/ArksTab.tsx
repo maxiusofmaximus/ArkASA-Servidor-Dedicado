@@ -2,8 +2,9 @@ import React, { useMemo } from 'react'
 import SettingRow from '../../components/SettingRow'
 import SettingsPanel from '../../components/SettingsPanel'
 import { useConfigUpdate } from '../../hooks/useConfigUpdate'
-import { useConfigStore } from '../../stores/configStore'
-import { useBackupStore } from '../../stores/backupStore'
+import { useConfigStore, type ConfigStore } from '../../stores/configStore'
+import { useBackupStore, type BackupStore } from '../../stores/backupStore'
+import { useShallow } from 'zustand/react/shallow'
 import ConnectionManager from './ConnectionManager'
 import FriendContacts from './FriendContacts'
 import type { ServerConfig } from '../../types'
@@ -43,8 +44,14 @@ const DLC_LABEL: Record<ArkMap['dlc'], string> = {
 export default function ArksTab({ config }: ArksTabProps) {
   const updateId = useConfigUpdate('identification')
   const updateNetwork = useConfigUpdate('network')
-  const { setConfig } = useConfigStore()
-  const { onDemandEnabled, onDemandMaps, toggleOnDemandMap, autoShutdownMin, setAutoShutdownMin } = useBackupStore()
+  const setConfig = useConfigStore(useShallow((s: ConfigStore) => s.setConfig))
+  const { onDemandEnabled, onDemandMaps, toggleOnDemandMap, autoShutdownMin, setAutoShutdownMin } = useBackupStore(
+    useShallow((s: BackupStore) => ({
+      onDemandEnabled: s.onDemandEnabled, onDemandMaps: s.onDemandMaps,
+      toggleOnDemandMap: s.toggleOnDemandMap, autoShutdownMin: s.autoShutdownMin,
+      setAutoShutdownMin: s.setAutoShutdownMin,
+    }))
+  )
   const { tk } = useI18n()
 
 

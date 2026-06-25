@@ -5,7 +5,7 @@ import type { ServerConfig, ValidationResult } from '../types'
 const MAX_HISTORY = 50
 const RAPID_MS    = 800  // group changes within this window into one undo step
 
-interface ConfigStore {
+export interface ConfigStore {
   config: ServerConfig | null
   savedConfig: ServerConfig | null  // last successfully saved snapshot
   history: ServerConfig[]

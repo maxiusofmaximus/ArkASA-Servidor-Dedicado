@@ -225,10 +225,10 @@ impl ConfigValidator for PathValidator {
             ));
         }
 
-        if !paths.server_dir.starts_with("C:\\") && !paths.server_dir.starts_with("D:\\") {
+        if !std::path::Path::new(&paths.server_dir).is_absolute() {
             return Err(Error::field_error(
                 "paths.server_dir",
-                "Server directory should be on a local drive",
+                "Server directory must be an absolute path",
                 "INVALID_SERVER_PATH",
             ));
         }

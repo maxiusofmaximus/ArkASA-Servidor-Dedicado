@@ -635,6 +635,12 @@ async fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> s
             cmd.creation_flags(0x0000_0008); // DETACHED_PROCESS
         }
 
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
+        }
+
         log::info!("Launching ARK {} (cluster={}) port={}", map, is_cluster, game_port);
 
         match cmd.spawn() {
@@ -692,6 +698,12 @@ async fn stop_server(config: ServerConfig) -> std::result::Result<String, String
                 .creation_flags(0x08000000)
                 .output();
         }
+        #[cfg(not(windows))]
+        {
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", "ArkAscendedServer"])
+                .output();
+        }
     }
 
     Ok(match (graceful.is_empty(), failed.is_empty()) {
@@ -714,7 +726,15 @@ async fn is_server_running() -> bool {
         matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).contains("ArkAscendedServer.exe"))
     }
     #[cfg(not(windows))]
-    { false }
+    {
+        use tokio::process::Command;
+        let out = Command::new("pgrep")
+            .arg("-x")
+            .arg("ArkAscendedServer")
+            .output()
+            .await;
+        matches!(out, Ok(o) if !o.stdout.is_empty())
+    }
 }
 
 // ── Per-instance cluster control ─────────────────────────────────────────────
@@ -763,8 +783,20 @@ fn kill_process_on_port(port: u16) -> std::result::Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn kill_process_on_port(_port: u16) -> std::result::Result<(), String> {
-    Err("kill_process_on_port is only supported on Windows".to_string())
+fn kill_process_on_port(port: u16) -> std::result::Result<(), String> {
+    let port_str = port.to_string();
+    let output = Command::new("fuser")
+        .args([&port_str, "/tcp"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if let Some(pid_str) = stdout.split_whitespace().next() {
+        let mut kill = Command::new("kill");
+        kill.arg("-9").arg(pid_str);
+        kill.output().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    Err(format!("No process listening on port {}", port))
 }
 
 #[tauri::command]
@@ -826,6 +858,12 @@ fn start_server_instance(
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0000_0008);
+    }
+
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
     }
 
     log::info!("Launching ARK instance {} port={}", map, game_port);
@@ -899,6 +937,12 @@ async fn restart_server(config: ServerConfig, cluster_delay_sec: Option<u64>) ->
         let _ = std::process::Command::new("taskkill")
             .args(["/F", "/IM", "ArkAscendedServer.exe"])
             .creation_flags(0x08000000)
+            .output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "ArkAscendedServer"])
             .output();
     }
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -1001,7 +1045,6 @@ async fn detect_public_ip() -> Option<String> {
 }
 
 async fn detect_tailscale_ip() -> Option<String> {
-    // Primary: tailscale CLI (installed alongside the Tailscale app)
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1017,7 +1060,19 @@ async fn detect_tailscale_ip() -> Option<String> {
         }
     }
 
-    // Fallback: scan ipconfig output for a 100.64.0.0/10 address
+    #[cfg(not(windows))]
+    {
+        if let Ok(out) = std::process::Command::new("tailscale")
+            .args(["ip", "-4"])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() && !s.to_lowercase().contains("error") && is_tailscale_range(&s) {
+                return Some(s);
+            }
+        }
+    }
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1030,6 +1085,25 @@ async fn detect_tailscale_ip() -> Option<String> {
                 if line.contains("IPv4") {
                     if let Some(pos) = line.rfind(':') {
                         let ip = line[pos + 1..].trim();
+                        if is_tailscale_range(ip) {
+                            return Some(ip.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Ok(out) = std::process::Command::new("ip")
+            .args(["addr", "show"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Some(ip) = line.trim().strip_prefix("inet ") {
+                    if let Some(ip) = ip.split('/').next() {
                         if is_tailscale_range(ip) {
                             return Some(ip.to_string());
                         }
@@ -1068,12 +1142,20 @@ fn detect_local_ip() -> Option<String> {
 #[tauri::command]
 fn open_external_url(url: String) -> std::result::Result<(), String> {
     #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", "start", "", url.as_str()]);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000);
-    cmd.spawn().map_err(|e| format!("Failed to open URL: {}", e))?;
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "start", "", url.as_str()]);
+        cmd.creation_flags(0x08000000);
+        cmd.spawn().map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
     Ok(())
 }
 
@@ -1095,6 +1177,14 @@ async fn start_ping(ip: String, state: tauri::State<'_, PingState>) -> std::resu
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .creation_flags(0x08000000)
+                    .spawn();
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = std::process::Command::new("ping")
+                    .args(["-c", "4", "-W", "3", &ip])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             }
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
