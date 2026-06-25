@@ -307,9 +307,16 @@ description: Guías completas explicadas para cualquiera, sin importar el nivel 
 ## 📝 Notas de versión
 
 Esta documentación corresponde a:
-- **Aplicación:** ARK ASA Configuration Manager v1.1+
+- **Aplicación:** ARK ASA Configuration Manager v2.0+
 - **Plataforma:** Windows 10/11
-- **Última actualización:** 2026-06-14
+- **Última actualización:** 2026-06-25
+
+### Novedades v2.0
+
+- **Multi-instance server management** — Inicia/detén mapas individuales desde el ActionBar
+- **Form Editor** — Edición estructurada de claves por sección (sin texto crudo)
+- **Undo/Redo** — Ctrl+Z / Ctrl+Y con historial de cambios
+- **On-demand server** — Modo sleep/wake para mapas individuales
 
 ---
 
