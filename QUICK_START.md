@@ -1,6 +1,6 @@
 # ARK ASA Config Manager - Quick Start Guide (5 minutes)
 
-> ⚡ **TL;DR:** Run `npm install && npm run tauri:dev` - Done!
+> ⚡ **TL;DR:** Run `pnpm install && pnpm run tauri:dev` - Done!
 
 ## What You Get
 
@@ -20,13 +20,13 @@
 ## Step 1: Install Dependencies (1 minute)
 
 ```powershell
-npm install
+pnpm install
 ```
 
 ## Step 2: Start Development (1 minute)
 
 ```powershell
-npm run tauri:dev
+pnpm run tauri:dev
 ```
 
 **Wait 2-3 minutes for first compile...**
@@ -85,7 +85,7 @@ frontend/src/
 # or src/ark/server.rs (change server logic)
 
 # Restart dev server to recompile
-npm run tauri:dev
+pnpm run tauri:dev
 ```
 
 ### Edit React (Frontend)
@@ -97,7 +97,7 @@ npm run tauri:dev
 ## Build for Release
 
 ```powershell
-npm run tauri:build
+pnpm run tauri:build
 # Creates: src-tauri/target/release/bundle/msi/ARK*.msi
 ```
 
@@ -112,14 +112,14 @@ npm run tauri:build
 **App won't start?**
 ```powershell
 rm -r src-tauri/target  # Clear cache
-npm run tauri:dev       # Rebuild
+pnpm run tauri:dev       # Rebuild
 ```
 
 **Rust compilation error?**
 ```powershell
 rustup update           # Update toolchain
 cargo clean             # Clean build artifacts
-npm run tauri:dev       # Try again
+pnpm run tauri:dev       # Try again
 ```
 
 **Port already in use?**

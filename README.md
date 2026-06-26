@@ -43,20 +43,20 @@ A modern, desktop application built with **Rust + Tauri + React** for managing A
 
 #### Prerequisites
 
-1. **Rust** (1.70+) - [Install](https://rustup.rs/)
+1. **Rust** (1.80+) - [Install](https://rustup.rs/)
 2. **Node.js** (18+) - [Install](https://nodejs.org/)
 
 #### Installation
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Run in development mode
-npm run tauri:dev
+pnpm run tauri:dev
 
 # Build for release
-npm run tauri:build
+pnpm run tauri:build
 ```
 
 ### First Time Setup
@@ -192,7 +192,7 @@ Add custom validators without modifying existing code (OCP principle).
 cargo test
 
 # Frontend tests
-npm run test
+pnpm run test
 ```
 
 ### Code Quality
@@ -203,13 +203,13 @@ cargo clippy
 
 # Format code
 cargo fmt
-npm run lint
+pnpm run lint
 ```
 
 ### Building for Release
 
 ```bash
-npm run tauri:build
+pnpm run tauri:build
 # Generates MSI installer in src-tauri/target/release/bundle/msi/
 ```
 

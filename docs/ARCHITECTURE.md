@@ -366,7 +366,7 @@ Old PowerShell scripts are archived. Config loading supports:
 ### Building
 
 ```bash
-npm run tauri:build
+pnpm run tauri:build
 ```
 
 Outputs:
@@ -381,7 +381,7 @@ Users simply run the MSI and get a desktop shortcut.
 ### Rust Backend
 
 ```bash
-RUST_LOG=debug npm run tauri:dev
+RUST_LOG=debug pnpm run tauri:dev
 ```
 
 Check console for logs.
@@ -400,13 +400,13 @@ Tauri logs to:
 1. **Passwords** - Never logged or transmitted without encryption
 2. **File Access** - Validated paths only
 3. **Input Validation** - All user input sanitized
-4. **Dependencies** - Regular audits (`cargo audit`, `npm audit`)
+4. **Dependencies** - Regular audits (`cargo audit`, `pnpm audit`)
 
 ## Code Quality
 
-- **Lint:** `cargo clippy`, `npm run lint`
+- **Lint:** `cargo clippy`, `pnpm run lint`
 - **Format:** `cargo fmt`, `prettier`
-- **Tests:** `cargo test`, `npm run test`
+- **Tests:** `cargo test`, `pnpm run test`
 - **Coverage:** Aim for >80% on critical paths
 
 ---

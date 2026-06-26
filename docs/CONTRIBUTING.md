@@ -5,9 +5,9 @@ Thank you for your interest in contributing! This guide explains how to work on 
 ## Development Setup
 
 ### Prerequisites
-- Rust 1.70+ ([rustup](https://rustup.rs/))
+- Rust 1.80+ ([rustup](https://rustup.rs/))
 - Node.js 18+ ([nodejs.org](https://nodejs.org))
-- Tauri CLI (installed with `npm install`)
+- Tauri CLI (installed with `pnpm install`)
 - Git
 
 ### Initial Setup
@@ -18,10 +18,10 @@ git clone <repo-url>
 cd ArkASA-Servidor-Dedicado
 
 # Install dependencies
-npm install
+pnpm install
 
 # Start development server
-npm run tauri:dev
+pnpm run tauri:dev
 ```
 
 ## Project Architecture
@@ -167,10 +167,10 @@ async fn test_something() {
 ### Frontend Tests
 ```bash
 # Run tests
-npm run test
+pnpm run test
 
 # Watch mode
-npm run test:watch
+pnpm run test:watch
 ```
 
 ## Code Quality
@@ -190,13 +190,13 @@ cargo audit
 ### Frontend
 ```bash
 # Lint
-npm run lint
+pnpm run lint
 
 # Format
-npx prettier --write .
+pnpm exec prettier --write .
 
 # Type check
-npm run tsc --noEmit
+pnpm exec tsc --noEmit
 ```
 
 ## Git Workflow
@@ -253,7 +253,7 @@ Before submitting a PR, verify:
 - [ ] Tests pass (`cargo test`)
 - [ ] Linter passes (`cargo clippy`)
 - [ ] Code formatted (`cargo fmt`)
-- [ ] TypeScript compiles (`npm run tsc`)
+- [ ] TypeScript compiles (`pnpm exec tsc`)
 - [ ] Component renders correctly
 - [ ] Accessibility considered (if UI change)
 
@@ -290,7 +290,7 @@ Before submitting a PR, verify:
 ### Rust
 ```bash
 # Enable logging
-RUST_LOG=debug npm run tauri:dev
+RUST_LOG=debug pnpm run tauri:dev
 
 # Use dbg! macro temporarily
 let x = dbg!(some_function());
