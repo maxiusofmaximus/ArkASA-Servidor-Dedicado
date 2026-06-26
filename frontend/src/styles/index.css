@@ -364,6 +364,11 @@ button:hover {
   50% { opacity: 1; }
 }
 
+@keyframes pulse-dormant {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
 .corner-bracket {
   position: absolute;
   width: 20px;

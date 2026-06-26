@@ -277,10 +277,12 @@ export default function ArksTab({ config }: ArksTabProps) {
                               background: 'rgba(99,102,241,0.2)',
                               color: 'rgba(165,180,252,0.9)',
                               border: '1px solid rgba(99,102,241,0.4)',
+                              animation: 'pulse-dormant 3s ease-in-out infinite',
                             } : {
-                              background: 'rgba(255,255,255,0.05)',
-                              color: 'rgba(255,255,255,0.3)',
-                              border: '1px solid rgba(255,255,255,0.1)',
+                              background: 'rgba(0,212,255,0.15)',
+                              color: 'rgba(0,212,255,0.95)',
+                              border: '1px solid rgba(0,212,255,0.4)',
+                              boxShadow: '0 0 8px rgba(0,212,255,0.15)',
                             }}
                           >
                             {isDormant ? tk('dormant_label', '💤 DORMANT') : tk('active_label', '⚡ ACTIVE')}
