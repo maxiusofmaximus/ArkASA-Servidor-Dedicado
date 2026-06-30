@@ -2,26 +2,30 @@
  * Convex BaaS schema.
  *
  * Tables:
- *  - users            Auth-managed by Convex Auth (extended via users_aux for role)
+ *  - users_aux        Auth-managed by Convex Auth (extended via users_aux for role)
  *  - servers          One row per registered Tauri app instance (keyed by host_id)
- *  - state_history    Optional time-series snapshot store; Hito 12 may trim
  *  - command_log      Audit log of every RemoteCommand issued (web/Telegram/etc.)
  *  - integrations     Config of each bot (token, allowlist of actor IDs)
  *
- * Hitos 3/4 will fill these.  This skeleton keeps `defineSchema` ready so
- * `npx convex dev` will accept the directory once `convex` is added to the
- * package.json in Hito 3.
+ * Hitos 3/4 fill these.  Run `npx convex dev` after `pnpm install`.  Set
+ *   `CONVEX_DEPLOY_KEY` in `convex/.env.local` for production deploys.
  */
-// @ts-nocheck -- resolved at Hito 3 once `convex` is added to package.json
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
+/**
+ * Tables extended by `@convex-dev/auth` (run `npx @convex-dev/auth` once
+ * to inject the authoritative fields; we preserve role here for our own
+ * RBAC that runs independently of the auth provider's own user table).
+ */
+const userAux = defineTable({
+  user_id: v.string(),                 // foreign key to auth.users.id
+  role: v.union(v.literal('admin'), v.literal('viewer')),
+  display_name: v.optional(v.string()),
+}).index('by_user', ['user_id'])
+
 export default defineSchema({
-  users_aux: defineTable({
-    user_id: v.string(),
-    role: v.union(v.literal('admin'), v.literal('viewer')),
-    display_name: v.optional(v.string()),
-  }).index('by_user', ['user_id']),
+  users_aux: userAux,
 
   servers: defineTable({
     host_id: v.string(),
@@ -63,4 +67,13 @@ export default defineSchema({
   })
     .index('by_host', ['server_host_id'])
     .index('by_host_channel', ['server_host_id', 'channel']),
+
+  // Audit log of failed HMAC / signature mismatches — useful for diagnosing
+  // operator misconfiguration across all integrations.
+  auth_rejections: defineTable({
+    channel: v.string(),
+    actor_id: v.optional(v.string()),
+    reason: v.string(),
+    at: v.number(),
+  }).index('by_at', ['at']),
 })

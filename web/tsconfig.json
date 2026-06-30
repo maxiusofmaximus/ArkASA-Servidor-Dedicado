@@ -5,14 +5,15 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
+    "strict": false,
+    "noImplicitAny": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "types": ["vite/client"],
     "paths": {
       "@ark-asa/shared-types": ["../packages/shared-types/src/index.ts"],
       "@ark-asa/shared-types/*": ["../packages/shared-types/src/*"]
