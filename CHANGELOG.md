@@ -39,6 +39,19 @@ adheres to [Semantic Versioning](https://semver.org/).
   `~/.ark-asa/admin.token`. New Tauri commands:
   - `admin_token`           → returns current bearer token
   - `rotate_admin_token`    → rotates secret + token
+- **Plugin registry** (`src-tauri/src/plugins/`): each cloud service is
+  implemented as a **CLI bridge plugin**, not a custom OAuth server.
+  Reason: Convex and Vercel don't expose operators OAuth serverside for
+  this kind of integration. The desktop app shells out to their
+  first-party CLIs which already work.
+  - `convex/` — `begin_convex_link` spawns `npx convex login`; once
+    the CLI writes `~/.convex/credentials.json`, we ingest the
+    deploy_key + deployment_url into our own secret store. `paste_convex_deploy_key`
+    is the air-gapped fallback. `convex_push_schema` runs
+    `npx convex deploy --prod`.
+  - `vercel/` — same architecture: `vercel login` / `vercel deploy --prod`.
+    Credentials read from `~/.vercel/auth.json`.
+  - `secret_store.rs` — atomic disk write, 0600 perms on Unix.
 - **Telegram bot adapter** (`integrations/telegram.rs`): long-polling
   against `api.telegram.org/bot<token>/getUpdates`; per-chat-id allowlist,
   1 cmd / 5 s rate limit; maps `/start /stop /restart /status /logs /ip`
@@ -115,10 +128,10 @@ exists but cannot run autonomously:
 
 | Concern | What you must do |
 |---------|------------------|
-| Convex account | Sign up at convex.dev, create a project, set `CONVEX_URL` env var in your build. |
+| Convex account | Sign up at convex.dev, create a project. Modern flow: open the app, click **Connect Convex** (Options → General → Cloud Services), which spawns `npx convex login`. CLI opens browser automatically. |
 | Convex `INTEGRATIONS_SHARED_SECRET` | Set in Convex dashboard and `.env.local`. |
 | Convex auth providers | Configure Google / GitHub OAuth client IDs (optional). |
-| Vercel web deploy | `npm i -g vercel && vercel login && vercel --prod`. |
+| Vercel web deploy | Click **Connect Vercel** in the desktop app. CLI-bridge invokes `vercel login` then `vercel deploy --prod`. |
 | Telegram bot | Create via `@BotFather`, store token in TOML `[plugins.telegram].secrets.bot_token`. |
 | Discord bot | Create via Discord dev portal, enable Message Content Intent, store `bot_token` + `guild_id`. |
 | WhatsApp Business | Set up WABA + Meta Graph API; store `phone_id` + `business_id` + `webhook_secret`. |
@@ -171,6 +184,28 @@ Server management + cloud backup.
 
 Core configuration management done.
 
-[Unreleased]: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/compare/v2.1.0-alpha...HEAD
+## [v2.1.0-alpha.2] — 2026-06-30 — OAuth-removed, CLI-bridge plugin pattern
+
+Replaced the fake-OAuth endpoints from `v2.1.0-alpha` with **CLI
+bridges**. Convex ships no first-party OAuth server today, only the
+official `npx convex login` CLI which authors against GitHub OAuth. Our
+plugin shells out to that CLI, then reads `~/.convex/credentials.json`
+to capture the result. Same for Vercel: `vercel login` writes
+`~/.vercel/auth.json`. This keeps us off the maintenance burden of
+running an OAuth server we don't need.
+
+### What changed since v2.1.0-alpha
+- All `begin_*_oauth` / `complete_*_oauth` commands in
+  `src-tauri/src/plugins/convex/` and `src-tauri/src/plugins/vercel/`
+  were removed.
+- New `begin_convex_link` and `begin_vercel_link` commands call out
+  to the CLI; both have a `paste_*_key` / `paste_*_token` fallback for
+  air-gapped setups.
+- `PluginDescriptor::oauth_url` is now `None` for both plugins.
+
+[Any earlier v2.1.0-alpha without these changes is superseded.]
+
+[Unreleased]: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/compare/v2.1.0-alpha.2...HEAD
+[v2.1.0-alpha.2]: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases/tag/v2.1.0-alpha.2
 [v2.1.0-alpha]: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases/tag/v2.1.0-alpha
 [v2.0.0]: https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases/tag/v2.0.0
