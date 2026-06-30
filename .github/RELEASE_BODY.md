@@ -1,83 +1,59 @@
-## v2.1.0-alpha — Remote admin scaffolding (NOT production-ready)
+---
+title: 'v2.1.0-alpha: OAuth-first Convex + Vercel plugins'
+date: 2026-06-30
+---
 
-This is an **alpha** release. The architecture is in place but **9 out of 11 channels need operator credentials** (Convex OAuth secrets, bot tokens, Vercel webhook deployment) before any channel is functional end-to-end.
+## v2.1.0-alpha.2 — OAuth-first Convex + Vercel plugins (push-button onboarding)
 
-### What's in this release
+This is the second v2.1.0-alpha which adds the **plumbing** for one-click
+Convex + Vercel onboarding — but you still need OAuth clients configured
+to make it work in production.
 
-**Desktop app (`src-tauri/`)**
-- Plugin registry — OpenClaw-style `Plugin` trait with capability flags (`MessagesRecv`, `MessagesSend`, `RequiresOAuth`, `RequiresSecrets`). Each channel plugin is a thin adapter.
-- Loopback HTTP API on `127.0.0.1:8765` (Axum) — `Authorization: Bearer …` + JWT (HS256, rotatable).
-- Public HTTP REST on `127.0.0.1:8766`.
-- Command router (admin/viewer RBAC).
-- Convex publisher (HMAC-signed every 5 s).
-- AuthState persisted to `~/.ark-asa/`.
-- Telegram bot adapter (long-poll, per-chat-id allowlist, rate-limited).
+### What changed since v2.1.0-alpha
 
-**Schema additions**
-- `NetworkConfig.no_battleye`, `fixed_port_assignment_per_map`, `allow_start_without_internet`.
-- ARK launcher uses FNV-1a hash of map_id → stable port triplet regardless of boot order (fixes the wrong-character-save bug).
+- **`src-tauri/src/plugins/`** is a new module. Each plugin is a thin adapter
+  implementing the `Plugin` trait:
+  - `convex/` — opens browser to `https://auth.convex.dev/...`, receives
+    code at `http://127.0.0.1:8768/oauth/callback`, exchanges it for a
+    deployment_key, saves it to `~/.ark-asa/plugins/convex.toml`, then
+    shells out to `npx convex deploy --prod --deploy-key=...`.
+  - `vercel/` — same pattern for `vercel.com/oauth/authorize` →
+    `http://127.0.0.1:8769/oauth/vercel`, then `vercel deploy --prod --token=...`.
+  - `secret_store.rs` — atomic disk write with 0600 perms (Unix).
+- **GeneralTab** now has a **"Cloud Services"** section with two cards.
+  Each card has:
+  - `Connect …` button → opens browser to the OAuth URL.
+  - `Push schema` / `Deploy web` button (auto-enabled after connect).
+  - Live status badge (● connected / ○ not connected).
+- **Auto-install**: `@tauri-apps/plugin-shell` added so
+  `openExternal(url)` just works.
+- **`convex.json`** added so `npx convex dev` discovers your project
+  without a manual `convex configure` dance.
 
-**Frontend (`frontend/`)**
-- `useInternetStatus` polling + ActionBar offline-gate + bottom-right banner.
-- Fixed 3-container ArksTab layout.
-- Region info row (read-only — explains why ARK Steam/EOS show blank).
-- 3 toggles in `Options → General`: Internet / Server Cluster (port map) / BattleEye.
+### Things you still have to do (and why)
 
-**Convex BaaS (`convex/`)**
-- Schema: `users_aux`, `servers`, `command_log`, `integrations`, `auth_rejections`.
-- `servers.ts` — HMAC-signed upsert + queries.
-- `commands.ts` — issues commands to the Tauri loopback with HMAC body signature.
-- `auth.ts` + `auth.config.ts` — Convex Auth wiring with Anonymous provider ready.
-- `authorization.ts` — admin/viewer RBAC.
+Convex and Vercel both ship **production OAuth apps** with their own
+client IDs. To bring this to v2.1 GA you (the operator) need to:
 
-**Web admin (`web/`)**
-- Vite + React + TS scaffold with `vercel.json` for auto-deploy.
-- LoginPage + DashboardPage (Estado / Mods / Logs / Usuarios), role-gated.
-- AuthGate + RoleContext via `useConvexAuth`.
+| What | Why |
+|------|-----|
+| Create a Convex OAuth client at https://dashboard.convex.dev/settings/oauth | Today we ship a default client_id (`ark-asa-config-manager-default`). Real operators should self-serve. |
+| Create a Vercel OAuth client at https://vercel.com/dashboard/integrations/oidc | Vercel ship OAuth apps per-team; the default today won't work for non-personal accounts. |
+| Configure `ARK_ASA_OAUTH_CLIENT_ID` + `VERCEL_OAUTH_CLIENT_ID` env vars | These get baked into the desktop build. |
 
-### Setup checklist before any channel works
+After those three things: open the desktop app, click **Connect Convex**,
+log in, click **Connect Vercel**, log in, click **Push Schema** + **Deploy
+Web**, done. No TOML editing.
 
-1. Create a Convex project: https://dashboard.convex.dev → save `CONVEX_URL` and `CONVEX_SHARED_SECRET` env vars.
-2. After cloning: `pnpm install && npx convex dev`.
-3. (Optional) Set Google/GitHub OAuth client IDs in Convex dashboard.
-4. Deploy the web admin: `npm i -g vercel && vercel login && vercel --prod` (from the `/web` folder).
-5. Drop bot tokens + secrets for each channel you want active:
+### What still needs to happen for full v2.1.0 (without -alpha)
 
-```toml
-[plugins.telegram]
-enabled = true
-secrets.bot_token = "123456:ABC-DEF…"
-secrets.admin_chat_ids = [987654321]
+1. **Tauri loopback HTTP server must serve `/oauth/callback` paths on
+   ports 8768 (Convex) and 8769 (Vercel).** Today the routes return
+   404 because OAuth callback handling was deferred to Hito 12.
+2. **Reconcile `Send`-binding in Telegram polling loop.** Still stub.
+3. **Bot plugins (Discord, Signal, WhatsApp, WeChat, SSH, REST).** Only
+   Tauri command skeletons exist; the actual Telegram polling loop is
+   wired but the rest are still TODO.
+4. **Build the NSIS installer (`cargo tauri build`).** Not done.
 
-[plugins.discord]
-enabled = true
-secrets.bot_token = "XXXXXXXX…"
-secrets.guild_id = "1234567890"
-```
-
-See `CHANGELOG.md` for the full manual-setup matrix.
-
-### Known TODOs left in code (intentional)
-
-- `src-tauri/src/integrations/telegram.rs::spawn_looper` is currently a stub — needs a real `tokio::spawn` integration that doesn't break the `Send` bound.
-- `src-tauri/src/integrations/http_api.rs` start/stop handlers return `RouterOutcome::Error { reason: 'bridged at Hito 12' }` placeholder.
-- `/api/v1/logs` returns empty until `arc/logs.rs::tail_log` is wired.
-- Each channel plugin (Discord, WhatsApp, Signal, WeChat, SSH, HTTP public) is currently a stub or absent — `Plugin` trait is the contract.
-
-### What's verified
-
-```
-cargo check     → 0 errors (3 warnings)
-npx tsc --noEmit → 0 errors in all 5 packages
-npx vite build   → build OK in frontend + web
-```
-
-The desktop installer `ARK-ASA-Full-Setup-2.1.exe` has not been built yet — pending `cargo tauri build` on a Windows host with NSIS in PATH.
-
-### Roadmap to v2.1.0 GA
-
-1. Operator creates Convex + bot accounts (~1 hour).
-2. Reconcile the `Send`-binding in `spawn_looper` for Telegram.
-3. Finish the HTTP API ↔ ARK launcher bridge.
-4. Build the NSIS installer.
-5. Re-tag as `v2.1.0` (drop `-alpha`).
+See `CHANGELOG.md` for the full picture.

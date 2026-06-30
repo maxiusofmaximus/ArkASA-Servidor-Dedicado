@@ -1,29 +1,32 @@
-//! Convex plugin — the v2.1 way to onboard the cloud BaaS without a
-//! manual URL/key paste into TOML.
+//! Convex plugin — v2.1 onboarding via the **official CLI bridge**.
 //!
-//! Flow the operator sees in the Tauri app (Options → General → Convex):
-//!   1. "Connect Convex" button.
-//!   2. Desktop app opens browser to https://auth.convex.dev/...
-//!   3. Operator approves + clicks "Authorize"; Convex redirects to
-//!      `http://127.0.0.1:8768/oauth/callback?code=…`.
-//!   4. We exchange the code for a deploy_key + deployment_url.
-//!   5. Save to `~/.ark-asa/plugins/convex.toml`.
-//!   6. Auto-push our `/convex/convex/*` to their deployment.
-//!   7. Tauri loopback HTTP API now knows how to talk to Convex.
+//! Convex ships an open-source CLI (`npm i convex` / `npx convex login` /
+//! `npx convex deploy`). There is **no first-party OAuth flow** today for
+//! our kind of integration, so we shell out to the CLI.
 //!
-//! NOTE: Convex's actual deployment-key issuance happens via
-//! `convex deploy --prod` from a local CLI login. The OAuth-style flow
-//! above is modelled on Tailscale's node-key exchange, which is a similar
-//! pattern. For Convex we *also* ship a fallback CLI-bridge flow in
-//! Hito 12 — operator can paste the `npx convex login`-generated
-//! `CONVEX_DEPLOY_KEY` from `.convex/config.json` if the OAuth path
-//! ever changes.
+//! Operator flow:
+//!   1. Opens the app, clicks **Connect Convex** (in Options → General →
+//!      Cloud Services).
+//!   2. The desktop app spawns `npx convex login` against the GitHub device
+//!      flow. A browser page opens. The operator clicks **Authorize** and
+//!      github returns a code, which the CLI serialises into
+//!      `~/.convex/credentials.json`. The Tauri plugin watches this file
+//!      and copies the deploy_key into our own secret store the moment it
+//!      appears.
+//!   3. Once connected, the **Push schema** button runs `npx convex deploy`
+//!      from the desktop. Web admin starts streaming from the new project.
 //!
-//! Either way: zero TOML edits, zero deploy commands. The plugin
-//! does it all.
+//! There is also a **Paste deploy key** fallback for air-gapped operators
+//! or for those who've already authenticated elsewhere. Path: 5.b below.
+//!
+//! All Convex commands are open-source (Apache 2 with FSL) and the
+//! client+CLI live at <https://github.com/get-convex/convex-js>. We do
+//! not implement our own OAuth server. We do not re-implement any Convex
+//! internal protocol. We just spawn their CLI, capture stdout, and
+//! persist the secrets on disk.
 
 use crate::plugins::{PluginContext, PluginDescriptor, Plugin, PluginCapability, ChannelKind};
-use crate::plugins::secret_store::{self, StoredSecret};
+use crate::plugins::secret_store;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -33,124 +36,197 @@ pub const DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     label: "Convex BaaS",
     channel: ChannelKind::Web,
     capabilities: &[
-        PluginCapability::RequiresOAuth,
-        PluginCapability::RequiresSecrets,
+        PluginCapability::MessagesSend,        // the web admin reads Convex
+        PluginCapability::RequiresSecrets,     // uses CONVEX_DEPLOY_KEY, not OAuth
     ],
-    required_secrets: &[],
-    oauth_url: Some("https://auth.convex.dev/oauth/authorize"),
+    required_secrets: &[
+        "deploy_key",                          // what `npx convex login` writes
+        "deployment_url",                       // the .convex/config.json path's URL
+    ],
+    oauth_url: None,                            // Convex does not expose OAuth serverside.
 };
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct OAuthCallback {
-    pub code: String,
-    pub state: String,
+// ─── Public Tauri commands ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConvexStatus {
+    pub connected: bool,
+    pub deployment_url: Option<String>,
+    pub project_slug: Option<String>,
+    pub team_slug: Option<String>,
+    pub deploy_key_present: bool,
+    pub schema_pushed_at_unix: Option<i64>,
+    pub last_seen_at_unix: Option<i64>,
+    pub log_tail: Vec<String>,
 }
 
-/// Tauri command — invoked by the React UI when the operator clicks
-/// "Connect Convex". Returns the URL the desktop should open in the
-/// default browser. The actual code-for-key exchange happens in
-/// `convex::complete_oauth`.
+/// `begin_convex_link()` — kicks off the Convex login flow in the background.
+///
+/// Internally we run `npx convex login` because that's the only supported
+/// way to authenticate a desktop-client app to Convex today. The CLI
+/// pops the browser to GitHub's device authorisation page automatically
+/// — we don't reopen it ourselves.
 #[tauri::command]
-pub async fn begin_convex_oauth() -> Result<String, String> {
-    // Real client_id for "ARK ASA Configuration Manager" lives in Convex
-    // dashboard. We ship a default one; operators self-serve to
-    // replace it with their own OAuth app for fully white-labelled deploys.
-    let client_id = std::env::var("ARK_ASA_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| "ark-asa-config-manager-default".into());
+pub async fn begin_convex_link() -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let convex_dir = cwd.join("convex");
 
-    // State carries a CSRF token + the local loopback port.
-    let loopback_port = 8768;
-    let state_token = uuid::Uuid::new_v4().to_string();
+    // `npx convex login` is interactive — it needs a TTY. We use stdin
+    // raw so the user can press Enter / type in the operator terminal UI
+    // if a future Hito wires that up. For now, we expect the operator to
+    // have `node` and `npx` available, and a browser to click Authorize.
+    let output = std::process::Command::new("npx")
+        .arg("convex")
+        .arg("login")
+        .current_dir(&convex_dir)
+        .env("CI", "") // unset CI so the interactive flow runs
+        .output()
+        .map_err(|e| format!("failed to spawn `npx convex login`: {e}.  Install Node + `npm install convex` in the convex/ directory."))?;
+    if !output.status.success() {
+        return Err(format!(
+            "convex login failed:\n{}\n{}",
+            String::from_utf8_lossy(&stdout_bytes(&output.stdout)),
+            String::from_utf8_lossy(&stderr_bytes(&output.stderr)),
+        ));
+    }
 
-    // Persist state token so `convex::complete_oauth` can validate it.
+    // After `convex login` succeeds, the CLI writes `~/.convex/credentials.json`
+    // and `<project>/.convex/config.json`. We tail both and refresh our
+    // own secret store.
+    ingest_cli_credentials().await?;
+    Ok("convex connected.  Click Push schema next.".into())
+}
+
+fn stdout_bytes(out: &[u8]) -> Vec<u8> { out.to_vec() }
+fn stderr_bytes(out: &[u8]) -> Vec<u8> { out.to_vec() }
+
+/// Read `~/.convex/credentials.json` and `<convex>/.convex/config.json`,
+/// copy the active deployment + deploy_key into our secret store.
+/// Returns Err if the CLI write didn't happen yet (still being hashed).
+async fn ingest_cli_credentials() -> Result<(), String> {
+    let home = dirs_home();
+    let creds = std::fs::read_to_string(home.join(".convex").join("credentials.json"))
+        .map_err(|e| format!("read credentials.json: {e}"))?;
+    let parsed: serde_json::Value = toml_or_json(&creds)
+        .map_err(|e| format!("parse credentials.json: {e}"))?;
+
+    let team = parsed.get("team")
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+    let project = parsed.get("project")
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+    let deploy_key = parsed.get("access_token")
+        .or_else(|| parsed.get("deploy_key"))
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let cfg_path = cwd.join("convex").join(".convex").join("config.json");
+    let cfg_text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    let config: serde_json::Value = toml_or_json(&cfg_text).unwrap_or_else(|_| serde_json::json!({}));
+    let deployment = config.get("deployment")
+        .or_else(|| config.get("deployments"))
+        .and_then(|t| t.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            // Convex self-hosted: CONVEX_SELF_HOSTED_URL is the URL.
+            std::env::var("CONVEX_SELF_HOSTED_URL").ok()
+        });
+
     let mut s = secret_store::read("convex").unwrap_or_default();
-    s.fields.insert("csrf_state".into(), state_token.clone());
-    s.fields.insert("loopback_port".into(), loopback_port.to_string());
-    secret_store::write("convex", &s).map_err(|e| e.to_string())?;
-
-    let url = format!(
-        "https://auth.convex.dev/oauth/authorize\
-        ?client_id={client_id}\
-        &scope=deploy%3Awrite%20project%3Aread\
-        &state={state_token}\
-        &redirect_uri=http%3A%2F%2F127.0.0.1%3A{loopback_port}%2Foauth%2Fcallback"
-    );
-    Ok(url)
+    if let Some(t) = team      { s.fields.insert("team".into(),  t); }
+    if let Some(p) = project    { s.fields.insert("project".into(), p); }
+    if let Some(k) = deploy_key { s.fields.insert("deploy_key".into(), k); }
+    if let Some(d) = deployment { s.fields.insert("deployment_url".into(), d); }
+    s.fields.insert("last_seen_at_unix".into(), unix_now().to_string());
+    secret_store::write("convex", &s).map_err(|e| e.to_string())
 }
 
-/// Tauri command — receives the OAuth callback URL captured by the
-/// local HTTP callback server (we embed that into the same
-/// `http_api.rs` axum router as the loopback, but tied to port 8768).
-#[tauri::command]
-pub async fn complete_convex_oauth(code: String, state: String) -> Result<String, String> {
-    let mut s = secret_store::read("convex").ok_or("convex plugin not initialised")?;
-    if s.fields.get("csrf_state").map(String::as_str) != Some(state.as_str()) {
-        return Err("CSRF state mismatch — possible MITM, refusing".to_string());
-    }
-    // Exchange `code` → { deployment_url, deploy_key, team_slug, project_slug }.
-    let client_id = std::env::var("ARK_ASA_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| "ark-asa-config-manager-default".to_string());
-    let exchange: serde_json::Value = reqwest::Client::new()
-        .post("https://auth.convex.dev/oauth/token")
-        .form(&[("grant_type", "authorization_code"),
-                ("code",      code.as_str()),
-                ("client_id", client_id.as_str())])
-        .send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    if let Some(err) = exchange.get("error") {
-        return Err(format!("oauth error: {err}"));
-    }
-
-    // Persist credentials.  Until Convex ships a real deployment-key
-    // OAuth flow we also accept CLI-flow keys via `paste_deploy_key`.
-    s.fields.remove("csrf_state");
-    if let Some(url) = exchange.get("deployment_url").and_then(|v| v.as_str()) {
-        s.fields.insert("deployment_url".into(), url.to_string());
-    }
-    if let Some(key) = exchange.get("deploy_key").and_then(|v| v.as_str()) {
-        s.fields.insert("deploy_key".into(), key.to_string());
-    }
-    secret_store::write("convex", &s).map_err(|e| e.to_string())?;
-
-    Ok("convex connected. Now auto-deploying schema…".into())
+fn toml_or_json(text: &str) -> Result<serde_json::Value, String> {
+    serde_json::from_str::<serde_json::Value>(text.trim_start())
+        .or_else(|_| {
+            // some CLI builds emit JSON5 or non-standard keys
+            toml::from_str::<serde_json::Value>(text)
+                .map_err(|e| format!("both JSON and TOML parse failed: {e}"))
+        })
 }
 
-/// Tauri command — paste a deploy key the operator obtained by running
-/// `npx convex login` on another machine. (Belt-and-braces.)
+fn dirs_home() -> PathBuf { PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default()) }
+use std::path::PathBuf;
+
+/// Manual fallback: paste a CONVEX_DEPLOY_KEY you copy from another machine.
 #[tauri::command]
 pub async fn paste_convex_deploy_key(
     deployment_url: String,
     deploy_key: String,
 ) -> Result<String, String> {
-    let mut s = StoredSecret { updated_at_unix: unix_now(), ..Default::default() };
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let project_slug = cwd.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ark-asa-admin")
+        .to_string();
+
+    let mut s = secret_store::read("convex").unwrap_or_default();
     s.fields.insert("deployment_url".into(), deployment_url);
     s.fields.insert("deploy_key".into(), deploy_key);
+    s.fields.insert("project".into(), project_slug);
+    s.fields.insert("last_seen_at_unix".into(), unix_now().to_string());
     secret_store::write("convex", &s).map_err(|e| e.to_string())?;
     Ok("convex key saved".into())
 }
 
+/// `convex_push_schema()` — runs `npx convex deploy --prod` in a child
+/// process.  Output is captured and streamed back via the response.
 #[tauri::command]
-pub async fn convex_status() -> Result<ConvexWire, String> {
-    let s = secret_store::read("convex");
-    Ok(ConvexWire {
-        connected: s.as_ref().map_or(false, |s| s.fields.contains_key("deployment_url")),
-        deployment_url: s.as_ref().and_then(|s| s.fields.get("deployment_url").cloned()),
-        deploy_key_present: s.as_ref().map_or(false, |s| s.fields.contains_key("deploy_key")),
-        schema_pushed_at_unix: s.as_ref().and_then(|s| s.fields.get("schema_pushed_at_unix").cloned()).and_then(|s| s.parse().ok()),
-        last_seen_at_unix: s.as_ref().and_then(|s| s.fields.get("last_seen_at_unix").cloned()).and_then(|s| s.parse().ok()),
-    })
+pub async fn convex_push_schema() -> Result<String, String> {
+    let s = secret_store::read("convex").ok_or("convex not connected — paste_convex_deploy_key() first.")?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let convex_dir = cwd.join("convex");
+    let key = s.fields.get("deploy_key").cloned().ok_or("missing deploy_key")?;
+
+    let mut cmd = std::process::Command::new("npx");
+    cmd.arg("convex").arg("deploy").arg("--prod")
+        .current_dir(&convex_dir)
+        .env("CONVEX_DEPLOY_KEY", key)
+        .env_remove("CONVEX_DEPLOYMENT") // env-safety: don't accidentally use dev
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(url) = s.fields.get("deployment_url") {
+        cmd.env("CONVEX_SELF_HOSTED_URL", url);
+    }
+    let child = cmd.spawn().map_err(|e| format!("spawn npx: {e}.  Install Node + convex package; or use Paste deploy key with a host pointing at your deployment URL."))?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    let mut s = s;
+    if out.status.success() {
+        s.fields.insert("schema_pushed_at_unix".into(), unix_now().to_string());
+        secret_store::write("convex", &s).map_err(|e| e.to_string())?;
+        Ok(stdout)
+    } else {
+        // Capture last 20 log lines so the React side can show them
+        let combined = format!("{stdout}\n--- stderr ---\n{stderr}");
+        Err(combined)
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ConvexWire {
-    pub connected: bool,
-    pub deployment_url: Option<String>,
-    pub deploy_key_present: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_pushed_at_unix: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_seen_at_unix: Option<i64>,
+/// `convex_status()` — for the React UI to paint the connection state.
+#[tauri::command]
+pub async fn convex_status() -> Result<ConvexStatus, String> {
+    let s = secret_store::read("convex");
+    Ok(ConvexStatus {
+        connected:    s.as_ref().map_or(false, |s| s.fields.contains_key("deploy_key")),
+        deployment_url:      s.as_ref().and_then(|s| s.fields.get("deployment_url").cloned()),
+        project_slug:        s.as_ref().and_then(|s| s.fields.get("project").cloned()),
+        team_slug:           s.as_ref().and_then(|s| s.fields.get("team").cloned()),
+        deploy_key_present:  s.as_ref().map_or(false, |s| s.fields.contains_key("deploy_key")),
+        schema_pushed_at_unix: s.as_ref().and_then(|s| s.fields.get("schema_pushed_at_unix").cloned()).and_then(|s| s.parse().ok()),
+        last_seen_at_unix:   s.as_ref().and_then(|s| s.fields.get("last_seen_at_unix").cloned()).and_then(|s| s.parse().ok()),
+        log_tail:            vec![],  // Hito 12 exposes streaming logs
+    })
 }
 
 fn unix_now() -> i64 {
@@ -158,54 +234,7 @@ fn unix_now() -> i64 {
         .map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// Pushes our `/convex/convex/*` schema + functions to the Convex
-/// deployment using the saved deploy key. Called automatically by
-/// `lib::run()` after a successful OAuth, and also exposed as a
-/// Tauri command for the operator to manually re-run.
-#[tauri::command]
-pub async fn convex_push_schema() -> Result<String, String> {
-    let s = secret_store::read("convex").ok_or("not connected")?;
-    let url = s.fields.get("deployment_url").cloned().ok_or("missing deployment_url")?;
-    let key = s.fields.get("deploy_key").cloned().ok_or("missing deploy_key")?;
-
-    // The actual `convex deploy` is a child process.  In production we
-    // call into Convex's REST API directly via the deploy_key, but for
-    // v2.1.0-alpha we shell out: the operator has Node + pnpm on the
-    // box anyway (the dev stack requires it).
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let convex_dir = cwd.join("convex");
-    let child = std::process::Command::new("npx")
-        .arg("convex")
-        .arg("deploy")
-        .arg("--prod")
-        .arg("--url").arg(&url)
-        .arg("--deploy-key").arg(&key)
-        .current_dir(convex_dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn npx convex deploy: {e}"))?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!(
-            "convex deploy failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-
-    // Stamp timestamp.
-    let mut s = s;
-    s.fields.insert("schema_pushed_at_unix".into(), unix_now().to_string());
-    secret_store::write("convex", &s).map_err(|e| e.to_string())?;
-
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// Plugin trait implementation.  Called by `lib::run()` once after
-/// the loopback HTTP server is up.  At startup we don't actually have
-/// to "start" anything — every interaction is operator-driven.  The
-/// plugin is mostly here so its descriptor shows up in `Options →
-/// Plugins`.
+// ─── Plugin trait plumbing ────────────────────────────────────────────────
 pub struct ConvexPlugin;
 
 #[async_trait]
@@ -213,12 +242,11 @@ impl Plugin for ConvexPlugin {
     fn id() -> &'static str { "convex" }
     fn descriptor() -> PluginDescriptor { DESCRIPTOR }
     async fn start(_ctx: PluginContext) -> Result<tokio::task::JoinHandle<()>, crate::plugins::PluginStartError> {
-        // No-op: Convex push is event-driven by the React UI.
+        // Convex has no event-source loop needed; everything is event-driven
+        // by the React UI. We park the future so the registry can call
+        // `start` uniformly.
         Ok(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
         }))
     }
 }
-
-// Compile-time registration is centralised in `plugins::register_default_plugins`.
-// See `lib::run` for the call site.

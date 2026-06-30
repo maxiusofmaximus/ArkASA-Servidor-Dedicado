@@ -7,16 +7,6 @@ import { Section, Toggle } from '../ui/OptionsUI'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
 
-async function startConvexOAuth(): Promise<void> {
-  const url = await invoke<string>('begin_convex_oauth')
-  await openExternal(url)
-}
-
-async function startVercelOAuth(): Promise<void> {
-  const url = await invoke<string>('begin_vercel_oauth')
-  await openExternal(url)
-}
-
 async function pushConvex(): Promise<string> {
   return await invoke<string>('convex_push_schema')
 }
@@ -286,8 +276,10 @@ function ConvexCard() {
 
   const connect = async () => {
     setBusy(true); setMsg(null)
-    try { await startConvexOAuth(); setMsg('OAuth opened in browser — complete there.') }
-    catch (e: any) { setMsg(String(e)) }
+    try {
+      const msg = await invoke<string>('begin_convex_link')
+      setMsg(msg.includes('connected') ? msg : `${msg} — check the CLI window for the GitHub login screen.`)
+    } catch (e: any) { setMsg(String(e)) }
     finally { setBusy(false) }
   }
   const push = async () => {
@@ -344,8 +336,10 @@ function VercelCard() {
   useEffect(() => { void refresh() }, [refresh])
   const connect = async () => {
     setBusy(true); setMsg(null)
-    try { await startVercelOAuth(); setMsg('OAuth opened in browser — complete there.') }
-    catch (e: any) { setMsg(String(e)) }
+    try {
+      const msg = await invoke<string>('begin_vercel_link')
+      setMsg(msg.includes('connected') ? msg : `${msg} — check the CLI window for the vercel login browser.`)
+    } catch (e: any) { setMsg(String(e)) }
     finally { setBusy(false) }
   }
   const deploy = async () => {

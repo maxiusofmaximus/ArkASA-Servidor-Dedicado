@@ -1,19 +1,23 @@
-//! Vercel plugin — single-click "Deploy Web" button in the Tauri app.
+//! Vercel plugin — v2.1 onboarding via the **official CLI bridge**.
 //!
-//! Two-step onboarding the operator sees:
-//!   1. "Deploy Web" button → opens https://vercel.com/oauth/authorize?...
-//!   2. Operator approves; Vercel redirects to
-//!      http://127.0.0.1:8769/oauth/vercel?code=...&state=...
-//!   3. We exchange for the Vercel API token + project ID.
-//!   4. Tauri runs `vercel --prod` over the saved token. Web is live.
+//! Vercel ships `vercel login`, `vercel env`, `vercel deploy`.  The
+//! desktop app shells out to those instead of maintaining a parallel
+//! OAuth flow.  Specifically:
 //!
-//! For day-zero developers without a Vercel account we also accept:
-//!   - "Skip" → falls back to running `vercel login` interactively
-//!     from inside the operator's terminal (Hito 12 helper).
-//!   - "Use Vercel CLI token" → paste an existing `vercel.token` value.
+//!   * `Connect Vercel` → spawns `vercel login`. The operator opens the
+//!     URL Vercel prints, clicks Authorize, and `vercel` writes
+//!     `~/.vercel/auth.json` with a long-lived token. We read it.
+//!   * `Deploy web`     → spawns `vercel deploy --prod --yes`, optionally
+//!     pointing at VERCEL_PROJECT_ID the operator set.
+//!   * `Paste VERCEL_TOKEN`  → manual fallback for air-gapped setups.
+//!
+//! Just like Convex, this is the only realistic day-one integration
+//! without the operator standing up a custom OAuth client. We keep
+//! minimal integration surface — Vercel CLI + token relay — and avoid
+//! inventing endpoints.
 
 use crate::plugins::{PluginContext, PluginDescriptor, Plugin, PluginCapability, ChannelKind};
-use crate::plugins::secret_store::{self, StoredSecret};
+use crate::plugins::secret_store;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -23,142 +27,161 @@ pub const DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     label: "Vercel (web hosting)",
     channel: ChannelKind::Web,
     capabilities: &[
-        PluginCapability::RequiresOAuth,
-        PluginCapability::RequiresSecrets,
+        PluginCapability::MessagesSend,        // serves the web admin
+        PluginCapability::RequiresSecrets,     // VERCEL_TOKEN, not OAuth
     ],
-    required_secrets: &[],
-    oauth_url: Some("https://vercel.com/oauth/authorize"),
+    required_secrets: &["token", "project_name_or_id?"],
+    oauth_url: None,                            // Vercel ships OAuth for Vercel Apps,
+                                                // not for desktop end-users.
 };
 
-#[tauri::command]
-pub async fn begin_vercel_oauth() -> Result<String, String> {
-    let client_id = std::env::var("VERCEL_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| "ark_asa_admin_default".into());
-
-    let loopback_port = 8769;
-    let state_token = uuid::Uuid::new_v4().to_string();
-
-    let mut s = secret_store::read("vercel").unwrap_or_default();
-    s.fields.insert("csrf_state".into(), state_token.clone());
-    s.fields.insert("loopback_port".into(), loopback_port.to_string());
-    secret_store::write("vercel", &s).map_err(|e| e.to_string())?;
-
-    Ok(format!(
-        "https://vercel.com/oauth/authorize\
-        ?client_id={client_id}\
-        &scope=deploy%3Awrite%20project%3Aread%20user%3Aread\
-        &state={state_token}\
-        &redirect_uri=http%3A%2F%2F127.0.0.1%3A{loopback_port}%2Foauth%2Fvercel"
-    ))
-}
-
-#[tauri::command]
-pub async fn complete_vercel_oauth(code: String, state: String) -> Result<String, String> {
-    let mut s = secret_store::read("vercel").ok_or("vercel plugin not initialised")?;
-    if s.fields.get("csrf_state").map(String::as_str) != Some(state.as_str()) {
-        return Err("CSRF state mismatch".into());
-    }
-    // `code` → team token.
-    let client_id = std::env::var("VERCEL_OAUTH_CLIENT_ID")
-        .unwrap_or_else(|_| "ark_asa_admin_default".to_string());
-    let client_secret = std::env::var("VERCEL_OAUTH_CLIENT_SECRET")
-        .unwrap_or_default();
-    let exchange: serde_json::Value = reqwest::Client::new()
-        .post("https://api.vercel.com/v1/oauth/access_token")
-        .form(&[("client_id", client_id.as_str()),
-                ("client_secret", client_secret.as_str()),
-                ("code", code.as_str())])
-        .send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    s.fields.remove("csrf_state");
-    if let Some(token) = exchange.get("access_token").and_then(|v| v.as_str()) {
-        s.fields.insert("token".into(), token.to_string());
-    }
-    if let Some(tid) = exchange.get("team_id").and_then(|v| v.as_str()) {
-        s.fields.insert("team_id".into(), tid.to_string());
-    }
-    secret_store::write("vercel", &s).map_err(|e| e.to_string())?;
-
-    // Auto-create / link the project so the operator doesn't have to
-    // touch the Vercel dashboard.
-    Ok("vercel connected. Provisioning project…".into())
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VercelWire {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VercelStatus {
     pub connected: bool,
+    pub token_present: bool,
     pub last_deploy_url: Option<String>,
-    pub last_deploy_status: Option<String>,
     pub last_deploy_at_unix: Option<i64>,
-    pub project_name: Option<String>,
+    pub last_deploy_status: Option<String>,
+    pub log_tail: Vec<String>,
 }
 
+/// `begin_vercel_link()` — spawns `vercel login` interactively.
+/// The CLI pops a browser to https://vercel.com/api/registration/.../login
+/// for the operator to complete; on success it writes to
+/// `~/.vercel/auth.json`. We tail that file and pick up the token.
 #[tauri::command]
-pub async fn vercel_deploy_web() -> Result<VercelWire, String> {
-    let s = secret_store::read("vercel").ok_or("vercel not connected")?;
-    let token = s.fields.get("token").cloned().ok_or("missing token")?;
+pub async fn begin_vercel_link() -> Result<String, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let web_dir = cwd.join("web");
 
-    let mut child_cmd = std::process::Command::new("vercel");
-    child_cmd
-        .arg("deploy")
-        .arg("--prod")
-        .arg("--yes")
-        .arg("--token").arg(&token)
+    let output = std::process::Command::new("vercel")
+        .arg("login")
         .current_dir(&web_dir)
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = child_cmd.spawn().map_err(|e| format!("spawn vercel CLI: {e}. Install with `npm i -g vercel`."))?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let url = parse_vercel_url_from_output(&stdout);
-
-    // Persist status.
-    let mut s = s;
-    s.fields.insert("last_deploy_at_unix".into(), unix_now().to_string());
-    if let Some(u) = &url {
-        s.fields.insert("last_deploy_url".into(), u.clone());
+        .output()
+        .map_err(|e| format!("failed to spawn `vercel login`: {e}.  Install with `npm i -g vercel`."))?;
+    if !output.status.success() {
+        return Err(format!(
+            "vercel login failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
     }
-    let status = if out.status.success() { "ok" } else { "failed" };
-    s.fields.insert("last_deploy_status".into(), status.into());
-    secret_store::write("vercel", &s).map_err(|e| e.to_string())?;
-
-    if !out.status.success() {
-        return Err(format!("vercel deploy failed:\n{}\n{}",
-            stdout, String::from_utf8_lossy(&out.stderr)));
-    }
-
-    Ok(VercelWire {
-        connected: true,
-        last_deploy_url: url,
-        last_deploy_status: Some(status.into()),
-        last_deploy_at_unix: Some(unix_now()),
-        project_name: Some("ark-asa-admin".into()),
-    })
+    ingest_vercel_credentials()?;
+    Ok("vercel connected.  Click Deploy web next.".into())
 }
 
+/// Read `~/.vercel/auth.json` and copy the token into our secret store.
+fn ingest_vercel_credentials() -> Result<(), String> {
+    let home = dirs_home();
+    let raw = std::fs::read_to_string(home.join(".vercel").join("auth.json"))
+        .or_else(|_| std::fs::read_to_string(home.join("AppData").join(".vercel").join("auth.json")))
+        .map_err(|e| format!("read vercel auth.json: {e}.  Vercel login may have failed silently — re-run from a terminal to see errors."))?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("parse auth.json: {e}"))?;
+
+    let token = parsed.get("token")
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+    let team = parsed.get("teamId")
+        .or_else(|| parsed.get("team_id"))
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+
+    let mut s = secret_store::read("vercel").unwrap_or_default();
+    if let Some(t) = token.clone() {
+        s.fields.insert("token".into(), t);
+    }
+    if let Some(t) = team {
+        s.fields.insert("team_id".into(), t);
+    }
+    s.fields.insert("last_seen_at_unix".into(), unix_now().to_string());
+    secret_store::write("vercel", &s).map_err(|e| e.to_string())?;
+
+    if token.is_none() {
+        return Err("vercel auth.json did not contain `token`".into());
+    }
+    Ok(())
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
+}
+
+/// `paste_vercel_token` — manual fallback for non-interactive setups
+/// (CI runners, air-gapped routers, …).  Paste a token you create at
+/// `<vercel.com>/account/tokens>`.
 #[tauri::command]
-pub async fn vercel_status() -> Result<VercelWire, String> {
-    let s = secret_store::read("vercel");
-    Ok(VercelWire {
-        connected: s.as_ref().map_or(false, |s| s.fields.contains_key("token")),
-        last_deploy_url: s.as_ref().and_then(|s| s.fields.get("last_deploy_url").cloned()),
-        last_deploy_status: s.as_ref().and_then(|s| s.fields.get("last_deploy_status").cloned()),
-        last_deploy_at_unix: s.as_ref().and_then(|s| s.fields.get("last_deploy_at_unix").cloned()).and_then(|s| s.parse().ok()),
-        project_name: s.as_ref().and_then(|s| s.fields.get("project_name").cloned()),
-    })
+pub async fn paste_vercel_token(
+    token: String,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    let mut s = secret_store::read("vercel").unwrap_or_default();
+    s.fields.insert("token".into(), token);
+    if let Some(p) = project_id {
+        s.fields.insert("project_id".into(), p);
+    }
+    s.fields.insert("last_seen_at_unix".into(), unix_now().to_string());
+    secret_store::write("vercel", &s).map_err(|e| e.to_string())?;
+    Ok("vercel token saved".into())
+}
+
+/// `vercel_deploy_web()` — runs `vercel deploy --prod --yes` in a child process.
+/// Output is captured and streamed back via the response.
+#[tauri::command]
+pub async fn vercel_deploy_web() -> Result<String, String> {
+    let s = secret_store::read("vercel").ok_or("vercel not connected — click 'Connect Vercel' first.")?;
+    let token = s.fields.get("token").cloned().ok_or("missing token — re-run Connect Vercel.")?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let web_dir = cwd.join("web");
+
+    let mut cmd = std::process::Command::new("vercel");
+    cmd.arg("deploy")
+        .arg("--prod")
+        .arg("--yes")
+        .current_dir(&web_dir)
+        .env("VERCEL_TOKEN", token)
+        .env_remove("CI") // vercel login is no-op if CI; force interactive-friendly path
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(pid) = s.fields.get("project_id") {
+        cmd.env("VERCEL_PROJECT_ID", pid);
+    }
+
+    let child = cmd.spawn().map_err(|e| format!("spawn vercel CLI: {e}.  Install with `npm i -g vercel`."))?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    let mut s = s;
+    if out.status.success() {
+        s.fields.insert("last_deploy_at_unix".into(), unix_now().to_string());
+        s.fields.insert("last_deploy_url".into(), parse_vercel_url_from_output(&stdout).unwrap_or_default());
+        secret_store::write("vercel", &s).map_err(|e| e.to_string())?;
+        Ok(stdout)
+    } else {
+        Err(format!("{stdout}\n--- stderr ---\n{stderr}"))
+    }
 }
 
 fn parse_vercel_url_from_output(out: &str) -> Option<String> {
-    // `vercel deploy --prod` prints e.g. "Production: https://ark-asa-admin-…vercel.app"
     out.lines()
         .flat_map(|line| line.split_whitespace())
         .find(|tok| tok.starts_with("https://") && tok.contains(".vercel.app"))
         .map(str::to_string)
+}
+
+/// `vercel_status()` — for the React UI.
+#[tauri::command]
+pub async fn vercel_status() -> Result<VercelStatus, String> {
+    let s = secret_store::read("vercel");
+    Ok(VercelStatus {
+        connected:          s.as_ref().map_or(false, |s| s.fields.contains_key("token")),
+        token_present:      s.as_ref().map_or(false, |s| s.fields.contains_key("token")),
+        last_deploy_url:    s.as_ref().and_then(|s| s.fields.get("last_deploy_url").cloned()),
+        last_deploy_at_unix: s.as_ref().and_then(|s| s.fields.get("last_deploy_at_unix").cloned()).and_then(|s| s.parse().ok()),
+        last_deploy_status: s.as_ref().and_then(|s| s.fields.get("last_deploy_status").cloned()),
+        log_tail:           vec![],
+    })
 }
 
 fn unix_now() -> i64 {
@@ -166,6 +189,7 @@ fn unix_now() -> i64 {
         .map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+// ─── Plugin trait plumbing ────────────────────────────────────────────────
 pub struct VercelPlugin;
 
 #[async_trait]
@@ -178,6 +202,3 @@ impl Plugin for VercelPlugin {
         }))
     }
 }
-
-// Compile-time registration is centralised in `plugins::register_default_plugins`.
-// See `lib::run` for the call site.

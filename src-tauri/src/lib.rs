@@ -1463,14 +1463,14 @@ pub fn run() {
             admin_token,
             rotate_admin_token,
             set_admin_feature_flag,
-            // Plugin auth flows (v2.1)
-            crate::plugins::convex::begin_convex_oauth,
-            crate::plugins::convex::complete_convex_oauth,
+            // Plugin auth flows (v2.1) — Convex uses CLI bridge, not OAuth
+            crate::plugins::convex::begin_convex_link,
             crate::plugins::convex::paste_convex_deploy_key,
             crate::plugins::convex::convex_status,
             crate::plugins::convex::convex_push_schema,
-            crate::plugins::vercel::begin_vercel_oauth,
-            crate::plugins::vercel::complete_vercel_oauth,
+            // Vercel: also CLI-bridge (uses VERCEL_TOKEN env var)
+            crate::plugins::vercel::begin_vercel_link,
+            crate::plugins::vercel::paste_vercel_token,
             crate::plugins::vercel::vercel_deploy_web,
             crate::plugins::vercel::vercel_status,
             // CurseForge
