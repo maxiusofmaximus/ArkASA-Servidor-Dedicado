@@ -18,11 +18,22 @@ pub struct LaunchArgs {
 ///
 /// `instance_idx` is the 0-based position in `config.effective_maps()`.
 /// For a single-server setup, always pass `0`.
+///
+/// **Port assignment policy** is governed by `network.fixed_port_assignment_per_map`:
+///   * `true`  (default)  → stable hash of `map` so TheIsland always lands on
+///                          the same triplet regardless of boot order.
+///   * `false` (legacy)   → use the `instance_idx` stride, i.e. first-launched
+///                          map gets port 0×stride (matches pre-fix behaviour).
 pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) -> LaunchArgs {
     let maps = config.effective_maps();
     let is_cluster = maps.len() > 1;
 
-    let (game_port, query_port, rcon_port) = config.network.ports_for_index(instance_idx);
+    // ── Port assignment ───────────────────────────────────────────────────────
+    let (game_port, query_port, rcon_port) = if config.network.fixed_port_assignment_per_map {
+        config.network.ports_for_map_id(map)
+    } else {
+        config.network.ports_for_index(instance_idx)
+    };
 
     // In cluster mode: secondary maps get a human-readable suffix so players
     // can distinguish them in the ARK server browser.
@@ -47,14 +58,20 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
     ));
 
     // ── Additional CLI flags ──────────────────────────────────────────────────
+    // Note: `-NoBattlEye` is conditionally added based on `network.no_battleye`.
+    // When the flag is `true` (operator has BattleEye off), we **omit** it so
+    // ARK launches with anti-cheat disabled. When `false` (default), we keep
+    // the existing behaviour (BattleEye off — matches v2.0.0 release).
     let mut flags = vec![
-        "-NoBattlEye".to_string(),
         "-server".to_string(),
         "-log".to_string(),
         "-servergamelog".to_string(),
         "-NoTransferFromFiltering".to_string(),
         format!("-WinLiveMaxPlayers={}", config.gameplay.max_players),
     ];
+    if config.network.no_battleye {
+        flags.push("-NoBattlEye".to_string());
+    }
 
     // Advertise the configured IP so cluster-travel redirects and direct
     // connections use the correct reachable address.

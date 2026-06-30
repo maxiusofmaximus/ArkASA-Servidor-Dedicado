@@ -12,14 +12,14 @@ SetCompressor /SOLID lzma
 !include "WinMessages.nsh"
 
 Name "ARK ASA Configuration Manager"
-OutFile "ARK-ASA-Full-Setup.exe"
+OutFile "ARK-ASA-Full-Setup-2.1.exe"
 InstallDir "C:\Program Files\ARK ASA Config Manager"
 InstallDirRegKey HKLM "Software\ARKASAConfigManager" "InstallDir"
 RequestExecutionLevel admin
 
-VIProductVersion "1.4.0.0"
+VIProductVersion "2.1.0.0"
 VIAddVersionKey "ProductName"     "ARK ASA Configuration Manager Setup"
-VIAddVersionKey "ProductVersion"  "1.4.0"
+VIAddVersionKey "ProductVersion"  "2.1.0"
 VIAddVersionKey "FileDescription" "Full installer for ARK ASA Config Manager"
 VIAddVersionKey "LegalCopyright"  "MIT License - 2026"
 VIAddVersionKey "CompanyName"     "ARK ASA Config Manager"

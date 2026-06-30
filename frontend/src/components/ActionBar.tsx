@@ -2,57 +2,39 @@ import React, { useState, useRef, useEffect } from 'react'
 import Tooltip from './Tooltip'
 import DropdownPortal from './DropdownPortal'
 import { useI18n } from '../i18n/useI18n'
-import { invoke } from '../services/tauri'
-import type { ServerConfig } from '../types'
 
 interface ActionBarProps {
   onSave?: () => Promise<void> | void
-  onReset?: () => void
-  onBack?: () => void
-  onChooseDifficulty?: () => void
   onStartServer?: (mapIndex?: number) => void
   onStopServer?: (mapIndex?: number) => void
-  onOpenOptions?: () => void
-  onToggleLogs?: () => void
-  onImportConfig?: (tomlText: string) => void
-  onImportError?: (msg: string) => void
   mapStatuses?: import('../types').MapInstanceStatus[]
   isSaving?: boolean
   autoSave?: boolean
   isServerRunning?: boolean
   isServerStarting?: boolean
   isServerStopping?: boolean
-  showLogsButton?: boolean
-  isLogsOpen?: boolean
   canUndo?: boolean
   canRedo?: boolean
   onUndo?: () => void
   onRedo?: () => void
+  online?: boolean
   variant?: 'default' | 'mod_settings'
 }
 
 export default function ActionBar({
   onSave,
-  onReset,
-  onBack,
-  onChooseDifficulty,
   onStartServer,
   onStopServer,
-  onOpenOptions,
-  onToggleLogs,
-  onImportConfig,
-  onImportError,
   isSaving = false,
   autoSave = true,
   isServerStarting = false,
   isServerStopping = false,
-  showLogsButton = false,
-  isLogsOpen = false,
   canUndo = false,
   canRedo = false,
   onUndo,
   onRedo,
   mapStatuses = [],
+  online = true,
   variant = 'default',
 }: ActionBarProps) {
   const [saveOk, setSaveOk] = useState(false)
@@ -79,39 +61,7 @@ export default function ActionBar({
     } catch { /* error shown in App */ }
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !onImportConfig) return
-    const isZip = file.name.toLowerCase().endsWith('.zip')
-    if (isZip) {
-      const reader = new FileReader()
-      reader.onload = async (ev) => {
-        const buf = ev.target?.result
-        if (!(buf instanceof ArrayBuffer)) return
-        const bytes = Array.from(new Uint8Array(buf))
-        try {
-          const config = await invoke<ServerConfig>('parse_config_from_zip', { zipData: bytes })
-          // Re-serialize to TOML is not needed — pass config JSON through a round-trip
-          // by serializing the parsed config back to TOML via Rust
-          const tomlText = await invoke<string>('config_to_toml', { config })
-          onImportConfig(tomlText)
-        } catch (err) {
-          onImportError?.(`Failed to extract config from zip: ${String(err)}`)
-        }
-      }
-      reader.readAsArrayBuffer(file)
-    } else {
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        const text = ev.target?.result
-        if (typeof text === 'string') onImportConfig(text)
-      }
-      reader.readAsText(file)
-    }
-    e.target.value = ''
-  }
-
-  const startDisabled = isServerStarting
+  const startDisabled = isServerStarting || !online
   const stopDisabled  = isServerStopping
 
   const runningMaps = mapStatuses.filter((s) => s.running)
@@ -123,14 +73,8 @@ export default function ActionBar({
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 ark-panel border-t border-ark-cyan/40 px-6 py-3 flex items-center justify-between">
 
-      {/* ── Left: action buttons ──────────────────────────────────────────── */}
+      {/* ── Left: Save only ──────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
-
-        <Tooltip content={tip('back') ?? ''}>
-          <button onClick={onBack} className="ark-action-btn">
-            {tk('back', 'ATRÁS')}
-          </button>
-        </Tooltip>
 
         {variant === 'mod_settings' ? (
           <>
@@ -149,19 +93,29 @@ export default function ActionBar({
           </>
         ) : (
           <>
-            {onReset && (
-              <Tooltip content={tip('restore_defaults') ?? ''}>
-                <button onClick={onReset} disabled={isSaving} className="ark-action-btn disabled:opacity-40">
-                  {tk('restore_defaults', 'RESTABLECER')}
-                </button>
-              </Tooltip>
+            {onSave && (
+              autoSave ? (
+                <Tooltip content={tip('autosave') ?? ''}>
+                  <span
+                    className="ark-action-btn text-[10px] cursor-default"
+                    style={{ color: 'rgba(0,200,255,0.3)', outlineColor: 'transparent' }}
+                  >
+                    {tk('autosave', '✦ AUTOSAVE')}
+                  </span>
+                </Tooltip>
+              ) : (
+                <Tooltip content={tip('save') ?? ''}>
+                  <button
+                    onClick={handleSave}
+                    disabled={isSaving}
+                    className="ark-action-btn disabled:opacity-40"
+                    style={saveOk ? { color: 'rgba(74,222,128,0.9)', outlineColor: 'rgba(74,222,128,0.4)' } : undefined}
+                  >
+                    {isSaving ? tk('saving', 'SAVING...') : saveOk ? tk('saved', 'SAVED ✓') : tk('save', 'SAVE')}
+                  </button>
+                </Tooltip>
+              )
             )}
-
-            <Tooltip content={tip('choose_difficulty') ?? ''}>
-              <button onClick={onChooseDifficulty} className="ark-action-btn">
-                {tk('choose_difficulty', 'DIFICULTAD')}
-              </button>
-            </Tooltip>
 
             {/* Undo / Redo */}
             <Tooltip content={tk('undo_tooltip', 'Undo last change (Ctrl+Z)')}>
@@ -184,74 +138,7 @@ export default function ActionBar({
                 ↪
               </button>
             </Tooltip>
-
-            {onSave && (
-              autoSave ? (
-                <Tooltip content={tip('autosave') ?? ''}>
-                  <span
-                    className="ark-action-btn text-[10px] cursor-default"
-                    style={{ color: 'rgba(0,200,255,0.3)', outlineColor: 'transparent' }}
-                  >
-                    {tk('autosave', '✦ AUTOGUARDADO')}
-                  </span>
-                </Tooltip>
-              ) : (
-                <Tooltip content={tip('save_settings') ?? ''}>
-                  <button
-                    onClick={handleSave}
-                    disabled={isSaving}
-                    className="ark-action-btn disabled:opacity-40"
-                    style={saveOk ? { color: 'rgba(74,222,128,0.9)', outlineColor: 'rgba(74,222,128,0.4)' } : undefined}
-                  >
-                    {isSaving ? tk('saving', 'GUARDANDO...') : saveOk ? tk('saved', 'GUARDADO ✓') : tk('save_settings', 'GUARDAR')}
-                  </button>
-                </Tooltip>
-              )
-            )}
           </>
-        )}
-
-        {/* Import config */}
-        {onImportConfig && (
-          <>
-            <input ref={fileInputRef} type="file" accept=".toml,.zip" className="hidden" onChange={handleFileSelect} />
-            <Tooltip content={tip('import_config') ?? ''}>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="ark-action-btn text-[10px] px-3"
-                style={{ color: 'rgba(0,200,255,0.5)' }}
-              >
-                {tk('import_config', '↑ IMPORTAR')}
-              </button>
-            </Tooltip>
-          </>
-        )}
-
-        {/* Options */}
-        <Tooltip content={tip('options') ?? ''}>
-          <button
-            onClick={onOpenOptions}
-            className="ark-action-btn text-[10px] px-3"
-            style={{ color: 'rgba(0,200,255,0.5)' }}
-          >
-            {tk('options', '⚙ OPCIONES')}
-          </button>
-        </Tooltip>
-
-        {/* Logs */}
-        {showLogsButton && (
-          <Tooltip content={tip('logs') ?? ''}>
-            <button
-              onClick={onToggleLogs}
-              className="ark-action-btn text-[10px] px-3"
-              style={{
-                color: isLogsOpen ? 'rgba(74,222,128,0.8)' : 'rgba(0,200,255,0.5)',
-                outlineColor: isLogsOpen ? 'rgba(74,222,128,0.4)' : undefined,
-              }}
-            >
-              {tk('logs', '📋 LOGS')}
-            </button>
-          </Tooltip>
         )}
       </div>
 

@@ -1,6 +1,6 @@
 # ARK ASA Configuration Manager
 
-**Professional Server Configuration UI for ARK: Survival Ascended**
+**Professional Server Configuration UI for ARK: Survival Ascended · v2.1**
 
 [![Release](https://img.shields.io/github/v/release/maxiusofmaximus/ArkASA-Servidor-Dedicado)](https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,6 +16,9 @@ A modern, desktop application built with **Rust + Tauri + React** for managing A
 - **Config Export/Import** - TOML format, human-readable
 - **Automatic INI Generation** - Generates Game.ini & GameUserSettings.ini
 - **Extensible Architecture** - SOLID principles throughout
+- **Remote Admin via Convex + Vercel (v2.1)** - 8-channel admin: web, REST, Telegram, Discord, WhatsApp, Signal, WeChat, SSH
+- **Internet-Gated Server Start (v2.1)** - Prevents silent crashes from offline boots
+- **Fixed-by-Map Port Assignment (v2.1)** - Each cluster map always lands on the same triplet
 
 ## 🚀 Quick Start
 
@@ -294,11 +297,11 @@ If you need the old files:
 
 ## 🛠️ Roadmap (Future Versions)
 
-- [ ] Web UI option (in addition to desktop)
+- [x] Web UI option (in addition to desktop) — shipped in v2.1
+- [x] Auto-detect public IP and Tailscale IP on startup — shipped in v2.0
 - [ ] Advanced performance analytics dashboard
 - [ ] Custom plugin system for validators
-- [ ] Mobile companion app
-- [ ] Auto-detect public IP and Tailscale IP on startup
+- [ ] Mobile companion app (React Native, shares @ark-asa/shared-types)
 
 ## 📄 License
 

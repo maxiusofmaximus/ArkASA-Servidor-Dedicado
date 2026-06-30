@@ -3,6 +3,8 @@ pub mod error;
 pub mod cli;
 pub mod backup;
 pub mod stub;
+pub mod auth;
+pub mod integrations;
 
 // Re-export ark sub-modules used in commands
 mod ark;
@@ -758,6 +760,28 @@ fn is_tcp_port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
+/// Test if a UDP port is bound by trying to send a zero-length datagram.
+/// Returns true if something is listening (sendto succeeds without ICMP).
+fn is_udp_port_bound(port: u16) -> bool {
+    use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+    use std::time::Duration;
+    let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0));
+    let target    = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    match UdpSocket::bind(bind_addr) {
+        Ok(sock) => {
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+            // If sendto doesn't immediately fail with ICMP/Refused, a process
+            // is listening on the UDP port. Best-effort heuristic — ARK on
+            // Windows accepts our probe and stays silent; that's still "bound".
+            match sock.send_to(&[], target) {
+                Ok(_) => true,
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 #[cfg(windows)]
 fn kill_process_on_port(port: u16) -> std::result::Result<(), String> {
     use std::os::windows::process::CommandExt;
@@ -825,7 +849,7 @@ async fn get_cluster_instance_status(config: ServerConfig) -> std::result::Resul
 }
 
 #[tauri::command]
-fn start_server_instance(
+async fn start_server_instance(
     config: ServerConfig,
     map_index: usize,
 ) -> std::result::Result<String, String> {
@@ -842,10 +866,17 @@ fn start_server_instance(
     };
     let exe = config.paths.ark_exe();
     let args = build_launch_args(&config, &map, map_index);
-    let (game_port, _, rcon_port) = config.network.ports_for_index(map_index);
+    let (game_port, _, _rcon_port) = config.network.ports_for_index(map_index);
 
-    if is_tcp_port_open(rcon_port) {
-        return Err(format!("{} is already running (RCON port {} open)", map_display_label(&map), rcon_port));
+    // Anti double-start guard.
+    // ARK binds **UDP** game + query, not TCP. is_tcp_port_open was yielding
+    // a false positive on hosts where something else occupied the TCP slot.
+    // Verify the actual UDP game port + any running ArkAscendedServer.exe.
+    if is_udp_port_bound(game_port) {
+        return Err(format!("{} is already running (UDP game port {} is bound)", map_display_label(&map), game_port));
+    }
+    if is_server_running().await {
+        return Err("Another ARK instance is already running. Stop it first or wait for the next poll to clear stale state.".to_string());
     }
 
     let mut cmd = Command::new(&exe);
@@ -986,6 +1017,88 @@ struct DetectedIps {
 }
 
 #[tauri::command]
+async fn check_internet() -> bool {
+    // Lightweight connectivity probe: HEAD request with a tight 3s budget.
+    // Returns true if any of two reputable endpoints answers 2xx/3xx.
+    let probe = |url: &str| {
+        let url = url.to_string();
+        async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let resp = client.head(&url).send().await.map_err(|e| e.to_string())?;
+            Ok::<u16, String>(resp.status().as_u16())
+        }
+    };
+    let candidates = [
+        "https://api4.ipify.org",
+        "https://www.google.com",
+        "https://www.cloudflare.com",
+    ];
+    for url in candidates {
+        match probe(url).await {
+            Ok(status) if (200..400).contains(&status) => return true,
+            _ => continue,
+        }
+    }
+    false
+}
+
+#[tauri::command]
+async fn admin_token(
+    _auth: tauri::State<'_, ()>,
+) -> Result<String, String> {
+    let holder = auth_initial_holder_static();
+    let guard  = holder.lock().await;
+    match guard.as_ref() {
+        Some(a) => Ok(a.active_token().to_string()),
+        None   => Err("admin auth not yet initialised — restart the app and retry".into()),
+    }
+}
+
+#[tauri::command]
+async fn rotate_admin_token() -> Result<String, String> {
+    let holder = auth_initial_holder_static();
+    let mut guard = holder.lock().await;
+    let Some(a) = guard.as_mut() else {
+        return Err("admin auth not yet initialised".into());
+    };
+    let mut a_clone = (**a).clone();
+    let token = a_clone.rotate().await?.to_string();
+    *guard = Some(Arc::new(a_clone));
+    Ok(token)
+}
+
+#[tauri::command]
+async fn set_admin_feature_flag(_key: String, _value: bool) -> Result<(), String> {
+    // Hito 4 wires this up to a TOML-backed registry so Convex enable/
+    // disable round-trips to disk rather than eating argv. For now this
+    // is intentionally a no-op so the frontend can call it without
+    // crashing.
+    Ok(())
+}
+
+/// Static handle to the AuthState, populated by `run()` at startup.
+/// Hito 4 will replace this with a `tauri::manage`-d value once we
+/// settle on the best pattern.
+use std::sync::OnceLock;
+static AUTH_HOLDER: OnceLock<Arc<tokio::sync::Mutex<Option<Arc<auth::AuthState>>>>> =
+    OnceLock::new();
+fn auth_initial_holder_static() -> Arc<tokio::sync::Mutex<Option<Arc<auth::AuthState>>>> {
+    AUTH_HOLDER.get_or_init(|| Arc::new(tokio::sync::Mutex::new(None))).clone()
+}
+
+fn machine_host_id() -> Result<String, String> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    let out = Command::new("hostname").output().map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    let out = Command::new("hostname").output().map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[tauri::command]
 async fn detect_ips() -> DetectedIps {
     let (public_ip, tailscale_ip, local_ip) = tokio::join!(
         detect_public_ip(),
@@ -997,8 +1110,10 @@ async fn detect_ips() -> DetectedIps {
 
 #[tauri::command]
 fn parse_config_from_toml(toml_str: String) -> Result<config::ServerConfig, String> {
-    toml::from_str::<config::ServerConfig>(&toml_str)
-        .map_err(|e| format!("Failed to parse TOML: {}", e))
+    let mut config: config::ServerConfig = toml::from_str(&toml_str)
+        .map_err(|e| format!("Failed to parse TOML: {}", e))?;
+    config.network.migrate_legacy_connections();
+    Ok(config)
 }
 
 /// Serialize a ServerConfig back to TOML string (used after zip import).
@@ -1024,8 +1139,10 @@ fn parse_config_from_zip(zip_data: Vec<u8>) -> Result<config::ServerConfig, Stri
             use std::io::Read;
             file.read_to_string(&mut contents)
                 .map_err(|e| format!("Failed to read config.toml from zip: {}", e))?;
-            return toml::from_str::<config::ServerConfig>(&contents)
-                .map_err(|e| format!("Failed to parse config.toml: {}", e));
+            let mut cfg: config::ServerConfig = toml::from_str(&contents)
+                .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
+            cfg.network.migrate_legacy_connections();
+            return Ok(cfg);
         }
     }
     Err("No config.toml found inside the zip file".to_string())
@@ -1212,6 +1329,73 @@ pub fn run() {
     let tray_state     = Arc::new(TrayState { minimize_to_tray: AtomicBool::new(true) });
     let on_demand_state = Arc::new(stub::OnDemandState::new());
 
+    // v2.1 — admin auth + loopback HTTP API.
+    // AuthState::load_or_init is async; bounded blocking spawn so the UI thread
+    // does not stall on first run.
+    let auth_initial_holder: Arc<tokio::sync::Mutex<Option<Arc<auth::AuthState>>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+    {
+        let holder = auth_initial_holder.clone();
+        tauri::async_runtime::spawn(async move {
+            match auth::AuthState::load_or_init().await {
+                Ok(auth) => {
+                    log::info!(
+                        "admin token started; copy from Options → Remote Admin. Active token length: {}",
+                        auth.active_token().len(),
+                    );
+                    *holder.lock().await = Some(Arc::new(auth));
+                }
+                Err(e) => log::error!("admin auth init failed: {e}"),
+            }
+        });
+    }
+    let admin_state_holder: Arc<tokio::sync::Mutex<Option<Arc<integrations::http_api::AdminApiState>>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+    {
+        let holder = admin_state_holder.clone();
+        let auth_holder = auth_initial_holder.clone();
+        tauri::async_runtime::spawn(async move {
+            // Wait up to 5 seconds for the auth to materialise.
+            let auth = {
+                let mut auth_opt: Option<Arc<auth::AuthState>> = None;
+                for _ in 0..50 {
+                    if let Some(a) = auth_holder.lock().await.clone() {
+                        auth_opt = Some(a);
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                match auth_opt {
+                    Some(a) => a,
+                    None    => {
+                        log::warn!("admin auth not ready after 5s; loopback HTTP API will start when 'admin_token' command is invoked.");
+                        return;
+                    }
+                }
+            };
+
+            let host_id = machine_host_id().unwrap_or_else(|_| "unknown".into());
+            let api = Arc::new(integrations::http_api::AdminApiState::new(auth, host_id));
+            if let Err(e) = integrations::http_api::spawn_loopback_server(api.clone(), [127, 0, 0, 1], 8765).await {
+                log::error!("loopback HTTP API failed to spawn: {e}");
+            } else {
+                *holder.lock().await = Some(api);
+            }
+
+            // v2.1 — Convex publisher disabled-by-default; turn on when
+            // CONVEX_URL env var is set. Real wiring lives in Hito 3.
+            if let Ok(url) = std::env::var("CONVEX_URL") {
+                let secret = std::env::var("CONVEX_SHARED_SECRET").unwrap_or_default();
+                if !secret.is_empty() {
+                    if let Some(api) = holder.lock().await.clone() {
+                        let handle = integrations::convex_push::spawn_publisher(api, url, secret).await;
+                        log::info!("convex publisher started (handle: {handle:?})");
+                    }
+                }
+            }
+        });
+    }
+
     tauri::Builder::default()
         .manage(PingState(Mutex::new(None)))
         .manage(tray_state)
@@ -1274,6 +1458,10 @@ pub fn run() {
             save_config,
             get_default_config,
             get_config_schema,
+            // Remote admin (v2.1)
+            admin_token,
+            rotate_admin_token,
+            set_admin_feature_flag,
             // CurseForge
             get_curseforge_api_key,
             set_curseforge_api_key,
@@ -1312,6 +1500,7 @@ pub fn run() {
             backup::restore_backup_from_cloud,
             // IP detection
             detect_ips,
+            check_internet,
             parse_config_from_toml,
             config_to_toml,
             parse_config_from_zip,

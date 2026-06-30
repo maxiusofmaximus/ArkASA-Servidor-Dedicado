@@ -1,6 +1,6 @@
 [package]
 name = "ark-asa-config"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 rust-version = "1.80"
 authors = ["MaxiusOfMaximus"]
@@ -32,6 +32,12 @@ rand = "0.8"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+# v2.1 — remote admin API + auth
+axum = { version = "0.7", features = ["json", "tokio"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+jsonwebtoken = "9.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

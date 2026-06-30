@@ -1,23 +1,79 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useConfigStore, type ConfigStore } from '../stores/configStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useI18n } from '../i18n/useI18n'
 import { useBackupActions } from '../hooks/useBackupActions'
+import { invoke } from '../services/tauri'
+import Tooltip from './Tooltip'
 import GeneralTab from './options/GeneralTab'
 import BackupTab from './options/BackupTab'
 import ConfigTab from './options/ConfigTab'
+import type { ServerConfig } from '../types'
 
 interface OptionsModalProps {
   onClose: () => void
+  onReset?: () => void
+  onChooseDifficulty?: () => void
+  onImportConfig?: (tomlText: string) => void
+  onImportError?: (msg: string) => void
+  onToggleLogs?: () => void
+  isLogsOpen?: boolean
+  isSaving?: boolean
 }
 
-type OptionsTab = 'general' | 'backup' | 'config'
+type OptionsTab = 'general' | 'backup' | 'config' | 'actions'
 
-export default function OptionsModal({ onClose }: OptionsModalProps) {
+export default function OptionsModal({
+  onClose,
+  onReset,
+  onChooseDifficulty,
+  onImportConfig,
+  onImportError,
+  onToggleLogs,
+  isLogsOpen = false,
+  isSaving = false,
+}: OptionsModalProps) {
   const [tab, setTab] = useState<OptionsTab>('general')
   const { config, setConfig, setSavedConfig } = useConfigStore(useShallow((s: ConfigStore) => ({ config: s.config, setConfig: s.setConfig, setSavedConfig: s.setSavedConfig })))
-  const { tk } = useI18n()
+  const { tk, tip } = useI18n()
   const backupActions = useBackupActions(config)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !onImportConfig) return
+    const isZip = file.name.toLowerCase().endsWith('.zip')
+    if (isZip) {
+      const reader = new FileReader()
+      reader.onload = async (ev) => {
+        const buf = ev.target?.result
+        if (!(buf instanceof ArrayBuffer)) return
+        const bytes = Array.from(new Uint8Array(buf))
+        try {
+          const parsed = await invoke<ServerConfig>('parse_config_from_zip', { zipData: bytes })
+          const tomlText = await invoke<string>('config_to_toml', { config: parsed })
+          onImportConfig(tomlText)
+          onClose()
+        } catch (err) {
+          onImportError?.(`Failed to extract config from zip: ${String(err)}`)
+        }
+      }
+      reader.readAsArrayBuffer(file)
+    } else {
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const text = ev.target?.result
+        if (typeof text === 'string') {
+          onImportConfig(text)
+          onClose()
+        }
+      }
+      reader.readAsText(file)
+    }
+    e.target.value = ''
+  }
+
+  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'actions']
 
   return (
     <div
@@ -40,17 +96,20 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
         </div>
 
         <div className="flex border-b border-ark-cyan/20 flex-shrink-0">
-          {(['general', 'backup', 'config'] as OptionsTab[]).map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className="px-6 py-3 text-xs font-bold tracking-widest uppercase transition-colors"
+              className="px-5 py-3 text-xs font-bold tracking-widest uppercase transition-colors"
               style={{
                 color: tab === t ? 'rgba(0,200,255,0.9)' : 'rgba(0,200,255,0.35)',
                 borderBottom: tab === t ? '2px solid rgba(0,200,255,0.8)' : '2px solid transparent',
               }}
             >
-              {t === 'general' ? tk('tab_general', 'General') : t === 'backup' ? tk('tab_backup', 'Backup') : tk('tab_config_ini', 'Config INI')}
+              {t === 'general' ? tk('tab_general', 'General')
+               : t === 'backup' ? tk('tab_backup', 'Backup')
+               : t === 'config' ? tk('tab_config_ini', 'Config INI')
+               : tk('tab_actions', 'Actions')}
             </button>
           ))}
         </div>
@@ -66,6 +125,59 @@ export default function OptionsModal({ onClose }: OptionsModalProps) {
                 setSavedConfig(updated)
               }}
             />
+          )}
+          {tab === 'actions' && (
+            <div className="space-y-3">
+              {onReset && (
+                <button
+                  onClick={() => { onReset(); onClose() }}
+                  disabled={isSaving}
+                  className="w-full text-left rounded-md px-4 py-3 transition-colors disabled:opacity-40"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}
+                >
+                  <p className="text-ark-cyan/80 text-sm font-semibold">{tk('restore_defaults', 'RESTORE DEFAULTS')}</p>
+                  <p className="text-ark-cyan/35 text-xs">{tk('restore_defaults_desc', 'Reset all settings to their default values')}</p>
+                </button>
+              )}
+              {onChooseDifficulty && (
+                <button
+                  onClick={() => { onChooseDifficulty(); onClose() }}
+                  className="w-full text-left rounded-md px-4 py-3 transition-colors"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}
+                >
+                  <p className="text-ark-cyan/80 text-sm font-semibold">{tk('choose_difficulty', 'CHOOSE DIFFICULTY')}</p>
+                  <p className="text-ark-cyan/35 text-xs">{tk('choose_difficulty_desc', 'Set the override official difficulty')}</p>
+                </button>
+              )}
+              {onImportConfig && (
+                <>
+                  <input ref={fileInputRef} type="file" accept=".toml,.zip" className="hidden" onChange={handleFileSelect} />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full text-left rounded-md px-4 py-3 transition-colors"
+                    style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}
+                  >
+                    <p className="text-ark-cyan/80 text-sm font-semibold">{tk('import_config', '↑ IMPORT')}</p>
+                    <p className="text-ark-cyan/35 text-xs">{tk('import_desc', 'Import configuration from .toml or backup .zip file')}</p>
+                  </button>
+                </>
+              )}
+              {onToggleLogs && (
+                <button
+                  onClick={onToggleLogs}
+                  className="w-full text-left rounded-md px-4 py-3 transition-colors"
+                  style={{
+                    background: isLogsOpen ? 'rgba(74,222,128,0.06)' : 'rgba(255,255,255,0.03)',
+                    border: isLogsOpen ? '1px solid rgba(74,222,128,0.25)' : '1px solid rgba(255,255,255,0.08)',
+                  }}
+                >
+                  <p className="text-sm font-semibold" style={{ color: isLogsOpen ? 'rgba(74,222,128,0.8)' : 'rgba(0,212,255,0.8)' }}>
+                    {isLogsOpen ? tk('hide_logs', '◂ Hide Logs') : tk('show_logs', 'Show Logs ▸')}
+                  </p>
+                  <p className="text-ark-cyan/35 text-xs">{tk('logs_desc', 'Toggle server logs panel')}</p>
+                </button>
+              )}
+            </div>
           )}
         </div>
 

@@ -73,6 +73,9 @@ function createMockInvoke() {
           query_port: 27015,
           rcon_port: 27020,
           server_platform: 'ALL',
+          no_battleye: false,
+          fixed_port_assignment_per_map: true,
+          allow_start_without_internet: false,
           server_ip: '',
         },
         gameplay: {

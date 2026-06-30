@@ -17,8 +17,10 @@ impl ConfigLoader {
             .await
             .map_err(|e| Error::IoError(e))?;
 
-        let config: ServerConfig = toml::from_str(&content)
+        let mut config: ServerConfig = toml::from_str(&content)
             .map_err(|e| Error::TomlError(e))?;
+
+        config.network.migrate_legacy_connections();
 
         Ok(config)
     }

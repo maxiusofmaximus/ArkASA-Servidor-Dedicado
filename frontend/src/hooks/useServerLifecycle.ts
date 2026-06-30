@@ -15,6 +15,8 @@ interface Options {
   setSaving:  (v: boolean) => void
   /** Called with a non-null string to show a transient error banner. */
   setError:   (msg: string | null) => void
+  /** Used to block server start when internet is unavailable. */
+  online?:    boolean
 }
 
 export interface ServerLifecycle {
@@ -27,7 +29,7 @@ export interface ServerLifecycle {
   handleStopServer:  (mapIndex?: number) => Promise<void>
 }
 
-export function useServerLifecycle({ config, setSaving, setError }: Options): ServerLifecycle {
+export function useServerLifecycle({ config, setSaving, setError, online = true }: Options): ServerLifecycle {
   const [mapStatuses,      setMapStatuses]      = useState<MapInstanceStatus[]>([])
   const [stubsRunning,     setStubsRunning]     = useState(false)
   const [isServerStarting, setIsServerStarting] = useState(false)
@@ -84,6 +86,18 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
   // ── Start ────────────────────────────────────────────────────────────────────
   const handleStartServer = useCallback(async (mapIndex?: number) => {
     if (!config || isServerStarting) return
+
+    // Block start when offline — ARK servers cannot run without internet.
+    // The operator can opt out in Options → General → Internet.
+    const allowOffline = config.network?.allow_start_without_internet ?? false
+    if (!online && !allowOffline) {
+      setError('No internet connection — cannot start servers. Reconnect and try again, or disable the check in Options → General → Internet.')
+      return
+    }
+    if (!online && allowOffline) {
+      // Surface a one-shot info so the user knows they bypassed the guard.
+      setError('⚠ Started without internet — ARK may fail to log into EOS/Steam servers until connection is restored.')
+    }
 
     const targetIndices: number[] = mapIndex !== undefined
       ? [mapIndex]
@@ -166,7 +180,7 @@ export function useServerLifecycle({ config, setSaving, setError }: Options): Se
       setIsServerStarting(false)
     }
   }, [
-    config, isServerStarting, mapStatuses, maps, isCluster,
+    config, isServerStarting, online, mapStatuses, maps, isCluster,
     alwaysOnIndices, onDemandEnabled, onDemandMaps, autoShutdownMin,
     clusterStartDelaySec, setSaving, setError, recordModsActive, refreshStatuses,
   ])

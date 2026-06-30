@@ -1,2 +1,7 @@
+packages:
+  - 'frontend'
+  - 'web'
+  - 'convex'
+  - 'packages/*'
 allowBuilds:
-  esbuild: true
+  esbuild: set this to true or false

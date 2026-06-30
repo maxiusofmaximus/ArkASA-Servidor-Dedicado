@@ -1,4 +1,6 @@
 import { useBackupStore, type BackupScope } from '../../stores/backupStore'
+import { useConfigStore, type ConfigStore } from '../../stores/configStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useI18n } from '../../i18n/useI18n'
 import { Section, Toggle } from '../ui/OptionsUI'
 
@@ -19,6 +21,15 @@ const LANGUAGES: { code: string; label: string; native: string }[] = [
 
 export default function GeneralTab() {
   const store = useBackupStore()
+  const cfg = useConfigStore(
+    useShallow((s: ConfigStore) => ({
+      network: s.config?.network,
+      updateNetwork: (patch: Partial<NonNullable<typeof s.config>['network']>) => {
+        if (!s.config) return
+        s.setConfig({ ...s.config, network: { ...s.config.network, ...patch } })
+      },
+    })),
+  )
   const { tk } = useI18n()
 
   return (
@@ -63,26 +74,64 @@ export default function GeneralTab() {
 
       {!store.onDemandEnabled && (
         <Section title={tk('section_cluster', 'Server Cluster')}>
-          <div>
-            <p className="text-ark-cyan/80 text-sm">{tk('cluster_delay_title', 'Delay between cluster instances')}</p>
-            <p className="text-ark-cyan/40 text-xs mt-0.5 mb-3">{tk('cluster_delay_desc', 'Wait time between each map startup in a cluster.')}</p>
-            <div className="flex items-center gap-4">
-              <input
-                type="range"
-                min={0}
-                max={180}
-                step={5}
-                value={store.clusterStartDelaySec}
-                onChange={(e) => store.setClusterStartDelaySec(Number(e.target.value))}
-                className="flex-1 accent-ark-cyan"
+          <div className="space-y-4">
+            <div>
+              <p className="text-ark-cyan/80 text-sm">{tk('cluster_delay_title', 'Delay between cluster instances')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5 mb-3">{tk('cluster_delay_desc', 'Wait time between each map startup in a cluster.')}</p>
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min={0}
+                  max={180}
+                  step={5}
+                  value={store.clusterStartDelaySec}
+                  onChange={(e) => store.setClusterStartDelaySec(Number(e.target.value))}
+                  className="flex-1 accent-ark-cyan"
+                />
+                <span className="text-ark-cyan/80 font-mono text-sm w-20 text-right">
+                  {store.clusterStartDelaySec === 0 ? tk('no_delay', 'No delay') : `${store.clusterStartDelaySec} s`}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-ark-cyan/80 text-sm">{tk('fixed_ports_title', 'Fixed port assignment per map (Recommended)')}</p>
+                <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('fixed_ports_desc', 'Each cluster map always lands on the same ports.')}</p>
+              </div>
+              <Toggle
+                value={cfg.network?.fixed_port_assignment_per_map ?? true}
+                onChange={(v) => cfg.updateNetwork({ fixed_port_assignment_per_map: v })}
               />
-              <span className="text-ark-cyan/80 font-mono text-sm w-20 text-right">
-                {store.clusterStartDelaySec === 0 ? tk('no_delay', 'No delay') : `${store.clusterStartDelaySec} s`}
-              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-ark-cyan/80 text-sm">{tk('no_battleye_title', 'Disable BattleEye anti-cheat')}</p>
+                <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('no_battleye_desc', 'Adds -NoBattlEye to launch args.')}</p>
+              </div>
+              <Toggle
+                value={cfg.network?.no_battleye ?? false}
+                onChange={(v) => cfg.updateNetwork({ no_battleye: v })}
+              />
             </div>
           </div>
         </Section>
       )}
+
+      {/* ── Internet gate (v2.1) ────────────────────────────────────────── */}
+      <Section title={tk('section_internet', 'Internet')}>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-ark-cyan/80 text-sm">{tk('allow_start_offline_title', 'Allow start without internet')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('allow_start_offline_desc', 'Skip the offline check and let the server launch anyway.')}</p>
+            </div>
+            <Toggle
+              value={cfg.network?.allow_start_without_internet ?? false}
+              onChange={(v) => cfg.updateNetwork({ allow_start_without_internet: v })}
+            />
+          </div>
+        </div>
+      </Section>
 
       <Section title={tk('section_close_behavior', 'Close Behavior')}>
         <div className="flex items-center justify-between">

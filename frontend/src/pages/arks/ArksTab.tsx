@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react'
 import SettingRow from '../../components/SettingRow'
-import SettingsPanel from '../../components/SettingsPanel'
 import { useConfigUpdate } from '../../hooks/useConfigUpdate'
 import { useConfigStore, type ConfigStore } from '../../stores/configStore'
 import { useBackupStore, type BackupStore } from '../../stores/backupStore'
@@ -41,6 +40,16 @@ const DLC_LABEL: Record<ArkMap['dlc'], string> = {
   paid: 'DLC',
 }
 
+/**
+ * ARK ASA does **not** expose a region flag — the server browser derives it
+ * from the public IP geolocation. With LAN / playit.gg tunnels or CG-NAT,
+ * the geolocation is unknown, so the field is always blank in the browser.
+ *
+ * We still render a non-editable placeholder row below MOTD so the user
+ * understands why and so the field doesn't appear as "missing UI".
+ */
+const GEO_FALLBACK = '— auto —'
+
 export default function ArksTab({ config }: ArksTabProps) {
   const updateId = useConfigUpdate('identification')
   const updateNetwork = useConfigUpdate('network')
@@ -72,32 +81,44 @@ export default function ArksTab({ config }: ArksTabProps) {
 
   const isCluster = selectedMaps.length > 1
 
-  const settings = useMemo(
+  const idSettings = useMemo(
     () => [
       {
         label: 'Server Name',
         value: config.identification.session_name,
-        type: 'text' as const,
+        type: 'copyable' as const,
         onChange: (v: string) => updateId('session_name', v),
       },
       {
         label: 'Server Password',
         value: config.identification.server_password,
-        type: 'text' as const,
+        type: 'secret' as const,
         onChange: (v: string) => updateId('server_password', v),
       },
       {
         label: 'Admin Password',
         value: config.identification.admin_password,
-        type: 'text' as const,
+        type: 'secret' as const,
         onChange: (v: string) => updateId('admin_password', v),
       },
+    ],
+    [config.identification, updateId]
+  )
+
+  const motdSettings = useMemo(
+    () => [
       {
         label: 'MOTD',
         value: config.identification.server_message_of_the_day,
         type: 'text' as const,
         onChange: (v: string) => updateId('server_message_of_the_day', v),
       },
+    ],
+    [config.identification, updateId]
+  )
+
+  const netSettings = useMemo(
+    () => [
       {
         label: 'Game Port',
         value: config.network.port,
@@ -123,25 +144,92 @@ export default function ArksTab({ config }: ArksTabProps) {
         max: 65535,
       },
     ],
-    [config.identification, config.network, updateId, updateNetwork]
+    [config.network, updateNetwork]
   )
 
   return (
     <>
-      <SettingsPanel>
-        {settings.map((setting, i) => (
-          <SettingRow
-            key={i}
-            label={setting.label}
-            value={setting.value}
-            type={setting.type}
-            onChange={setting.onChange}
-            min={setting.min}
-            max={setting.max}
-            testId={`arks-${setting.label.toLowerCase().replace(/ /g, '-')}`}
-          />
-        ))}
-      </SettingsPanel>
+      {/* Identification panel: rows with action column (copy/show/hide) */}
+      <div className="max-w-lg mx-auto px-8 pt-6 pb-3">
+        <div className="ark-panel rounded-lg overflow-hidden">
+          {idSettings.map((setting, i) => (
+            <SettingRow
+              key={i}
+              label={setting.label}
+              value={setting.value}
+              type={setting.type}
+              onChange={setting.onChange}
+              testId={`arks-${setting.label.toLowerCase().replace(/ /g, '-')}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* MOTD panel */}
+      <div className="max-w-lg mx-auto px-8 pb-3">
+        <div className="ark-panel rounded-lg overflow-hidden">
+          {motdSettings.map((setting, i) => (
+            <SettingRow
+              key={i}
+              label={setting.label}
+              value={setting.value}
+              type={setting.type}
+              onChange={setting.onChange}
+              testId={`arks-${setting.label.toLowerCase().replace(/ /g, '-')}`}
+            />
+          ))}
+          {/* Region — read-only informational row.
+              ARK ASA does NOT expose a region command flag or INI setting;
+              the server browser derives the region from the public IP's
+              geolocation. With CG-NAT (LAN / playit tunnels) the region shows
+              empty in the Steam/EOS server browser until the operator finds the
+              server by name. This row exists to explain the gap to the user. */}
+          <div
+            className="flex items-center gap-3 px-4 py-2 border-t border-ark-cyan/10"
+            data-testid="arks-region-info"
+          >
+            <div className="flex items-center gap-1.5 min-w-0 flex-1 pr-2">
+              <span className="text-ark-cyan/80 text-sm tracking-wide">Region</span>
+              <span
+                className="flex-shrink-0 text-[9px] text-ark-cyan/30 hover:text-ark-cyan/70 transition-colors cursor-default select-none"
+                style={{ lineHeight: 1 }}
+                title={tk('region_info_tooltip',
+                  'ARK Survival Ascended does not expose a region command flag or INI setting. The Steam / EOS server browser derives the region from the public IP geolocation.')}
+              >
+                ⓘ
+              </span>
+            </div>
+            <span
+              className="text-ark-cyan/45 font-mono text-sm w-32 text-right"
+              style={{ filter: 'blur(1px)', userSelect: 'none' }}
+              aria-hidden="true"
+            >
+              {GEO_FALLBACK}
+            </span>
+            <span className="text-ark-cyan/35 text-xs ml-3 pl-3" style={{ borderLeft: '1px solid rgba(0,212,255,0.12)' }}>
+              auto
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Network panel */}
+      <div className="max-w-lg mx-auto px-8 pb-6">
+        <div className="ark-panel rounded-lg overflow-hidden">
+          {netSettings.map((setting, i) => (
+            <SettingRow
+              key={i}
+              label={setting.label}
+              value={setting.value}
+              type={setting.type}
+              onChange={setting.onChange}
+              min={setting.min}
+              max={setting.max}
+              testId={`arks-${setting.label.toLowerCase().replace(/ /g, '-')}`}
+            />
+          ))}
+        </div>
+      </div>
 
       {/* Map selection */}
       <div className="max-w-lg mx-auto px-8 pb-6">
@@ -339,7 +427,7 @@ export default function ArksTab({ config }: ArksTabProps) {
 
       {/* Connection Manager */}
       <div className="max-w-lg mx-auto px-8 pb-3">
-        <ConnectionManager config={config} updateNetwork={updateNetwork as any} />
+        <ConnectionManager config={config} />
       </div>
 
       {/* Friend Contacts */}

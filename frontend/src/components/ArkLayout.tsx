@@ -1,5 +1,6 @@
 import React from 'react'
 import { useConfigStore, type ConfigStore } from '../stores/configStore'
+import { useUiStore } from '../stores/uiStore'
 import { useShallow } from 'zustand/react/shallow'
 
 interface ArkLayoutProps {
@@ -8,6 +9,7 @@ interface ArkLayoutProps {
 
 export default function ArkLayout({ children }: ArkLayoutProps) {
   const config = useConfigStore(useShallow((s: ConfigStore) => s.config))
+  const serverNameVisible = useUiStore((s) => s.serverNameVisible)
   const serverName = config?.identification?.session_name || 'ARK SERVER'
 
   return (
@@ -24,26 +26,14 @@ export default function ArkLayout({ children }: ArkLayoutProps) {
         />
       </div>
 
-      {/* Header strip — server name left, ESC right */}
-      <div className="fixed top-0 left-0 right-0 z-30 flex items-center justify-between px-5 py-1 pointer-events-none">
-        <span className="text-ark-cyan/80 text-xs font-bold tracking-widest uppercase italic pointer-events-auto"
-              style={{ fontStyle: 'italic', letterSpacing: '0.12em' }}>
+      {/* Header strip — server name left */}
+      <div className="fixed top-0 left-0 right-0 z-30 flex items-center px-5 py-1 pointer-events-none">
+        <span
+          className="text-ark-cyan/80 text-xs font-bold tracking-widest uppercase italic pointer-events-auto select-none"
+          style={{ fontStyle: 'italic', letterSpacing: '0.12em', filter: serverNameVisible ? 'none' : 'blur(6px)' }}
+        >
           {serverName}
         </span>
-        <button
-          className="pointer-events-auto ark-action-btn text-[10px] px-3 py-0.5"
-          title="Exit"
-          onClick={async () => {
-            try {
-              const { getCurrentWindow } = await import('@tauri-apps/api/window')
-              await getCurrentWindow().close()
-            } catch {
-              window.close()
-            }
-          }}
-        >
-          ESC
-        </button>
       </div>
 
       {/* Content — pt-8 to clear header strip; pb-16 for ActionBar */}

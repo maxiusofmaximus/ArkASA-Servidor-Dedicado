@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
 import { useAutoSave } from './hooks/useAutoSave'
 import { useTauriEvents } from './hooks/useTauriEvents'
+import { useInternetStatus } from './hooks/useInternetStatus'
 import { useI18n } from './i18n/useI18n'
 
 // Layout & chrome
@@ -90,11 +91,11 @@ function App() {
               historyIndex: s.historyIndex, history: s.history,
             }))
           )
-  const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab, goBack } = useUiStore(
+  const { primaryTab, setPrimaryTab, gameRulesSubTab, advancedSubTab, modSettingsSubTab } = useUiStore(
             useShallow((s: UiStore) => ({
               primaryTab: s.primaryTab, setPrimaryTab: s.setPrimaryTab,
               gameRulesSubTab: s.gameRulesSubTab, advancedSubTab: s.advancedSubTab,
-              modSettingsSubTab: s.modSettingsSubTab, goBack: s.goBack,
+              modSettingsSubTab: s.modSettingsSubTab,
             }))
           )
   const { logsEnabled, minimizeToTray, manualSave } = useBackupStore(
@@ -103,6 +104,9 @@ function App() {
             }))
           )
   const { tk } = useI18n()
+
+  const internet = useInternetStatus()
+  const online = internet.online
 
   // ── Diff viewer state ─────────────────────────────────────────────────────
   const [diffEntries,  setDiffEntries]  = useState<DiffEntry[]>([])
@@ -136,7 +140,7 @@ function App() {
     isServerStarting, isServerStopping,
     mapStatuses,
     handleStartServer, handleStopServer,
-  } = useServerLifecycle({ config, setSaving, setError })
+  } = useServerLifecycle({ config, setSaving, setError, online })
 
   useAutoSave(config, !manualSave)
   useTauriEvents({
@@ -335,16 +339,31 @@ function App() {
         </div>
       )}
 
+      {!online && mapStatuses.some((s) => !s.running) && (
+        <div className="fixed bottom-20 right-8 bg-ark-accent/20 border border-ark-accent text-ark-accent p-4 rounded z-50 max-w-sm text-sm flex items-start gap-3">
+          <span className="text-lg leading-none">⚠</span>
+          <div>
+            <p className="font-bold tracking-widest text-xs uppercase">
+              {tk('no_internet_title', 'Sin conexión a internet')}
+            </p>
+            <p className="text-ark-accent/80 mt-1">
+              {tk('no_internet_body', 'No se detecta internet. Los servidores no iniciarán hasta que se restablezca la conexión.')}
+            </p>
+            <button
+              onClick={() => internet.refresh()}
+              disabled={internet.loading}
+              className="mt-2 text-[10px] uppercase tracking-widest px-2 py-1 rounded border border-ark-accent/40 hover:border-ark-accent transition-colors disabled:opacity-40"
+            >
+              {internet.loading ? tk('no_internet_checking', '⏳ Comprobando…') : tk('no_internet_retry', '↻ Reintentar')}
+            </button>
+          </div>
+        </div>
+      )}
+
       <ActionBar
         onSave={handleSave}
-        onReset={handleReset}
-        onBack={goBack}
-        onChooseDifficulty={() => setShowDifficultyModal(true)}
         onStartServer={handleStartServer}
         onStopServer={handleStopServer}
-        onOpenOptions={() => setShowOptionsModal(true)}
-        onToggleLogs={() => setShowLogsPanel((p) => !p)}
-        onImportConfig={handleImportConfig}
         mapStatuses={mapStatuses}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
@@ -355,8 +374,7 @@ function App() {
         isServerRunning={serverRunning || stubsRunning}
         isServerStarting={isServerStarting}
         isServerStopping={isServerStopping}
-        showLogsButton={logsEnabled}
-        isLogsOpen={showLogsPanel}
+        online={online}
         variant={primaryTab === 'mod_settings' ? 'mod_settings' : 'default'}
       />
 
@@ -379,7 +397,15 @@ function App() {
       )}
 
       {showOptionsModal && (
-        <OptionsModal onClose={() => setShowOptionsModal(false)} />
+        <OptionsModal
+          onClose={() => setShowOptionsModal(false)}
+          onReset={handleReset}
+          onChooseDifficulty={() => setShowDifficultyModal(true)}
+          onImportConfig={handleImportConfig}
+          isSaving={isSaving}
+          onToggleLogs={() => setShowLogsPanel((p) => !p)}
+          isLogsOpen={showLogsPanel}
+        />
       )}
 
       {showLogsPanel && config && (

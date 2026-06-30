@@ -66,8 +66,21 @@ export interface IdentificationConfig {
   server_message_of_the_day: string
 }
 
-// Connection method for the server IP selector
+// Connection type for dynamic connection entries
+export type ConnectionType = 'tailscale' | 'public_ip' | 'duckdns' | 'local_ip' | 'manual' | 'playit_tunnel' | 'custom'
+
+// Connection method for the server IP selector (legacy)
 export type ConnectionMethod = 'tailscale' | 'public' | 'duckdns' | 'local' | 'manual'
+
+// A connection entry in the dynamic connection list
+export interface ConnectionEntry {
+  id: string
+  conn_type: ConnectionType
+  label: string
+  address: string
+  is_primary: boolean
+  tunnel_port?: number | null
+}
 
 // Network settings
 export interface NetworkConfig {
@@ -75,14 +88,23 @@ export interface NetworkConfig {
   query_port: number
   rcon_port: number
   server_platform: string
-  // Connection Manager
+  // Network / launch behavior flags (v2.1.0)
+  /** When true, ARK launches with `-NoBattlEye` (BattleEye **disabled**). */
+  no_battleye: boolean
+  /** When true, each cluster map gets a stable port triplet derived from its
+   *  map id hash. When false, ports are computed by order-of-arrival. */
+  fixed_port_assignment_per_map: boolean
+  /** When true, the frontend internet-gate is bypassed at start time. */
+  allow_start_without_internet: boolean
+  // Connection Manager (v2 dynamic list)
+  connection_entries: ConnectionEntry[]
+  // Legacy — read from old TOML; effective_ip() falls back to them
   connection_method: ConnectionMethod
   tailscale_ip: string
   public_ip: string
   duckdns_host: string
   local_ip: string
   manual_ip: string
-  // Legacy — read from old TOML; effective_ip() falls back to it
   server_ip: string
 }
 

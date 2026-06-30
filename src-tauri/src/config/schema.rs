@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -45,29 +46,99 @@ pub enum ConnectionMethod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionType {
+    Tailscale,
+    PublicIp,
+    DuckDns,
+    LocalIp,
+    Manual,
+    PlayitTunnel,
+    Custom,
+}
+
+impl Default for ConnectionType {
+    fn default() -> Self { Self::Manual }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConnectionEntry {
+    pub id: String,
+    #[serde(default)]
+    pub conn_type: ConnectionType,
+    pub label: String,
+    pub address: String,
+    #[serde(default)]
+    pub is_primary: bool,
+    #[serde(default)]
+    pub tunnel_port: Option<u16>,
+}
+
+impl ConnectionEntry {
+    pub fn new(conn_type: ConnectionType, label: String, address: String) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            conn_type,
+            label,
+            address,
+            is_primary: false,
+            tunnel_port: None,
+        }
+    }
+
+    pub fn effective_ip(&self) -> &str {
+        self.address.trim()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct NetworkConfig {
     pub port: u16,
     pub query_port: u16,
     pub rcon_port: u16,
     pub server_platform: String,
-    // ── Connection Manager ────────────────────────────────────────────────────
+    // ─── Launch flags (v2) ────────────────────────────────────────────────────
+    /// When false, ARK runs with anti-cheat on (default).
+    /// When true, the launcher omits the `-NoBattlEye` flag ⇒ BattleEye disabled.
+    #[serde(default)]
+    pub no_battleye: bool,
+    /// When true, compute `port_for_map(map_id)` via a **stable** hash of the map
+    /// name instead of relying on its position in `cluster_maps`. This guarantees
+    /// TheIsland always uses 7777/27015/27020 even after Ragnarok has booted first.
+    /// When false (legacy), preserves the previous order-of-arrival behaviour.
+    #[serde(default = "default_true")]
+    pub fixed_port_assignment_per_map: bool,
+    /// When true, skip the frontend "no internet" gate and let the operator
+    /// launch servers offline (useful during local testing or CDN egress flakiness).
+    /// Without this, an offline check is enforced to avoid silent crashes mid-boot.
+    #[serde(default)]
+    pub allow_start_without_internet: bool,
+    // ── Connection Manager (v2 dynamic list) ───────────────────────────────────
+    #[serde(default)]
+    pub connection_entries: Vec<ConnectionEntry>,
+    // ── Legacy: kept to read old TOML files ────────────────────────────────────
     pub connection_method: ConnectionMethod,
     pub tailscale_ip: String,
     pub public_ip: String,
     pub duckdns_host: String,
     pub local_ip: String,
-    /// Generic / migration target for old server_ip values.
     pub manual_ip: String,
-    // ── Legacy: kept to read old TOML files; effective_ip() falls back to it ─
     #[serde(default)]
     pub server_ip: String,
 }
 
+fn default_true() -> bool { true }
+
 impl NetworkConfig {
     /// Returns the IP string ARK receives as -ip=VALUE.
+    /// Prioritizes the primary ConnectionEntry; falls back to legacy fields.
     /// Empty string → omit -ip flag (ARK binds all interfaces).
     pub fn effective_ip(&self) -> String {
+        if let Some(primary) = self.connection_entries.iter().find(|e| e.is_primary) {
+            let ip = primary.effective_ip();
+            if !ip.is_empty() { return ip.to_string(); }
+        }
         let resolved = match self.connection_method {
             ConnectionMethod::Tailscale => self.tailscale_ip.trim().to_string(),
             ConnectionMethod::Public    => self.public_ip.trim().to_string(),
@@ -76,6 +147,41 @@ impl NetworkConfig {
             ConnectionMethod::Manual    => self.manual_ip.trim().to_string(),
         };
         if resolved.is_empty() { self.server_ip.trim().to_string() } else { resolved }
+    }
+
+    /// Migrate legacy single-method fields into the new `connection_entries` list.
+    /// Called once after deserializing old configs; no-op if entries already exist.
+    pub fn migrate_legacy_connections(&mut self) {
+        if !self.connection_entries.is_empty() { return; }
+        let legacy: [(ConnectionMethod, ConnectionType, &str, &str, &str); 5] = [
+            (ConnectionMethod::Tailscale, ConnectionType::Tailscale, "tailscale_ip", &self.tailscale_ip, "Tailscale"),
+            (ConnectionMethod::Public,    ConnectionType::PublicIp,  "public_ip",    &self.public_ip,    "Public IP"),
+            (ConnectionMethod::DuckDns,   ConnectionType::DuckDns,   "duckdns_host", &self.duckdns_host, "DuckDNS"),
+            (ConnectionMethod::Local,     ConnectionType::LocalIp,   "local_ip",     &self.local_ip,     "Local IP"),
+            (ConnectionMethod::Manual,    ConnectionType::Manual,    "manual_ip",    &self.manual_ip,    "Manual"),
+        ];
+        for (method, conn_type, _field, addr, label) in &legacy {
+            let addr = addr.trim();
+            if !addr.is_empty() || *method == self.connection_method {
+                let is_primary = *method == self.connection_method;
+                let mut entry = ConnectionEntry::new(
+                    conn_type.clone(),
+                    label.to_string(),
+                    addr.to_string(),
+                );
+                entry.is_primary = is_primary;
+                self.connection_entries.push(entry);
+            }
+        }
+        if self.connection_entries.is_empty() {
+            let mut entry = ConnectionEntry::new(
+                ConnectionType::Manual,
+                "Manual".to_string(),
+                self.manual_ip.clone(),
+            );
+            entry.is_primary = true;
+            self.connection_entries.push(entry);
+        }
     }
 }
 
@@ -336,14 +442,40 @@ impl ServerConfig {
 }
 
 impl NetworkConfig {
-    /// (game_port, query_port, rcon_port) for cluster instance at index `i`.
-    /// ARK uses two consecutive UDP ports per game port, so game_port steps by 2.
+    /// Legacy order-of-arrival port triplet. Kept for callers that don't have
+    /// access to the map id (e.g. simple status polling). Prefer
+    /// `ports_for_map_id(map)` in launcher paths so TheIsland always lands on
+    /// the same slot regardless of order-of-arrival.
     pub fn ports_for_index(&self, i: usize) -> (u16, u16, u16) {
         (
             self.port       + (i as u16) * 2,
             self.query_port + i as u16,
             self.rcon_port  + i as u16,
         )
+    }
+
+    /// Stable, map-name-driven port triplet. **The source of truth** used by
+    /// the launcher so the same map always lands on the same ports (when
+    /// `fixed_port_assignment_per_map = true`).
+    pub fn ports_for_map_id(&self, map_id: &str) -> (u16, u16, u16) {
+        let slot = Self::port_slot_for(map_id);
+        (
+            self.port       + slot * 2,
+            self.query_port + slot,
+            self.rcon_port  + slot,
+        )
+    }
+
+    /// FNV-1a 32-bit hash of the ASCII bytes, modulo 254 to keep all derived
+    /// ports inside u16 and avoid overlap with the base triplet.
+    /// Deterministic, branch-light, no deps.
+    pub fn port_slot_for(map_id: &str) -> u16 {
+        let mut hash: u32 = 0x811c9dc5;
+        for byte in map_id.bytes() {
+            hash ^= byte as u32;
+            hash = hash.wrapping_mul(0x01000193);
+        }
+        (hash % 254) as u16
     }
 }
 
@@ -404,11 +536,17 @@ impl Default for IdentificationConfig {
 
 impl Default for NetworkConfig {
     fn default() -> Self {
+        let mut entry = ConnectionEntry::new(ConnectionType::Manual, "Manual".to_string(), String::new());
+        entry.is_primary = true;
         Self {
             port: 7777,
             query_port: 27015,
             rcon_port: 27020,
             server_platform: "ALL".to_string(),
+            no_battleye: false,
+            fixed_port_assignment_per_map: true,
+            allow_start_without_internet: false,
+            connection_entries: vec![entry],
             connection_method: ConnectionMethod::Manual,
             tailscale_ip: String::new(),
             public_ip: String::new(),
