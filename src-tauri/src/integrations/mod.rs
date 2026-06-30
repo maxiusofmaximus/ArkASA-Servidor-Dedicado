@@ -19,5 +19,7 @@ pub mod command_router;
 pub mod convex_push;
 pub mod http_api;
 pub mod http_commands;
+pub mod telegram;
 
 pub use command_router::{CommandRouter, RouterError, RouterOutcome, RemoteCommandContext, Channel, Role};
+pub use telegram::{TelegramBot, TelegramConfig, spawn_looper};

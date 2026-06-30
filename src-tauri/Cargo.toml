@@ -38,6 +38,7 @@ axum = { version = "0.7", features = ["json", "tokio"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 jsonwebtoken = "9.3"
+parking_lot = "0.12"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
