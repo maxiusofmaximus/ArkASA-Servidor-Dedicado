@@ -1,59 +1,81 @@
 ---
-title: 'v2.1.0-alpha: OAuth-first Convex + Vercel plugins'
+title: 'v2.1.0-alpha.2: CLI-bridge plugin pattern (replaces fake OAuth)'
 date: 2026-06-30
 ---
 
-## v2.1.0-alpha.2 — OAuth-first Convex + Vercel plugins (push-button onboarding)
+## v2.1.0-alpha.2 — CLI-bridge plugin pattern
 
-This is the second v2.1.0-alpha which adds the **plumbing** for one-click
-Convex + Vercel onboarding — but you still need OAuth clients configured
-to make it work in production.
+Previously the alpha.1 release shipped OAuth endpoints that I made
+up — `https://auth.convex.dev/oauth/authorize` and a similar one for
+Vercel. Those don't exist (and won't for the foreseeable future
+unless Convex / Vercel ship dedicated login APIs). This version
+replaces them with what **actually** works: shelling out to the
+vendor's first-party CLI.
+
+### What you'll do as the operator
+
+```
+pnpm install                   # first time
+pnpm tauri:dev                 # desktop app
+# In Options → General → Cloud Services:
+#   1. "Connect Convex"  →  spawns `npx convex login`. CLI opens browser.
+#   2. Authorize Convex's GitHub device flow.
+#   3. "Push schema"    →  spawns `npx convex deploy --prod`.
+#   4. "Connect Vercel"  →  spawns `vercel login`. CLI opens browser.
+#   5. Authorize vercel.com.
+#   6. "Deploy web"      →  spawns `vercel deploy --prod`.
+```
+
+That's the whole flow. No TOML to copy, no env vars to type beyond
+the defaults. Adapters read the secrets each CLI writes
+(`~/.convex/credentials.json` for Convex, `~/.vercel/auth.json` for
+Vercel) and persist a mirror in `~/.ark-asa/plugins/<channel>.toml`.
+
+If a CLI flow doesn't fit your setup, every plugin has a
+**Paste … token** fallback: paste an existing deploy_key (Convex)
+or `VERCEL_TOKEN` (Vercel) and the same plugin starts working.
 
 ### What changed since v2.1.0-alpha
 
-- **`src-tauri/src/plugins/`** is a new module. Each plugin is a thin adapter
-  implementing the `Plugin` trait:
-  - `convex/` — opens browser to `https://auth.convex.dev/...`, receives
-    code at `http://127.0.0.1:8768/oauth/callback`, exchanges it for a
-    deployment_key, saves it to `~/.ark-asa/plugins/convex.toml`, then
-    shells out to `npx convex deploy --prod --deploy-key=...`.
-  - `vercel/` — same pattern for `vercel.com/oauth/authorize` →
-    `http://127.0.0.1:8769/oauth/vercel`, then `vercel deploy --prod --token=...`.
-  - `secret_store.rs` — atomic disk write with 0600 perms (Unix).
-- **GeneralTab** now has a **"Cloud Services"** section with two cards.
-  Each card has:
-  - `Connect …` button → opens browser to the OAuth URL.
-  - `Push schema` / `Deploy web` button (auto-enabled after connect).
-  - Live status badge (● connected / ○ not connected).
-- **Auto-install**: `@tauri-apps/plugin-shell` added so
-  `openExternal(url)` just works.
-- **`convex.json`** added so `npx convex dev` discovers your project
-  without a manual `convex configure` dance.
+- Removed: `crate::plugins::convex::begin_convex_oauth`,
+  `crate::plugins::convex::complete_convex_oauth`,
+  `crate::plugins::vercel::begin_vercel_oauth`,
+  `crate::plugins::vercel::complete_vercel_oauth`.
+- Added: `begin_convex_link`, `begin_vercel_link`,
+  `past_convex_deploy_key`, `paste_vercel_token`. Both `*_link`
+  variants shell out to the vendor's CLI; both `paste_*` variants
+  are the air-gapped fallback.
+- `PluginDescriptor::oauth_url = None` for both new plugins — neither
+  Convex nor Vercel exposes per-operator OAuth serverside for this
+  use case.
+- New `docs/INTEGRATIONS.md` documents the operator flow.
+- `CHANGELOG.md` updated.
 
-### Things you still have to do (and why)
+### What still blocks a v2.1.0 GA
+1. **Plugin registry enumeration at runtime.** Today
+   `register_default_plugins` only ships convex + vercel. The other
+   channels (Discord, WhatsApp, Signal, WeChat, SSH) still have to
+   be added one by one. The Plugin trait is documented and stable —
+   adding a new adapter takes about 200 lines.
+2. **Telegram polling loop's Send bound.** `spawn_looper` currently
+   returns an empty future because `tokio::sync::MutexGuard` over
+   `reqwest::Client` isn't `Send`. Real work is in Hito 12 (last
+   polish).
+3. **Build the NSIS installer** (`cargo tauri build`). Pending
+   Windows + Internet host with NSIS in PATH.
 
-Convex and Vercel both ship **production OAuth apps** with their own
-client IDs. To bring this to v2.1 GA you (the operator) need to:
+### Credibility check
 
-| What | Why |
-|------|-----|
-| Create a Convex OAuth client at https://dashboard.convex.dev/settings/oauth | Today we ship a default client_id (`ark-asa-config-manager-default`). Real operators should self-serve. |
-| Create a Vercel OAuth client at https://vercel.com/dashboard/integrations/oidc | Vercel ship OAuth apps per-team; the default today won't work for non-personal accounts. |
-| Configure `ARK_ASA_OAUTH_CLIENT_ID` + `VERCEL_OAUTH_CLIENT_ID` env vars | These get baked into the desktop build. |
+```
+$ cargo check
+   Compiling ark-asa-config v2.1.0 (…)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.16s
+```
 
-After those three things: open the desktop app, click **Connect Convex**,
-log in, click **Connect Vercel**, log in, click **Push Schema** + **Deploy
-Web**, done. No TOML editing.
+```
+$ npx tsc --noEmit
+(no output)
+```
 
-### What still needs to happen for full v2.1.0 (without -alpha)
-
-1. **Tauri loopback HTTP server must serve `/oauth/callback` paths on
-   ports 8768 (Convex) and 8769 (Vercel).** Today the routes return
-   404 because OAuth callback handling was deferred to Hito 12.
-2. **Reconcile `Send`-binding in Telegram polling loop.** Still stub.
-3. **Bot plugins (Discord, Signal, WhatsApp, WeChat, SSH, REST).** Only
-   Tauri command skeletons exist; the actual Telegram polling loop is
-   wired but the rest are still TODO.
-4. **Build the NSIS installer (`cargo tauri build`).** Not done.
-
-See `CHANGELOG.md` for the full picture.
+…across all 5 packages (`frontend`, `web`, `convex`,
+`packages/shared-types`, `src-tauri`).
