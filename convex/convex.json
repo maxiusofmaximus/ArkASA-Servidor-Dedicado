@@ -1,0 +1,8 @@
+{
+  "team":       "maxlive",
+  "project":    "ark-asa-admin",
+  "deployments": [
+    { "name": "dev",   "deployment": "dev"   },
+    { "name": "prod",  "deployment": "prod"  }
+  ]
+}
