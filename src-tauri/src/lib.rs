@@ -5,6 +5,7 @@ pub mod backup;
 pub mod stub;
 pub mod auth;
 pub mod integrations;
+pub mod plugins;
 
 // Re-export ark sub-modules used in commands
 mod ark;
@@ -1462,6 +1463,16 @@ pub fn run() {
             admin_token,
             rotate_admin_token,
             set_admin_feature_flag,
+            // Plugin auth flows (v2.1)
+            crate::plugins::convex::begin_convex_oauth,
+            crate::plugins::convex::complete_convex_oauth,
+            crate::plugins::convex::paste_convex_deploy_key,
+            crate::plugins::convex::convex_status,
+            crate::plugins::convex::convex_push_schema,
+            crate::plugins::vercel::begin_vercel_oauth,
+            crate::plugins::vercel::complete_vercel_oauth,
+            crate::plugins::vercel::vercel_deploy_web,
+            crate::plugins::vercel::vercel_status,
             // CurseForge
             get_curseforge_api_key,
             set_curseforge_api_key,

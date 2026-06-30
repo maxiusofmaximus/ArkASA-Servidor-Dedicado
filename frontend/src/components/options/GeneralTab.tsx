@@ -1,8 +1,52 @@
+import { useEffect, useState, useCallback } from 'react'
 import { useBackupStore, type BackupScope } from '../../stores/backupStore'
 import { useConfigStore, type ConfigStore } from '../../stores/configStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useI18n } from '../../i18n/useI18n'
 import { Section, Toggle } from '../ui/OptionsUI'
+import { invoke } from '@tauri-apps/api/core'
+import { open as openExternal } from '@tauri-apps/plugin-shell'
+
+async function startConvexOAuth(): Promise<void> {
+  const url = await invoke<string>('begin_convex_oauth')
+  await openExternal(url)
+}
+
+async function startVercelOAuth(): Promise<void> {
+  const url = await invoke<string>('begin_vercel_oauth')
+  await openExternal(url)
+}
+
+async function pushConvex(): Promise<string> {
+  return await invoke<string>('convex_push_schema')
+}
+
+async function deployVercel(): Promise<{ url: string; status: string }> {
+  const r = await invoke<{
+    connected: boolean
+    last_deploy_url: string | null
+    last_deploy_status: string | null
+    last_deploy_at_unix: number | null
+    project_name: string | null
+  }>('vercel_deploy_web')
+  return { url: r.last_deploy_url ?? '', status: r.last_deploy_status ?? '' }
+}
+
+async function getConvexStatus() {
+  return await invoke<{
+    connected: boolean
+    deployment_url: string | null
+    schema_pushed_at_unix: number | null
+  }>('convex_status')
+}
+
+async function getVercelStatus() {
+  return await invoke<{
+    connected: boolean
+    last_deploy_url: string | null
+    last_deploy_status: string | null
+  }>('vercel_status')
+}
 
 const SCOPE_VALUES: BackupScope[] = ['map', 'map_players_tribes', 'full']
 
@@ -163,6 +207,14 @@ export default function GeneralTab() {
         </div>
       </Section>
 
+      {/* ── Cloud Services (v2.1) ──────────────────────────────────────── */}
+      <Section title={tk('section_cloud_services', 'Cloud Services')}>
+        <div className="space-y-4 text-sm">
+          <ConvexCard />
+          <VercelCard />
+        </div>
+      </Section>
+
       <Section title={tk('section_backup_scope', 'Backup Scope')}>
         <div className="space-y-2">
           {SCOPE_VALUES.map((val) => {
@@ -211,5 +263,154 @@ export default function GeneralTab() {
         </div>
       </Section>
     </>
+  )
+}
+
+/**
+ * Convex plugin card — single button to connect via OAuth + push schema.
+ *
+ * The `invoke<string>(...)` calls Tauri commands registered by name in
+ * `src-tauri/src/plugins/convex/mod.rs`. On success, the Tauri API
+ * returns the OAuth URL the desktop should open in the default browser.
+ * The browser redirects back to `http://127.0.0.1:8768/oauth/callback`
+ * which the `http_api.rs` loopback (extended in Hito 12) intercepts.
+ */
+function ConvexCard() {
+  const [status, setStatus] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const refresh = useCallback(async () => {
+    try { setStatus(await getConvexStatus()) } catch (e: any) { setMsg(String(e)) }
+  }, [])
+  useEffect(() => { void refresh() }, [refresh])
+
+  const connect = async () => {
+    setBusy(true); setMsg(null)
+    try { await startConvexOAuth(); setMsg('OAuth opened in browser — complete there.') }
+    catch (e: any) { setMsg(String(e)) }
+    finally { setBusy(false) }
+  }
+  const push = async () => {
+    setBusy(true); setMsg(null)
+    try { const out = await pushConvex(); setMsg(out); refresh() }
+    catch (e: any) { setMsg(String(e)) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="rounded-md p-3 border border-ark-cyan/15">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <p className="text-ark-cyan/85 font-semibold">Convex BaaS</p>
+          <p className="text-ark-cyan/40 text-xs">
+            Backend that brokers our web admin and pushes every-server-state to the cloud.
+          </p>
+        </div>
+        <PluginStatusBadge connected={status?.connected} />
+      </div>
+      <div className="flex gap-2">
+        <button
+          disabled={busy}
+          onClick={connect}
+          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
+        >
+          {status?.connected ? 'Reconnect' : 'Connect Convex'}
+        </button>
+        <button
+          disabled={!status?.connected || busy}
+          onClick={push}
+          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
+        >
+          Push schema
+        </button>
+        {status?.deployment_url && (
+          <span className="text-ark-cyan/40 text-xs font-mono truncate">
+            {status.deployment_url}
+          </span>
+        )}
+      </div>
+      {msg && <p className="mt-2 text-ark-cyan/50 text-xs italic">{msg}</p>}
+    </div>
+  )
+}
+
+function VercelCard() {
+  const [status, setStatus] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const refresh = useCallback(async () => {
+    try { setStatus(await getVercelStatus()) } catch (e: any) { setMsg(String(e)) }
+  }, [])
+  useEffect(() => { void refresh() }, [refresh])
+  const connect = async () => {
+    setBusy(true); setMsg(null)
+    try { await startVercelOAuth(); setMsg('OAuth opened in browser — complete there.') }
+    catch (e: any) { setMsg(String(e)) }
+    finally { setBusy(false) }
+  }
+  const deploy = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await deployVercel()
+      setMsg(`deployed ${r.status}: ${r.url || '<see dashboard>'}`)
+      refresh()
+    } catch (e: any) { setMsg(String(e)) }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="rounded-md p-3 border border-ark-cyan/15">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <p className="text-ark-cyan/85 font-semibold">Vercel (web admin)</p>
+          <p className="text-ark-cyan/40 text-xs">
+            Hosts the public admin UI at <code className="text-ark-accent">ark-asa-admin.vercel.app</code>.
+            Push schema first.
+          </p>
+        </div>
+        <PluginStatusBadge connected={status?.connected} />
+      </div>
+      <div className="flex gap-2">
+        <button
+          disabled={busy}
+          onClick={connect}
+          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
+        >
+          {status?.connected ? 'Reconnect' : 'Connect Vercel'}
+        </button>
+        <button
+          disabled={!status?.connected || busy}
+          onClick={deploy}
+          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
+        >
+          Deploy web
+        </button>
+        {status?.last_deploy_url && (
+          <a
+            href={status.last_deploy_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-ark-cyan/60 text-xs font-mono truncate hover:text-ark-cyan"
+          >
+            {status.last_deploy_url}
+          </a>
+        )}
+      </div>
+      {msg && <p className="mt-2 text-ark-cyan/50 text-xs italic">{msg}</p>}
+    </div>
+  )
+}
+
+function PluginStatusBadge({ connected }: { connected: boolean | undefined }) {
+  return (
+    <span
+      className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded"
+      style={{
+        color:      connected ? 'rgba(74,222,128,0.9)' : 'rgba(239,68,68,0.9)',
+        background: connected ? 'rgba(74,222,128,0.1)' : 'rgba(239,68,68,0.1)',
+        border:     connected ? '1px solid rgba(74,222,128,0.4)' : '1px solid rgba(239,68,68,0.4)',
+      }}
+    >
+      {connected ? '● connected' : '○ not connected'}
+    </span>
   )
 }

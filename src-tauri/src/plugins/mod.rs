@@ -44,7 +44,7 @@ pub enum PluginCapability {
     RequiresSecrets,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ChannelKind {
     Web      = 0,
     Rest     = 1,
@@ -95,7 +95,7 @@ impl PluginSecrets {
 /// The Tauri app prints all descovered plugins and their capabilities at
 /// startup so operators can `docs/PLUGINS.md` cross-reference what's
 /// enabled.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PluginDescriptor {
     pub id:             &'static str,
     pub label:          &'static str,
@@ -103,6 +103,32 @@ pub struct PluginDescriptor {
     pub capabilities:   &'static [PluginCapability],
     pub required_secrets: &'static [&'static str],
     pub oauth_url:      Option<&'static str>, // if RequiresOAuth, the start URL
+}
+
+/// (De)serializable carrier for plugin descriptors that cross the HTTP
+/// bridge. The static `PluginDescriptor` borrows lifetimes, which serde
+/// can't see across the wire; this plain struct flattens it to Strings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDescriptorPlain {
+    pub id:             String,
+    pub label:          String,
+    pub channel:        ChannelKind,
+    pub capabilities:   Vec<PluginCapability>,
+    pub required_secrets: Vec<String>,
+    pub oauth_url:      Option<String>,
+}
+
+impl From<&'static PluginDescriptor> for PluginDescriptorPlain {
+    fn from(d: &'static PluginDescriptor) -> Self {
+        Self {
+            id:             d.id.to_string(),
+            label:          d.label.to_string(),
+            channel:        d.channel.clone(),
+            capabilities:   d.capabilities.to_vec(),
+            required_secrets: d.required_secrets.iter().map(|s| s.to_string()).collect(),
+            oauth_url:      d.oauth_url.map(|o| o.to_string()),
+        }
+    }
 }
 
 /// Per-plugin context handed to `start(ctx)`. Includes a typed Router
@@ -127,13 +153,13 @@ pub struct PluginContext {
 /// running (per OpenClaw "fail-soft plugin isolation" principle).
 #[derive(Debug, thiserror::Error)]
 pub enum PluginStartError {
-    #[error("plugin `{id}` is enabled but missing secrets: {keys:?}")]
+    #[error("plugin is enabled but missing secrets: {keys:?}")]
     MissingSecrets { id: &'static str, keys: Vec<String> },
-    #[error("plugin `{id}` network error: {0}")]
+    #[error("network error: {0}")]
     Network(String),
-    #[error("plugin `{id}` OAuth error: {0}")]
+    #[error("OAuth error: {0}")]
     OAuth(String),
-    #[error("plugin `{id}` internal error: {0}")]
+    #[error("internal error: {0}")]
     Internal(String),
 }
 
@@ -183,14 +209,50 @@ pub fn secrets_from_toml(table: &toml::Table) -> PluginSecrets {
 
 /// Aggregator exposed to lib.rs. Build it once at startup; each enabled
 /// plugin is queried via `start` concurrently.
+///
+/// Plugins are registered via explicit `register_*` calls (one per plugin
+/// module). We don't use `Box<dyn Plugin>` because async-trait + sync-trait
+/// make the dyn bound heavy here. Each plugin implements `Plugin` with
+/// `async fn start(...)` returning a JoinHandle.
 pub struct PluginRegistry {
-    pub enabled: Vec<Box<dyn Plugin>>,
     pub descriptors: Vec<PluginDescriptor>,
-    pub repo_path: Option<std::path::PathBuf>, // for future dynamic loading
+    pub convex: Option<convex::ConvexPlugin>,
+    pub vercel: Option<vercel::VercelPlugin>,
+    // Hito 7/8/9/10 add their enum variants here:
+    // pub telegram: Option<telegram::TelegramPlugin>,
+    // pub discord:  Option<discord::DiscordPlugin>,
+    // … and so on.
 }
 
-impl Default for PluginRegistry {
-    fn default() -> Self {
-        Self { enabled: Default::default(), descriptors: Default::with_capacity(8), repo_path: None }
+impl PluginRegistry {
+    pub fn new() -> Self {
+        Self {
+            descriptors: Vec::with_capacity(8),
+            convex: None,
+            vercel: None,
+        }
     }
 }
+
+pub mod secret_store;
+pub mod convex;
+pub mod vercel;
+
+/// Plugin registration — called once at startup, fills `PluginRegistry`.
+pub fn register_default_plugins(reg: &mut PluginRegistry) {
+    // Hito 7+: register telegram/discord/whatsapp etc here conditionally on TOML.
+    reg.descriptors.push(convex::DESCRIPTOR);
+    reg.descriptors.push(vercel::DESCRIPTOR);
+}
+
+/**
+ * Where per-plugin secrets are persisted on disk.
+ *   Linux:  $HOME/.ark-asa/plugins/<plugin>.toml
+ *   Win:    %APPDATA%/ark-asa/plugins/<plugin>.toml
+ */
+pub fn plugin_storage_dir() -> std::path::PathBuf {
+    let mut p = crate::auth::AuthState::storage_dir();
+    p.push("plugins");
+    p
+}
+
