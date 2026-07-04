@@ -25,6 +25,7 @@ pub mod hosting;
 pub mod http_api;
 pub mod http_commands;
 pub mod identity;
+pub mod local_provision;
 pub mod receipt_emit;
 pub mod slack;
 pub mod telegram;

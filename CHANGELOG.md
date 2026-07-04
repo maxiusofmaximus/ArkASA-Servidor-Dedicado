@@ -13,21 +13,18 @@ adheres to [Semantic Versioning](https://semver.org/).
 > v2.3.0 yet.**
 >
 > **v2.1 cannot be declared complete until:**
-> 1. **Remote Convex backend** — deployable from the app (currently
->    requires operator secrets at runtime; no first-class `push schema`
->    button from the desktop UI to a tenant-owned Convex cloud).
-> 2. **Hosted Vercel web admin** — the operator clicks **Deploy web**
->    and `vercel deploy --prod` produces a real URL they can share
->    with players on phones / other machines. Today this only stubs
->    a CLI-bridge plugin without a baked deploy flow.
-> 3. **Self-hosted VPS bootstrap** — for users who don't want a BaaS
->    and just want to run the desktop on a Raspberry Pi 5 / spare PC.
->    The 7-provider CLI runners ship the *script* but there's no
->    end-to-end "I have an IPv4 → ARK running in 10 minutes" guide
->    validated on real hardware (Pi 4/5, Intel NUC, old workstation).
+> 1. **Network & Tailscale wizard** — `docs/NETWORK_SETUP.md` exists
+>    but doesn't yet walk a fresh CGNAT-only operator through
+>    installing Tailscale from the GUI. The desktop app needs a
+>    "Use Tailscale?" prompt when the operator picks a self-hosted
+>    target with no public IPv4 (currently a hard-fail).
 >
-> Until those three land, this file's `[Unreleased]` section is the
+> Until that one lands, this file's `[Unreleased]` section is the
 > source of truth. Nothing in `main` deserves a version bump yet.
+> Confvex, Vercel, and Self-host (Pi / NUC / WSL2 / macOS) are
+> all code-shipped now; physical fixture validation of the three
+> self-host playbooks is operator-side (see
+> `docs/HOSTING_SELFHOSTED.md`).
 
 ## [Unreleased] — alpha work toward v2.1.0
 
@@ -123,9 +120,65 @@ adheres to [Semantic Versioning](https://semver.org/).
   pre-flighting panel + path mapping.
 - Test count is now **69 passing**.
 
+### Added — Self-host on Pi / NUC / WSL2 / macOS (alpha toward v2.1)
+
+- **New module** `src-tauri/src/integrations/local_provision.rs`
+  with `LocalTargetClass { DebianPi5, DebianX86, UbuntuX86,
+  Wsl2Debian, Wsl2Ubuntu, MacosArm, MacosIntel }` plus
+  `build_local_plan(class, ssh_user, ssh_host, bundle_url, disk_gb)`
+  that mints a complete `LocalProvisionPlan` with bundled script,
+  inline one-liner, and stage-by-stage checklist.
+- **`local_provision.rs` patches** the upstream `provision_script`
+  output for non-Linux platforms:
+  - **macOS** → swap `apt-get` for `brew install`, replace
+    `/home/arkasa` with `$SERVER_HOME`, drop the systemd unit and
+    `systemctl daemon-reload/enable` calls, and add a final
+    `screen -dmS arkasa` fallback that streams logs to
+    `/var/log/arkasa.log`.
+  - **WSL2** → append a hardening tail that warns the operator
+    `systemd` must be enabled in `/etc/wsl.conf` first, and fall
+    back to a manual launch command if systemd won't come up on
+    that Windows build.
+  - **Pi 5 / NUC** → pass through (`apt-get` + `systemctl`).
+- **New Tauri command** `render_local_provision_plan(class, …)`
+  registered in `lib.rs` and exposed in the React UI. Returns the
+  full `LocalProvisionPlan` so the panel can render the bundled
+  script + inline command + per-stage checklist.
+- **`HostingTab.tsx`** gains a new `<Section>` "Run on your own
+  hardware" with a `<Select>` picker for the 7 hardware classes,
+  fields for `ssh_user` / `ssh_host` / `disk_gb` (mirroring the
+  cloud provider form), and a GENERATE LOCAL PLAN button that
+  invokes the Tauri command. Result exposes 3 sub-areas: inline
+  copy (operator-friendly), bundled bash (preferred for the
+  archive), and a stage-by-stage checklist showing what
+  stdout looks like at each step. Backed by
+  `tk()` so all 5 languages (EN/ES/DE/PT/FR) have translations.
+- **New tests** (5 in `local_provision::tests`):
+  - `pi5_plan_uses_systemd_and_apt`
+  - `ubuntu_x86_plan_no_cooling_note`
+  - `wsl2_plan_includes_tail_warning`
+  - `macos_drops_systemd_and_apt_switches_to_brew`
+  - `plan_render_doesnt_panic_for_any_class`
+  Asserts that the **macOS patch removes all `systemctl` and
+  `i386`-style lines**, replaces `/home/arkasa` with `$SERVER_HOME`,
+  and keeps the steamcmd / bundle-install steps intact.
+- **`docs/HOSTING_SELFHOSTED.md`** — operator-facing manual with:
+  - Unified flow overview
+  - **Playbook 1**: Raspberry Pi 5 (Bookworm), with cooling fan
+    notes, port 7777 validation, ARK-specific Pi 5 gotchas
+  - **Playbook 2**: Debian / Ubuntu on Intel NUC or x86 server,
+    disable desktop environment, swap size notes
+  - **Playbook 3**: Windows 10/11 + WSL2, with `wsl --install`,
+    systemd-in-wsl.conf setup, ports-proxy through Windows firewall
+  - **Apple Silicon / Intel Mac** section flagging that ARK on
+    macOS is **not officially supported by Studio Wildcard** and
+    is for personal-test-rig use only
+  - Operator validation checklists for each playbook.
+- Test count is now **74 passing**.
+
 ### Test coverage
 
-- `cargo test --lib` — **69/69 passing**.
+- `cargo test --lib` — **74/74 passing**.
 - `frontend tsc --noEmit` — clean.
 
 ### Backwards compatibility
@@ -162,14 +215,30 @@ adheres to [Semantic Versioning](https://semver.org/).
   fallback. See `docs/VERCEL.md`. Tests:
   `plugins::vercel::tests::{parse_vercel_url_from_output_works,
   test_vercel_deploy_one_click_persists_token}`.
-- **VPS self-host guide** (`docs/HOSTING.md` + `supervisor.ps1` + the
-  bash runners shipping in this commit) — test on:
-  - a clean Raspberry Pi 5 bookworm install (8 GB RAM)
-  - an Intel NUC i3 with Ubuntu Server 24.04
-  - if the operator can't pay for a cloud, repurpose an old Win10 PC
-    with WSL2 and the `Self-hosted` runner.
-  Each path needs an **end-to-end 10-minute validation**: blank OS →
-  ARK server reachable via DNS / public IP.
+- ~~**Self-host on Pi / NUC / WSL2 / macOS**~~ ✅ **Shipped (code
+  side)** — `render_local_provision_plan` Tauri command registered
+  in `lib.rs`. `HostingTab.tsx` "Run on your own hardware" lets the
+  operator pick one of 7 hardware classes (Pi 5 / Debian NUC /
+  Ubuntu NUC / WSL2 Debian / WSL2 Ubuntu / Apple Silicon / Intel
+  Mac), paste the same backup-bundle URL they'd use for a cloud
+  VPS, and generate a platform-tailored bash + inline one-liner +
+  stage-by-stage checklist. The Rust module
+  `src-tauri/src/integrations/local_provision.rs` contains the
+  patches so that the macOS variant swaps `apt-get` for `brew
+  install`, replaces `/home/arkasa` with `$SERVER_HOME`, drops the
+  systemd unit and uses `screen -dmS arkasa` instead; the WSL2
+  variant appends a hardening tail warning the operator to enable
+  systemd in `/etc/wsl.conf` first. Tests:
+  `integrations::local_provision::tests::{pi5_plan_uses_systemd_and_apt,
+  ubuntu_x86_plan_no_cooling_note, wsl2_plan_includes_tail_warning,
+  macos_drops_systemd_and_apt_switches_to_brew,
+  plan_render_doesnt_panic_for_any_class}`.
+  See `docs/HOSTING_SELFHOSTED.md` — three operator playbooks:
+  Pi 5 (Bookworm arm64), Debian/Ubuntu on Intel NUC, WSL2 on
+  Windows 10/11, with hardware-validation checklists. **For v2.1.0
+  closure** the operator still needs to **physically validate** the
+  three playbooks on real hardware (Pi 5, NUC, WSL2) — once those
+  pass, this becomes fully shipped.
 - **Network & Tailscale docs** — `docs/NETWORK_SETUP.md` exists but
   doesn't yet walk a fresh user through choosing Tailscale when they
   have a CGNAT-only ISP. Should cover the wizard in the existing

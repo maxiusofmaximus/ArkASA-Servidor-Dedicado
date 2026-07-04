@@ -159,6 +159,10 @@ mod tests {
         let cfg = DatabaseConfig::default();
         assert_eq!(cfg.backend, DbBackend::Sqlite);
         assert!(cfg.is_active());
+        // Defensive cleanup so other tests don't see our leaked env
+        // (this test fails pollution otherwise when run after another
+        // that asserts SQLite default URL).
+        env::remove_var("DB_URL");
     }
 
     #[test]

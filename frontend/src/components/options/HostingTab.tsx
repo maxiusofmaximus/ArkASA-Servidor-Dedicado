@@ -28,6 +28,35 @@ const DEFAULT_TARGET: HostingTarget = {
   disk_gb: 50,
 }
 
+// Picker for the "Run on your own hardware" sub-section. We don't
+// enumerate platform-specific steps in code; each value maps 1:1 to
+// the `LocalTargetClass` enum in the Rust Tauri command.
+const LOCAL_CLASS_OPTIONS: { value: string; label: string }[] = [
+  { value: 'debian-pi5',   label: 'Raspberry Pi 5 — Debian Bookworm arm64' },
+  { value: 'debian-x86',   label: 'Debian 12 / 13 minimal — Intel NUC, x86 server' },
+  { value: 'ubuntu-x86',   label: 'Ubuntu Server 24.04 — Intel NUC, x86 server' },
+  { value: 'wsl2-debian',  label: 'Windows 10/11 + WSL2 Debian' },
+  { value: 'wsl2-ubuntu',  label: 'Windows 10/11 + WSL2 Ubuntu' },
+  { value: 'macos-arm',    label: 'Apple Silicon Mac — macOS 14+' },
+  { value: 'macos-intel',  label: 'Intel-based Mac — macOS 14+' },
+]
+
+interface ProvisionStageView {
+  stage: string
+  command_hint: string
+  expecting: string
+}
+
+interface LocalPlanView {
+  class_label: string
+  bundled_script: string
+  inline_command: string
+  supports_systemd: boolean
+  uses_apt: boolean
+  stages: ProvisionStageView[]
+  notes: string[]
+}
+
 export default function HostingTab() {
   const { tk } = useI18n()
   const [providers, setProviders] = useState<ProviderView[]>([])
@@ -36,6 +65,15 @@ export default function HostingTab() {
   const [script, setScript] = useState('')
   const [runCmd, setRunCmd] = useState('')
   const [generating, setGenerating] = useState(false)
+
+  // Local-provision state (Pi / NUC / WSL2 / macOS)
+  const [localClass, setLocalClass] = useState('debian-x86')
+  const [localUser, setLocalUser] = useState('arkasa')
+  const [localHost, setLocalHost] = useState('127.0.0.1')
+  const [localDiskGb, setLocalDiskGb] = useState(64)
+  const [localPlan, setLocalPlan] = useState<LocalPlanView | null>(null)
+  const [localBusy, setLocalBusy] = useState(false)
+  const [localErr, setLocalErr] = useState('')
 
   useEffect(() => {
     invoke<ProviderView[]>('list_hosting_providers')
@@ -87,6 +125,26 @@ export default function HostingTab() {
     try {
       await navigator.clipboard.writeText(text)
     } catch { /* ignore */ }
+  }
+
+  const generateLocal = async () => {
+    setLocalBusy(true)
+    setLocalErr('')
+    setLocalPlan(null)
+    try {
+      const plan = await invoke<LocalPlanView>('render_local_provision_plan', {
+        class: localClass,
+        sshUser: localUser,
+        sshHost: localHost,
+        bundleUrl,
+        diskGb: localDiskGb,
+      })
+      setLocalPlan(plan)
+    } catch (e: unknown) {
+      setLocalErr(String(e))
+    } finally {
+      setLocalBusy(false)
+    }
   }
 
   const providerOptions = providers.map((p) => ({ value: p.key, label: p.label }))
@@ -195,6 +253,102 @@ export default function HostingTab() {
           >
             ⧉ {tk('btn_copy', 'Copy')}
           </button>
+        </Section>
+      )}
+
+      {/* ── Run on your own hardware (Pi / NUC / WSL2 / macOS) ────────────── */}
+      <Section title={tk('section_local_provision', 'Run on your own hardware')}>
+        <p className="text-ark-cyan/40 text-[10px] leading-relaxed">
+          {tk('local_provision_intro',
+            'Pick your hardware class, paste the same backup bundle URL you would for a cloud VPS, and click GENERATE PLAN. The app produces a platform-tailored bash, an inline one-liner, and a stage-by-stage checklist.')}
+        </p>
+        <Select
+          label={tk('local_class_label', 'Hardware / OS')}
+          value={localClass}
+          onChange={setLocalClass}
+          options={LOCAL_CLASS_OPTIONS}
+          placeholder="—"
+        />
+        <Field
+          label={tk('local_ssh_user_label', 'Local user (for plan tracking)')}
+          value={localUser}
+          onChange={setLocalUser}
+          placeholder="arkasa / ubuntu / $USER"
+        />
+        <Field
+          label={tk('local_ssh_host_label', 'Local host (informational)')}
+          value={localHost}
+          onChange={setLocalHost}
+          placeholder="127.0.0.1 / pi5.lan / mac.local"
+        />
+        <Field
+          label={tk('disk_label', 'Disk GB')}
+          value={String(localDiskGb)}
+          onChange={(v) => setLocalDiskGb(Number(v) || 64)}
+          type="number"
+        />
+        <button
+          onClick={generateLocal}
+          disabled={localBusy || !bundleUrl}
+          className="ark-action-btn px-4 py-2 text-xs tracking-widest disabled:opacity-40"
+          style={{ borderColor: 'rgba(0, 200, 255, 0.4)' }}
+        >
+          {localBusy ? tk('generating', 'Generating…') : tk('btn_generate_local_plan', 'GENERATE LOCAL PLAN')}
+        </button>
+        {localErr && <p className="text-red-400 text-xs">⚠ {localErr}</p>}
+      </Section>
+
+      {localPlan && (
+        <Section title={localPlan.class_label}>
+          <p className="text-ark-cyan/40 text-[10px] leading-relaxed">
+            {tk('local_plan_intro',
+              'Save this bash as run.sh on the target hardware, then run it as the user specified below. The checklist under the script shows what success looks like at each stage.')}
+          </p>
+          <ul className="list-disc pl-5 text-ark-cyan/55 text-[11px] space-y-1 mt-1 mb-3">
+            {localPlan.notes.map((n, i) => <li key={i}>{n}</li>)}
+          </ul>
+          <TextArea
+            label={tk('local_inline_label', 'Inline one-liner (operator-friendly)')}
+            value={localPlan.inline_command}
+            onChange={() => { /* read-only */ }}
+            rows={3}
+          />
+          <button
+            onClick={() => copyToClipboard(localPlan.inline_command)}
+            className="text-ark-cyan/70 hover:text-ark-cyan text-[10px] tracking-widest uppercase mb-3"
+          >
+            ⧉ {tk('btn_copy', 'Copy')}
+          </button>
+          <TextArea
+            label={tk('local_script_label', 'Bundled bash script (prefer this; the inline command is a shortcut)')}
+            value={localPlan.bundled_script}
+            onChange={() => { /* read-only */ }}
+            rows={12}
+          />
+          <button
+            onClick={() => copyToClipboard(localPlan.bundled_script)}
+            className="text-ark-cyan/70 hover:text-ark-cyan text-[10px] tracking-widest uppercase mb-3"
+          >
+            ⧉ {tk('btn_copy', 'Copy')}
+          </button>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-ark-cyan/70 text-[11px] uppercase tracking-widest">
+              📋 Stage-by-stage checklist ({localPlan.stages.length})
+            </summary>
+            <ol className="list-decimal pl-6 text-[11px] text-ark-cyan/60 mt-3 space-y-2">
+              {localPlan.stages.map((s, i) => (
+                <li key={i}>
+                  <span className="font-mono text-ark-accent">{s.stage}</span>
+                  <pre className="mt-1 text-[10px] bg-black/40 border border-ark-cyan/5 rounded p-2 font-mono whitespace-pre-wrap leading-tight text-ark-cyan/55">
+{s.command_hint}
+                  </pre>
+                  <p className="text-ark-cyan/45 text-[10px] mt-1 italic">
+                    Expecting: {s.expecting}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          </details>
         </Section>
       )}
     </>

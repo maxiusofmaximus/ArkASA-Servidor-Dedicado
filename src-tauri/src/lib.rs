@@ -1219,6 +1219,39 @@ fn render_provider_run_script(
     integrations::hosting::render_provider_run_script(&target, &bundle_url)
 }
 
+/// Render a complete local-provision plan for the operator's own
+/// hardware (Raspberry Pi 5 / Intel NUC / WSL2 / macOS). The frontend
+/// calls this from the **Run locally** disclosure inside `HostingTab`.
+/// Returns a 4-tuple: bundled script, inline one-liner, stages
+/// (per-step verbatim copy + expectation), platform notes. See
+/// `src-tauri/src/integrations/local_provision.rs` for the patch
+/// details (apt → brew on macOS, systemd → `screen` on macOS, etc.).
+#[tauri::command]
+fn render_local_provision_plan(
+    class:        String,
+    ssh_user:     String,
+    ssh_host:     String,
+    bundle_url:   String,
+    disk_gb:      u32,
+) -> Result<integrations::local_provision::LocalProvisionPlan, String> {
+    use integrations::local_provision::{LocalProvisionPlan, LocalTargetClass};
+    let class = match class.as_str() {
+        "debian-pi5"     => LocalTargetClass::DebianPi5,
+        "debian-x86"     => LocalTargetClass::DebianX86,
+        "ubuntu-x86"     => LocalTargetClass::UbuntuX86,
+        "wsl2-debian"    => LocalTargetClass::Wsl2Debian,
+        "wsl2-ubuntu"    => LocalTargetClass::Wsl2Ubuntu,
+        "macos-arm"      => LocalTargetClass::MacosArm,
+        "macos-intel"    => LocalTargetClass::MacosIntel,
+        other            => return Err(format!("unknown local target class `{other}` — pick one of {:?}", LocalTargetClass::all())),
+    };
+    Ok::<LocalProvisionPlan, String>(
+        integrations::local_provision::build_local_plan(
+            class, &ssh_user, &ssh_host, &bundle_url, disk_gb
+        )
+    )
+}
+
 // ─── Receipts ledger (v2.2) ──────────────────────────────────────────────────
 //
 // Lazily-initialised JSONL append-only ledger under `${AppData}/receipts/`.
@@ -1777,6 +1810,7 @@ pub fn run() {
             // v2.2 — multi-cloud hosting & database adapters
             render_hosting_script,
             render_provider_run_script,
+            render_local_provision_plan,
             list_hosting_providers,
             list_database_backends,
             validate_database_config,
