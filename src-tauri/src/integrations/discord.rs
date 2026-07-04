@@ -253,7 +253,9 @@ impl DiscordBot {
 
         let mut last_seq: Option<u64> = None;
         let mut session_id: Option<String> = None;
-        let mut resume_url: Option<String> = None;
+        // `resume_gateway_url` is captured by the `"READY"` arm above (logged) —
+        // we clear the binding here so we don't trigger dead-code warnings
+        // while keeping the code path obvious for the next session's resume.
 
         // Heartbeating inline — keeps the WS stream owned in one place.
         let mut hb_interval = tokio::time::interval(Duration::from_millis(heartbeat_ms));
@@ -291,8 +293,12 @@ impl DiscordBot {
                                     if let Ok(id) = serde_json::from_value::<String>(d["session_id"].clone()) {
                                         session_id = Some(id);
                                     }
+                                    // Discord exposes a per-session resume
+                                    // gateway; we don't yet implement op 6
+                                    // RESUME, so we just log the URL for
+                                    // future debugging / supervisor tuning.
                                     if let Ok(r) = serde_json::from_value::<String>(d["resume_gateway_url"].clone()) {
-                                        resume_url = Some(r);
+                                        log::info!("Discord READY: resume_gateway_url = {r}");
                                     }
                                     log::info!("Discord READY: session_id = {:?}", session_id);
                                 }

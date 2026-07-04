@@ -158,19 +158,34 @@ impl AuthState {
 
     /// Validate an inbound `Bearer <token>` header value. The header value
     /// may be either the raw bearer token string OR a JWT issued by `sign_jwt`.
+    /// Returns just the role for callers that don't need identity claims.
     pub fn validate(&self, header_value: &str) -> Result<Role, String> {
+        self.validate_with_claims(header_value).map(|c| c.role)
+    }
+
+    /// Validate and return the full identity claims. Use this when the
+    /// caller wants to bind an inbound request to a `RemoteCommandContext`
+    /// identity (so the receipts ledger can record actor info, not just
+    /// "http-api"). Raw bearer tokens return a synthetic `Claims { sub:
+    /// "tauri-app", label: "operator", role: Admin }` so the downstream
+    /// can rely on the field being non-empty.
+    pub fn validate_with_claims(&self, header_value: &str) -> Result<Claims, String> {
         let stripped = header_value.strip_prefix("Bearer ").unwrap_or(header_value);
         let trimmed = stripped.trim();
 
         // Fast path: raw bearer token (the canonical form operators copy).
-        if trimmed == self.token { return Ok(Role::Admin); }
+        // We DO have stored self-claims for this case (the bootstrap
+        // Claims), so we hand those back to the caller.
+        if trimmed == self.token {
+            return Ok(self.claims.clone());
+        }
 
         // Slow path: signed JWT (used by Convex backend, sub-bots, etc.).
         let mut validation = Validation::new(Algorithm::HS256);
         validation.leeway = 30; // seconds
 
         match decode::<Claims>(trimmed, &DecodingKey::from_secret(&self.secret), &validation) {
-            Ok(data) => Ok(data.claims.role),
+            Ok(data) => Ok(data.claims),
             Err(e)   => Err(format!("auth rejected: {e}")),
         }
     }

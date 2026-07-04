@@ -92,15 +92,30 @@ async fn logs() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "tail": 50, "lines": Vec::<String>::new() }))
 }
 
-#[derive(serde::Deserialize, Default)]
-struct ActionBody { map_index: Option<u32> }
+#[derive(serde::Deserialize, Default, Debug)]
+struct ActionBody {
+    /// Optional map index. The Hito-12 stubs currently ignore this —
+    /// the real implementation in `http_api.rs` routes through the
+    /// command router. Marked `#[allow(dead_code)]` so we don't drift
+    /// the deserializer as soon as the body grows.
+    #[allow(dead_code)]
+    map_index: Option<u32>,
+}
 
-async fn start(AxState(_api): AxState<Arc<AdminApiState>>, Json(_b): Json<ActionBody>)
-    -> (StatusCode, Json<RouterOutcome>)
-{ (StatusCode::OK, Json(stub_outcome(CommandKind::Start))) }
-async fn stop(AxState(_api): AxState<Arc<AdminApiState>>, Json(_b): Json<ActionBody>)
-    -> (StatusCode, Json<RouterOutcome>)
-{ (StatusCode::OK, Json(stub_outcome(CommandKind::Stop))) }
+async fn start(
+    AxState(_api): AxState<Arc<AdminApiState>>,
+    Json(body): Json<ActionBody>,
+) -> (StatusCode, Json<RouterOutcome>) {
+    log::debug!("public /v1/start called with {body:?}");
+    (StatusCode::OK, Json(stub_outcome(CommandKind::Start)))
+}
+async fn stop(
+    AxState(_api): AxState<Arc<AdminApiState>>,
+    Json(body): Json<ActionBody>,
+) -> (StatusCode, Json<RouterOutcome>) {
+    log::debug!("public /v1/stop called with {body:?}");
+    (StatusCode::OK, Json(stub_outcome(CommandKind::Stop)))
+}
 fn stub_outcome(kind: CommandKind) -> RouterOutcome {
     RouterOutcome::Error { reason: format!("public {:?} bridged at Hito 12", kind) }
 }

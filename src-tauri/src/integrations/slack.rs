@@ -186,7 +186,7 @@ impl SlackBot {
                         if !self.cfg.is_admin(&user_id) {
                             continue;
                         }
-                        if let Some(reply) = self.handle_inbound(&text, &user_id, router).await {
+                        if let Some(reply) = self.handle_inbound(&text, &user_id, &env.envelope_id, router).await {
                             if let Err(e) = self.send_message(&channel_id, &reply).await {
                                 log::warn!("Slack send failed: {e}");
                             }
@@ -204,6 +204,7 @@ impl SlackBot {
         &self,
         text: &str,
         user_id: &str,
+        envelope_id: &str,
         router: &Arc<F>,
     ) -> Option<String>
     where
@@ -212,6 +213,11 @@ impl SlackBot {
     {
         let emitter = try_global();
         let channel_id = "slack"; // Best-effort: we only know user_id here. Slack multi-tenant support is room-binding based, not chat-binding based, but admins still gate by user_id.
+        let envelope_id = if envelope_id.is_empty() {
+            // Fall back to per-message synthetic id; never pass empty to
+            // the receipts ledger so the queue-stage stays differentiable.
+            format!("slack:envelope:unknown:{user_id}")
+        } else { envelope_id.to_string() };
         let binding = if self.cfg.admins.is_empty() {
             crate::integrations::command_router::default_chat_binding(
                 Channel::Slack, channel_id,
@@ -234,9 +240,9 @@ impl SlackBot {
                     runtime: crate::integrations::RuntimeClass::Interactive,
                 },
                 IdentityPlatform::Slack,
-                // Envelope ID is the WS frame id; we don't carry it here, so we
-                // tag the placeholder with the runtime trace id (sub-ordered).
-                &trace_id,
+                // Real envelope ID propagated from the WS frame, so the
+                // audit log can correlate Slack events end-to-end.
+                &envelope_id,
             );
         }
 

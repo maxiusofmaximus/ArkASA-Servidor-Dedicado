@@ -63,6 +63,11 @@ struct Chat { id: i64 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct User {
+    // Telegram always populates `id`; we never index by user-id directly
+    // (the chat binding is by chat_id), so the field is deserialized but
+    // unused at runtime. Marking it `#[allow(dead_code)]` keeps the
+    // deserializer aligned with the Telegram API schema.
+    #[allow(dead_code)]
     id: i64,
     #[serde(default)]
     first_name: Option<String>,

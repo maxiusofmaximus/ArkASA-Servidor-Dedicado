@@ -232,22 +232,38 @@ async fn admin_only_call(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let raw_role = match api.auth.validate(&bearer) {
-        Ok(r)  => r,
+    let claims = match api.auth.validate_with_claims(&bearer) {
+        Ok(c)  => c,
         Err(_) => return unauthorized("bad role for admin op"),
     };
-    let role = match raw_role {
+    let role = match claims.role {
         crate::auth::Role::Admin  => RouterRole::Admin,
         crate::auth::Role::Viewer => RouterRole::Viewer,
     };
     if role != RouterRole::Admin { return unauthorized("admin role required"); }
 
+    // Bind a real 7-axis Identity to the inbound request so the
+    // receipts ledger can correlate the actor precisely (instead
+    // of leaving `identity: None` and tracing back to "http-api").
+    // The platform is Web (this endpoint), the runtime is Interactive
+    // (the operator is at the keyboard), and the user is whoever
+    // proved they hold the bearer / JWT.
+    let identity = crate::integrations::Identity {
+        platform:      crate::integrations::Platform::Web,
+        account_id:    api.host_id.clone(),
+        channel_id:    "http-api".into(),
+        user_id:       claims.sub.clone(),
+        agent_id:      String::new(),
+        session_key:   format!("http-api:{}", claims.sub),
+        runtime_class: crate::integrations::RuntimeClass::Interactive,
+    };
+
     let ctx = RemoteCommandContext {
         channel: crate::integrations::command_router::Channel::Web,
-        actor_id: api.host_id.clone(),
-        actor_name: "http-api".into(),
+        actor_id: claims.sub.clone(),
+        actor_name: claims.label.clone(),
         role,
-        identity: None,
+        identity: Some(identity),
     };
     let cmd = RemoteCommand {
         kind,
