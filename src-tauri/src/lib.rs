@@ -1844,6 +1844,13 @@ pub fn run() {
             // and tests keep working unchanged.
             crate::plugins::connection::list_connection_plugins,
             crate::plugins::connection::get_connection_plugin,
+            // AI model plugin catalog (Session 6 / P3) — 8 OpenAI-API-
+            // compatible adapters (OpenAI, Cerebras, NVIDIA NIM, llama.cpp,
+            // Ollama, vLLM, LM Studio, Custom). Discoverable shape only;
+            // `integrations::ai::AiClient` already speaks OpenAI chat
+            // completions so all 8 work transparently.
+            crate::plugins::model::list_model_plugins,
+            crate::plugins::model::get_model_plugin,
             // CurseForge
             get_curseforge_api_key,
             set_curseforge_api_key,

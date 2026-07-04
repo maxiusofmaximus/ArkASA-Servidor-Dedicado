@@ -381,6 +381,7 @@ pub mod vercel;
 pub mod registry;
 pub mod pluginhub;
 pub mod connection;
+pub mod model;
 
 /// Plugin registration — called once at startup, fills `PluginRegistry`.
 /// Built-in plugins (Convex, Vercel) get registered here. Operators
