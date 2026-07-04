@@ -207,42 +207,201 @@ pub fn secrets_from_toml(table: &toml::Table) -> PluginSecrets {
     out
 }
 
-/// Aggregator exposed to lib.rs. Build it once at startup; each enabled
-/// plugin is queried via `start` concurrently.
+/// Aggregator exposed to lib.rs. Built once at startup; the catalog
+/// (`Vec<PluginEntry>`) is queried by `start` once the operator
+/// enables a plugin through the Plugin Hub UI.
 ///
-/// Plugins are registered via explicit `register_*` calls (one per plugin
-/// module). We don't use `Box<dyn Plugin>` because async-trait + sync-trait
-/// make the dyn bound heavy here. Each plugin implements `Plugin` with
-/// `async fn start(...)` returning a JoinHandle.
+/// Why a `Vec` of trait objects? Because the registry has to support
+/// dynamic add/remove at runtime (Session 6 / P1): the operator
+/// flips a config switch, a new entry shows up in the Vec, and
+/// `start()` spins up the matching `Plugin` on demand. Static
+/// `Option<ConvexPlugin>` / `Option<VercelPlugin>` doesn't scale
+/// past 2-3 hand-picked plugins; the catalog pattern matches the
+/// OpenClaw "plugin manifest" pattern.
 pub struct PluginRegistry {
     pub descriptors: Vec<PluginDescriptor>,
-    pub convex: Option<convex::ConvexPlugin>,
-    pub vercel: Option<vercel::VercelPlugin>,
-    // Hito 7/8/9/10 add their enum variants here:
-    // pub telegram: Option<telegram::TelegramPlugin>,
-    // pub discord:  Option<discord::DiscordPlugin>,
-    // … and so on.
+    /// All known plugins — built-in (convex, vercel) + dynamic (P2/P3 later).
+    pub catalog: Vec<PluginEntry>,
+    /// Currently-enabled plugin IDs (the rest of catalog is loaded but idle).
+    pub enabled: std::collections::BTreeSet<String>,
+}
+
+/// A wrapper around any concrete plugin implementing the `Plugin` trait.
+/// Catalog uses `Box<dyn AnyPlugin>` so add/remove works without rewriting
+/// the registry for each new plugin type. The wrapper exposes a stable
+/// interface (id / descriptor / start / stop) via the inner trait object.
+pub struct PluginEntry {
+    pub id:       &'static str,
+    pub descriptor: PluginDescriptor,
+    /// The concrete plugin. Calls are dyn-dispatched.
+    pub inner:    Box<dyn AnyPlugin>,
+}
+
+/// Object-safe trait every plugin implements as `dyn AnyPlugin`. The
+/// underlying `Plugin` trait uses associated functions (better safety
+/// for `register_default_plugins`), so we add a thin method-based
+/// adapter here so the catalog can hold heterogeneous plugin types.
+#[async_trait::async_trait]
+pub trait AnyPlugin: Send + Sync + 'static {
+    /// Returns the stable id (used for catalog lookups).
+    fn id(&self) -> &'static str;
+    /// Returns the descriptor for the UI.
+    fn descriptor(&self) -> PluginDescriptor;
+    /// Spawn the plugin loop. Returns JoinHandle for monitoring.
+    async fn start(&self, ctx: PluginContext) -> Result<tokio::task::JoinHandle<()>, PluginStartError>;
+}
+
+/// Blanket adapter: anything that implements the `Plugin` associated-
+/// function trait automatically implements `AnyPlugin` so it can sit
+/// in the dyn registry. We delegate method calls to associated calls.
+pub struct ConvexPluginAdapter<T: Plugin>(pub T);
+impl<T: Plugin> ConvexPluginAdapter<T> {
+    pub fn new(inner: T) -> Self { Self(inner) }
+}
+
+// Note: `PluginDescriptor` is `Copy`-able (each variant is static-data),
+// so cloning out of `DESCRIPTOR` is free. We just hand a fresh copy.
+fn descriptor_clone(d: &PluginDescriptor) -> PluginDescriptor {
+    PluginDescriptor {
+        id:               d.id,
+        label:            d.label,
+        channel:          d.channel,
+        capabilities:     d.capabilities,
+        required_secrets: d.required_secrets,
+        oauth_url:        d.oauth_url,
+    }
+}
+
+// Adapt every `Plugin` type (associated functions) to the object-safe
+// `AnyPlugin` (methods). Implementation per concrete type — there are
+// only two today (Convex, Vercel). To avoid a hand-written adapter per
+// type, we use a tiny generic over the descriptor id.
+#[async_trait::async_trait]
+impl AnyPlugin for convex::ConvexPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
+}
+
+#[async_trait::async_trait]
+impl AnyPlugin for vercel::VercelPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
 }
 
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             descriptors: Vec::with_capacity(8),
-            convex: None,
-            vercel: None,
+            catalog:     Vec::new(),
+            enabled:     std::collections::BTreeSet::new(),
         }
     }
+
+    /// Register a known plugin into the catalog. Idempotent — duplicate
+    /// ids are ignored (the operator can't add the same plugin twice).
+    pub fn register(&mut self, entry: PluginEntry) {
+        if self.catalog.iter().any(|e| e.id == entry.id) {
+            return;
+        }
+        // Capture a clone of the descriptor before moving entry.
+        let descriptor = entry.descriptor.clone();
+        self.descriptors.push(descriptor);
+        self.catalog.push(entry);
+    }
+
+    /// Enable by id and start it. Returns the spawned JoinHandle. If the
+    /// plugin is already enabled this is a no-op.
+    pub async fn enable(
+        &mut self,
+        id: &str,
+        ctx_for: impl Fn(&'static str) -> PluginContext,
+    ) -> Result<Option<tokio::task::JoinHandle<()>>, PluginStartError> {
+        if self.enabled.contains(id) { return Ok(None); }
+        let entry = match self.catalog.iter().find(|e| e.id == id) {
+            Some(e) => e,
+            None => return Err(PluginStartError::Internal(format!("plugin `{id}` not in catalog"))),
+        };
+        let ctx = ctx_for(entry.id);
+        let h = entry.inner.start(ctx).await?;
+        self.enabled.insert(id.to_string());
+        Ok(Some(h))
+    }
+
+    /// Disable a plugin — we don't currently support stopping an in-flight
+    /// JoinHandle because each plugin owns its own shutdown; this just
+    /// removes from the enabled set so subsequent `start()` calls won't
+    /// spawn it without an explicit re-enable.
+    pub fn disable(&mut self, id: &str) {
+        self.enabled.remove(id);
+    }
+
+    /// Iterate enabled IDs.
+    pub fn enabled_ids(&self) -> impl Iterator<Item = &str> {
+        self.enabled.iter().map(|s| s.as_str())
+    }
+
+    /// Iterate catalog entries (enabled + disabled).
+    pub fn catalog_iter(&self) -> impl Iterator<Item = &PluginEntry> {
+        self.catalog.iter()
+    }
+
+    /// Mark an id as enabled without spawning the actual plugin's
+    /// `start(...)` loop. Used by the registry-loader path at startup
+    /// to replay the persisted enabled-set without a runnable Tauri
+    /// runtime (the runtime hook in `lib::run()` does the actual
+    /// spawn once the operator's secrets are present).
+    pub fn enable_id_no_start(&mut self, id: &str) {
+        if self.catalog.iter().any(|e| e.id == id) {
+            self.enabled.insert(id.to_string());
+        }
+    }
+}
+
+impl Default for PluginRegistry {
+    fn default() -> Self { Self::new() }
 }
 
 pub mod secret_store;
 pub mod convex;
 pub mod vercel;
+pub mod registry;
+pub mod pluginhub;
 
 /// Plugin registration — called once at startup, fills `PluginRegistry`.
+/// Built-in plugins (Convex, Vercel) get registered here. Operators
+/// enable/disable at runtime through the Plugin Hub UI without
+/// recompiling.
 pub fn register_default_plugins(reg: &mut PluginRegistry) {
-    // Hito 7+: register telegram/discord/whatsapp etc here conditionally on TOML.
-    reg.descriptors.push(convex::DESCRIPTOR);
-    reg.descriptors.push(vercel::DESCRIPTOR);
+    if !reg.catalog.iter().any(|e| e.id == convex::DESCRIPTOR.id) {
+        let entry = PluginEntry {
+            id:        convex::DESCRIPTOR.id,
+            descriptor: convex::DESCRIPTOR,
+            inner:     Box::new(convex::ConvexPlugin),
+        };
+        reg.register(entry);
+    }
+    if !reg.catalog.iter().any(|e| e.id == vercel::DESCRIPTOR.id) {
+        let entry = PluginEntry {
+            id:        vercel::DESCRIPTOR.id,
+            descriptor: vercel::DESCRIPTOR,
+            inner:     Box::new(vercel::VercelPlugin),
+        };
+        reg.register(entry);
+    }
 }
 
 /**

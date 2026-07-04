@@ -1833,6 +1833,11 @@ pub fn run() {
             crate::plugins::vercel::vercel_deploy_web,
             crate::plugins::vercel::vercel_deploy_one_click,
             crate::plugins::vercel::vercel_status,
+            // Plugin Hub (Session 6 / P1) — list / enable / disable
+            crate::plugins::pluginhub::list_plugin_catalog,
+            crate::plugins::pluginhub::enable_plugin,
+            crate::plugins::pluginhub::disable_plugin,
+            crate::plugins::pluginhub::plugin_registry_snapshot,
             // CurseForge
             get_curseforge_api_key,
             set_curseforge_api_key,
