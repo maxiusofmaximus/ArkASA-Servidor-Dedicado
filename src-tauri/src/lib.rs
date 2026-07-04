@@ -1838,6 +1838,12 @@ pub fn run() {
             crate::plugins::pluginhub::enable_plugin,
             crate::plugins::pluginhub::disable_plugin,
             crate::plugins::pluginhub::plugin_registry_snapshot,
+            // Connection plugin catalog (Session 6 / P2) — declarative
+            // metadata for the 7 VPS providers. Layered on top of the
+            // existing `HostProvider` enum so the React-side contracts
+            // and tests keep working unchanged.
+            crate::plugins::connection::list_connection_plugins,
+            crate::plugins::connection::get_connection_plugin,
             // CurseForge
             get_curseforge_api_key,
             set_curseforge_api_key,
