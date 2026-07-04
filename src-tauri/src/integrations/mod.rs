@@ -15,11 +15,22 @@
 //!
 //! Each adapter is registered from `lib.rs::run()` so the desktop app only
 //! starts them when its configured TOML enables them.
+pub mod ai;
+pub mod bridge;
 pub mod command_router;
 pub mod convex_push;
+pub mod database;
+pub mod discord;
+pub mod hosting;
 pub mod http_api;
 pub mod http_commands;
+pub mod identity;
+pub mod receipt_emit;
+pub mod slack;
 pub mod telegram;
 
 pub use command_router::{CommandRouter, RouterError, RouterOutcome, RemoteCommandContext, Channel, Role};
+pub use identity::{Identity, IdentityResolution, ChannelBinding, Platform, RuntimeClass, RejectionReason};
 pub use telegram::{TelegramBot, TelegramConfig, spawn_looper};
+pub use bridge::dispatch;
+pub use receipt_emit::{Emitter, DeliveryStatus, ReceiptContext, try_global};

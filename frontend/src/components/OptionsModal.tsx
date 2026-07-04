@@ -8,6 +8,8 @@ import Tooltip from './Tooltip'
 import GeneralTab from './options/GeneralTab'
 import BackupTab from './options/BackupTab'
 import ConfigTab from './options/ConfigTab'
+import HostingTab from './options/HostingTab'
+import DatabaseTab from './options/DatabaseTab'
 import type { ServerConfig } from '../types'
 
 interface OptionsModalProps {
@@ -21,7 +23,7 @@ interface OptionsModalProps {
   isSaving?: boolean
 }
 
-type OptionsTab = 'general' | 'backup' | 'config' | 'actions'
+type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'actions'
 
 export default function OptionsModal({
   onClose,
@@ -73,7 +75,7 @@ export default function OptionsModal({
     e.target.value = ''
   }
 
-  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'actions']
+  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'actions']
 
   return (
     <div
@@ -109,6 +111,8 @@ export default function OptionsModal({
               {t === 'general' ? tk('tab_general', 'General')
                : t === 'backup' ? tk('tab_backup', 'Backup')
                : t === 'config' ? tk('tab_config_ini', 'Config INI')
+               : t === 'hosting' ? tk('tab_hosting', 'Hosting')
+               : t === 'database' ? tk('tab_database', 'Database')
                : tk('tab_actions', 'Actions')}
             </button>
           ))}
@@ -126,6 +130,8 @@ export default function OptionsModal({
               }}
             />
           )}
+          {tab === 'hosting' && <HostingTab />}
+          {tab === 'database' && <DatabaseTab />}
           {tab === 'actions' && (
             <div className="space-y-3">
               {onReset && (

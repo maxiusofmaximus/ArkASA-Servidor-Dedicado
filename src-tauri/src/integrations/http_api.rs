@@ -247,6 +247,7 @@ async fn admin_only_call(
         actor_id: api.host_id.clone(),
         actor_name: "http-api".into(),
         role,
+        identity: None,
     };
     let cmd = RemoteCommand {
         kind,

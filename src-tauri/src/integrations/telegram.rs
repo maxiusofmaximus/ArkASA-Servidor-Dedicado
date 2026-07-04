@@ -1,25 +1,24 @@
-//! Telegram bot adapter.
+//! Telegram bot adapter with optional AI capabilities.
 //!
 //! Long-polls `api.telegram.org/bot<token>/getUpdates` and resolves the
 //! configured commands (`/start`, `/stop`, `/status`, `/logs`, `/ip`,
 //! `/restart`). Each command is mapped to a normalized `RemoteCommand`
 //! and routed via the supplied function pointer.
 //!
-//! Authentication is per `chat_id`: only IDs in the TOML allowlist may
-//! invoke admin commands. Anyone outside the list gets a polite
-//! "not authorised" reply. Rate-limited at 1 cmd / 5 s per chat.
+//! If AI is enabled and the user sends a natural language message (not starting with `/`),
+//! it queries the OpenAI-compatible AI engine (Cerebras, Nvidia NIM, vLLM, llama.cpp, etc.)
+//! to answer or generate a structured command.
 //!
-//! Setup:
-//!   1. Create a bot via `@BotFather`.
-//!   2. Configure `[integrations.telegram]` in TOML:
-//!        enabled = true
-//!        token   = "12345:ABC-DEF…"
-//!        admins  = [ 123456789 ]   # your chat_id
-//!   3. Restart the desktop app — the polling loop starts in `lib::run()`.
+//! Authentication is per `chat_id`: only IDs in the TOML / environment allowlist may
+//! invoke admin commands. Anyone outside the list gets a polite "not authorised" reply.
 
 use crate::integrations::command_router::{
-    authorize, CommandKind, RemoteCommand, RemoteCommandContext, RouterOutcome,
+    CommandKind, RemoteCommand, RemoteCommandContext, RouterOutcome,
+    Channel as RouterChannel,
+    gated_chat_binding, run_with_receipts, PipelineOutcome,
 };
+use crate::integrations::Platform as IdentityPlatform;
+use crate::integrations::receipt_emit::try_global;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -32,7 +31,14 @@ pub struct TelegramConfig {
 
 impl Default for TelegramConfig {
     fn default() -> Self {
-        Self { enabled: false, token: String::new(), admins: vec![] }
+        let enabled = std::env::var("TELEGRAM_ENABLED").map(|v| v == "true").unwrap_or(false);
+        let token = std::env::var("TELEGRAM_BOT_TOKEN").unwrap_or_default();
+        let admins = std::env::var("TELEGRAM_ADMINS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|s| s.trim().parse::<i64>().ok())
+            .collect();
+        Self { enabled, token, admins }
     }
 }
 
@@ -74,10 +80,13 @@ pub struct TelegramBot {
     last_long_poll: Option<Update>,
     offsets_set: bool,
     last_cmd_at: std::collections::HashMap<i64, Instant>,
+    ai: Option<crate::integrations::ai::AiClient>,
 }
 
 impl TelegramBot {
     pub fn new(cfg: TelegramConfig) -> Self {
+        let ai_client = crate::integrations::ai::AiClient::from_env();
+        let ai = if ai_client.enabled() { Some(ai_client) } else { None };
         Self {
             cfg,
             http: reqwest::Client::builder()
@@ -86,6 +95,7 @@ impl TelegramBot {
             last_long_poll: None,
             offsets_set: false,
             last_cmd_at: Default::default(),
+            ai,
         }
     }
 
@@ -107,8 +117,7 @@ impl TelegramBot {
         Ok(())
     }
 
-    /// Single long-poll iteration. Generic over the router function so
-    /// concrete async tasks stay `Send`-compatible.
+    /// Single long-poll iteration. Generic over the router function.
     pub async fn tick<F>(&mut self, router: &F) -> Result<Option<(i64, String)>, String>
     where
         F: Fn(RemoteCommandContext, RemoteCommand) -> Result<RouterOutcome, String> + Send + Sync + ?Sized,
@@ -155,92 +164,202 @@ impl TelegramBot {
     where
         F: Fn(RemoteCommandContext, RemoteCommand) -> Result<RouterOutcome, String> + Send + Sync + ?Sized,
     {
-        if !text.starts_with('/') { return None; }
         let chat_id = msg.chat.id;
-        if !self.cfg.admins.contains(&chat_id) {
-            return Some(format!(
-                "⚠ your chat id ({chat_id}) is not authorised for this server. \
-                 Ask the operator to add it to `[integrations.telegram] admins` in TOML.",
-            ));
-        }
+        let chat_id_str = chat_id.to_string();
 
-        // Rate limit
+        // Rate limit (per chat_id). Pre-policy so a spammer can't flood
+        // the receipts ledger either.
         if let Some(prev) = self.last_cmd_at.get(&chat_id) {
-            if prev.elapsed() < Duration::from_secs(5) {
-                return Some("⏱ rate-limited: 1 cmd / 5s".into());
+            if prev.elapsed() < Duration::from_secs(3) {
+                return Some("⏱ Rate-limited: please wait a moment.".into());
             }
         }
-
-        let mut parts = text.split_whitespace();
-        let cmd_str = parts.next().unwrap_or("").to_ascii_lowercase();
-        let arg: Option<String> = parts.collect::<Vec<_>>().join(" ").into();
-        let kind_opt = match cmd_str.as_str() {
-            "/start"      => Some(CommandKind::Start),
-            "/stop"       => Some(CommandKind::Stop),
-            "/restart"    => Some(CommandKind::Restart),
-            "/status"     => Some(CommandKind::Status),
-            "/logs"       => Some(CommandKind::Logs),
-            "/ip"         => Some(CommandKind::Ip),
-            _            => None,
-        };
-        let Some(kind) = kind_opt else {
-            return Some("⚠ unknown command. Try /start /stop /restart /status /logs /ip".into());
-        };
         self.last_cmd_at.insert(chat_id, Instant::now());
 
         let name = msg.from.as_ref()
             .and_then(|u| u.first_name.clone())
             .unwrap_or_else(|| format!("tg-{chat_id}"));
+        let emitter = try_global();
 
-        let ctx = RemoteCommandContext {
-            channel:    crate::integrations::command_router::Channel::Telegram,
-            actor_id:   chat_id.to_string(),
-            actor_name: name,
-            role: crate::integrations::command_router::Role::Admin,
+        // Build the 7-axis identity binding from the configured admins.
+        let admins: Vec<String> = self.cfg.admins.iter().map(|i| i.to_string()).collect();
+        let binding = if admins.is_empty() {
+            crate::integrations::command_router::default_chat_binding(
+                RouterChannel::Telegram, &chat_id_str,
+            )
+        } else {
+            gated_chat_binding(RouterChannel::Telegram, &chat_id_str, admins)
         };
-        let remote = RemoteCommand {
-            kind,
-            map_index: None,
-            config_patch: None,
-            tail: arg.as_ref().and_then(|s| s.parse().ok()),
+
+        let trace_id = format!("tg:{}", chat_id);
+
+        // Slash command path
+        if text.starts_with('/') {
+            let mut parts = text.split_whitespace();
+            let cmd_str = parts.next().unwrap_or("").to_ascii_lowercase();
+            let arg: Option<String> = parts.collect::<Vec<_>>().join(" ").into();
+
+            let kind_opt = match cmd_str.as_str() {
+                "/start"      => Some(CommandKind::Start),
+                "/stop"       => Some(CommandKind::Stop),
+                "/restart"    => Some(CommandKind::Restart),
+                "/status"     => Some(CommandKind::Status),
+                "/logs"       => Some(CommandKind::Logs),
+                "/ip"         => Some(CommandKind::Ip),
+                _            => None,
+            };
+
+            let Some(kind) = kind_opt else {
+                return Some("⚠ Unknown command. Try /start, /stop, /restart, /status, /logs, /ip".into());
+            };
+
+            let kind_label = match kind {
+                CommandKind::Start      => "start",
+                CommandKind::Stop       => "stop",
+                CommandKind::Restart    => "restart",
+                CommandKind::Status     => "status",
+                CommandKind::Logs       => "logs",
+                CommandKind::Ip         => "ip",
+                CommandKind::ConfigGet  => "config_get",
+                CommandKind::ConfigSet  => "config_set",
+                CommandKind::StartInstance => "start_instance",
+                CommandKind::StopInstance  => "stop_instance",
+            };
+            let remote = RemoteCommand {
+                kind,
+                map_index: None,
+                config_patch: None,
+                tail: arg.as_ref().and_then(|s| s.parse().ok()),
+            };
+            let outcome = run_with_receipts(
+                emitter.as_deref(),
+                IdentityPlatform::Telegram,
+                RouterChannel::Telegram,
+                &binding,
+                &chat_id_str,
+                &name,
+                &trace_id,
+                text,
+                None,
+                Some(kind_label),
+                Some(remote),
+                &|ctx, cmd| (router)(ctx, cmd),
+            );
+            return Some(pipeline_to_reply(&outcome));
+        }
+
+        // Natural-language path: query AI, possibly extract [COMMAND: {...}].
+        let Some(ai) = &self.ai else {
+            return Some(
+                "🤖 El asistente de Inteligencia Artificial está inactivo. \
+                 Usa comandos de barra diagonal como `/status` o `/start`.".to_string(),
+            );
         };
-        if let Err(e) = authorize(&ctx, &remote) {
-            return Some(format!("⚠ forbidden: {e}"));
+        let ai_reply = match ai.query(text).await {
+            Ok(r)  => r,
+            Err(e) => return Some(format!("⚠ AI service error: {e}")),
+        };
+
+        if let Some(cmd_json_str) = extract_command_tag(&ai_reply).map(str::to_string) {
+            #[derive(Debug, Deserialize)]
+            struct ParsedAiCmd {
+                kind:      String,
+                #[serde(default)]
+                map_index: Option<u32>,
+                #[serde(default)]
+                tail:      Option<u32>,
+            }
+            if let Ok(parsed_cmd) = serde_json::from_str::<ParsedAiCmd>(&cmd_json_str) {
+                let cmd_kind = match parsed_cmd.kind.as_str() {
+                    "start"    => Some(CommandKind::Start),
+                    "stop"     => Some(CommandKind::Stop),
+                    "restart"  => Some(CommandKind::Restart),
+                    "status"   => Some(CommandKind::Status),
+                    "logs"     => Some(CommandKind::Logs),
+                    "ip"       => Some(CommandKind::Ip),
+                    _ => None,
+                };
+                if let Some(kind) = cmd_kind {
+                    let kind_label = parsed_cmd.kind.as_str();
+                    let remote = RemoteCommand {
+                        kind,
+                        map_index: parsed_cmd.map_index,
+                        config_patch: None,
+                        tail: parsed_cmd.tail,
+                    };
+                    let outcome = run_with_receipts(
+                        emitter.as_deref(),
+                        IdentityPlatform::Telegram,
+                        RouterChannel::Telegram,
+                        &binding,
+                        &chat_id_str,
+                        &name,
+                        &trace_id,
+                        text,
+                        None,
+                        Some(kind_label),
+                        Some(remote),
+                        &|ctx, cmd| (router)(ctx, cmd),
+                    );
+                    let friendly = ai_reply
+                        .replace(&format!("[COMMAND: {}]", &cmd_json_str), "")
+                        .trim()
+                        .to_string();
+                    return match outcome {
+                        PipelineOutcome::Done(msg) => Some(format!(
+                            "{}\n\n⚡ **Ejecutando comando:**\n{}",
+                            friendly, msg,
+                        )),
+                        PipelineOutcome::Rejected(msg) => Some(format!(
+                            "{}\n\n⚠ {}",
+                            friendly, msg,
+                        )),
+                        PipelineOutcome::NoCommand(_) => Some(friendly),
+                    };
+                }
+            }
         }
-        match router(ctx, remote) {
-            Ok(o)  => Some(o.to_user_message()),
-            Err(e) => Some(format!("⚠ router: {e}")),
-        }
+        Some(ai_reply)
     }
 }
 
-/// Spawn the Telegram polling loop with a generic router type.
-///
-/// Tauri 2 spawns tasks on a `current_thread` runtime so we can use
-/// `tauri::async_runtime::spawn` directly — the future does not need
-/// to be `Send` because there is no cross-thread boundary.
-/// Spawn the Telegram polling loop. Returns a 'static task handle.
-///
-/// Tauri 2's runtime is `current_thread`, so we use `tokio::task::spawn_local`
-/// (which does NOT require `Send`). The caller decides when to abort.
-///
-/// The signature uses `web_local` (an owned closure) and `tokio::task::LocalSet`
-/// isn't strictly necessary because each tick + send is independent.
-/// Spawn the Telegram polling loop.
-///
-/// Hito 6 final: keeps the `Bot` owned inside the future (no shared
-/// Mutex, no Send-hostile guards). If you need to inspect te bot state
-/// externally, push it through a `watch::channel` in Hito 12.
-pub fn spawn_looper<F>(bot: TelegramBot, router: std::sync::Arc<F>) -> impl std::future::Future<Output = ()>
+fn extract_command_tag(text: &str) -> Option<&str> {
+    let start = text.find("[COMMAND:")?;
+    let after = start + "[COMMAND:".len();
+    let rest = &text[after..];
+    let end = rest.find(']')?;
+    Some(rest[..end].trim())
+}
+
+fn pipeline_to_reply(outcome: &PipelineOutcome) -> String {
+    match outcome {
+        PipelineOutcome::Done(msg)       => msg.clone(),
+        PipelineOutcome::Rejected(msg)   => msg.clone(),
+        PipelineOutcome::NoCommand(s)    => s.clone(),
+    }
+}
+
+/// Spawn the Telegram polling loop on the current thread (Tauri runtime is
+/// `current_thread`, no `Send` required).
+pub async fn spawn_looper<F>(mut bot: TelegramBot, router: std::sync::Arc<F>)
 where
-    F: Fn(RemoteCommandContext, RemoteCommand) -> Result<RouterOutcome, String> + Send + Sync + 'static,
+    F: Fn(RemoteCommandContext, RemoteCommand) -> Result<RouterOutcome, String> + ?Sized + Send + Sync + 'static,
 {
-    let _ = bot;
-    let _ = router;
-    async move {
-        // Implementation lives inline in `lib.rs::run()` once Hito 12 wires
-        // the actual loop. This stub keeps the integration endpoint exported
-        // so the rest of the pipeline compiles and the wiring in lib.rs can
-        // simply call `telegram::bot.tick_loop(router).await` if convenient.
+    log::info!("Telegram bot looper task successfully initialized.");
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        match bot.tick(&*router).await {
+            Ok(Some((chat_id, reply))) => {
+                if let Err(e) = bot.send_message(chat_id, &reply).await {
+                    log::error!("Telegram send_message failed: {}", e);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::error!("Telegram polling error: {}", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
     }
 }

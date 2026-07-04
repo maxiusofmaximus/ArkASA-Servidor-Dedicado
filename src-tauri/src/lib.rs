@@ -6,6 +6,7 @@ pub mod stub;
 pub mod auth;
 pub mod integrations;
 pub mod plugins;
+pub mod receipts;
 
 // Re-export ark sub-modules used in commands
 mod ark;
@@ -1124,6 +1125,158 @@ fn config_to_toml(config: config::ServerConfig) -> Result<String, String> {
         .map_err(|e| format!("Failed to serialize config: {}", e))
 }
 
+/// v2.2 — Hosting adapter: render the cloud-init / startup script for the
+/// chosen provider so the operator can copy-paste it into their VPS
+/// marketplace.
+#[tauri::command]
+fn render_hosting_script(
+    target: integrations::hosting::HostTarget,
+    bundle_url: String,
+) -> Result<String, String> {
+    Ok(integrations::hosting::provision_script(&target, &bundle_url))
+}
+
+/// v2.2 — Hosting adapter: list every provider supported by the application.
+#[tauri::command]
+fn list_hosting_providers() -> Vec<HostingProviderView> {
+    integrations::hosting::HostProvider::all().iter().map(|p| {
+        HostingProviderView {
+            key: format!("{:?}", p).to_lowercase(),
+            label: p.label().to_string(),
+        }
+    }).collect()
+}
+
+#[derive(serde::Serialize)]
+struct HostingProviderView {
+    key: String,
+    label: String,
+}
+
+/// v2.2 — Database adapter: list supported backends.
+#[tauri::command]
+fn list_database_backends() -> Vec<integrations::database::DbBackendView> {
+    integrations::database::all_backends()
+}
+
+/// v2.2 — Database adapter: validate a connection string for the chosen
+/// backend without performing a network call (best-effort syntactic check).
+#[tauri::command]
+fn validate_database_config(cfg: integrations::database::DatabaseConfig) -> Result<(), String> {
+    if cfg.url.is_empty() { return Err("Missing database URL".into()); }
+    match cfg.backend {
+        integrations::database::DbBackend::Sqlite | integrations::database::DbBackend::SqliteAlt => Ok(()),
+        integrations::database::DbBackend::Convex => {
+            if !cfg.url.starts_with("http") { return Err("Convex URL must start with http(s)".into()); }
+            Ok(())
+        }
+        integrations::database::DbBackend::Supabase | integrations::database::DbBackend::Insforge => {
+            if !cfg.url.starts_with("http") { return Err("URL must start with http(s)".into()); }
+            if cfg.api_key.is_empty() { return Err("Anon key required".into()); }
+            Ok(())
+        }
+        integrations::database::DbBackend::Postgres => {
+            if !cfg.url.starts_with("http") && !cfg.url.starts_with("postgres") {
+                return Err("Postgres URL must be http(s) or postgres://".into());
+            }
+            Ok(())
+        }
+        integrations::database::DbBackend::Mongodb => {
+            if !cfg.url.starts_with("https") {
+                return Err("MongoDB Atlas Data API requires https://...".into());
+            }
+            if cfg.api_key.is_empty() { return Err("Atlas API key required".into()); }
+            Ok(())
+        }
+    }
+}
+
+/// v2.2 — Hosting adapter: track a deployment record inside the audit log.
+#[tauri::command]
+async fn record_hosting_deployment(target: integrations::hosting::HostTarget) -> Result<(), String> {
+    if let Some(ledger) = shared_ledger().read().as_ref().cloned() {
+        ledger.append(
+            serde_json::json!({
+                "provider": target.provider.label(),
+                "region":   target.region,
+                "ssh_host": target.ssh_host,
+                "disk_gb":  target.disk_gb,
+            }),
+            receipts::Stage::Hosting,
+        )?;
+    }
+    Ok(())
+}
+
+/// v2.3 — Hosting adapter: render a single-file bash runner the operator
+/// copies into their workstation. Wraps the right provider CLI
+/// (`hcloud`/`doctl`/`aws`/`az`/`gcloud`/`oci`/`vagrant`).
+#[tauri::command]
+fn render_provider_run_script(
+    target: integrations::hosting::HostTarget,
+    bundle_url: String,
+) -> Result<String, String> {
+    integrations::hosting::render_provider_run_script(&target, &bundle_url)
+}
+
+// ─── Receipts ledger (v2.2) ──────────────────────────────────────────────────
+//
+// Lazily-initialised JSONL append-only ledger under `${AppData}/receipts/`.
+// Shared across all Tauri commands via the OnceLock cell in `shared_ledger()`.
+//
+// `receipts_today_path`     → operator-facing path to today's JSONL file.
+// `receipts_tail(n)`         → last N receipts for UI/teaching support.
+// `receipts_probe(host_id)`  → id ensures the ledger is bound to this host.
+
+#[tauri::command]
+fn receipts_probe() -> Result<String, String> {
+    let g = shared_ledger().read();
+    let Some(l) = g.as_ref() else {
+        return Err("ledger not initialised".into());
+    };
+    Ok(l.host_id().to_string())
+}
+
+#[tauri::command]
+fn receipts_today_path() -> Result<String, String> {
+    let g = shared_ledger().read();
+    let Some(l) = g.as_ref() else {
+        return Err("ledger not initialised".into());
+    };
+    Ok(l.today_path().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn receipts_tail(n: u32) -> Result<Vec<receipts::Receipt>, String> {
+    let g = shared_ledger().read();
+    let Some(l) = g.as_ref() else {
+        return Err("ledger not initialised".into());
+    };
+    l.tail(n as usize)
+}
+
+// ─── Ledger lifecycle ─────────────────────────────────────────────────────────
+
+use std::path::Path;
+// ─── Ledger lifecycle ─────────────────────────────────────────────────────────
+
+static LEDGER: OnceLock<parking_lot::RwLock<Option<Arc<receipts::ReceiptLedger>>>> = OnceLock::new();
+
+fn shared_ledger() -> &'static parking_lot::RwLock<Option<Arc<receipts::ReceiptLedger>>> {
+    LEDGER.get_or_init(|| parking_lot::RwLock::new(None))
+}
+
+fn install_ledger(app_dir: &Path, host_id: &str) {
+    let mut w = shared_ledger().write();
+    if w.is_none() {
+        *w = Some(Arc::new(receipts::ReceiptLedger::new(
+            app_dir.join("receipts"),
+            host_id.to_string(),
+        )));
+        log::info!("receipts ledger initialised at {}/receipts", app_dir.display());
+    }
+}
+
 /// Extract config.toml from a backup .zip and parse it into a ServerConfig.
 #[tauri::command]
 fn parse_config_from_zip(zip_data: Vec<u8>) -> Result<config::ServerConfig, String> {
@@ -1376,11 +1529,30 @@ pub fn run() {
             };
 
             let host_id = machine_host_id().unwrap_or_else(|_| "unknown".into());
-            let api = Arc::new(integrations::http_api::AdminApiState::new(auth, host_id));
+            let api = Arc::new(integrations::http_api::AdminApiState::new(auth, host_id.clone()));
             if let Err(e) = integrations::http_api::spawn_loopback_server(api.clone(), [127, 0, 0, 1], 8765).await {
                 log::error!("loopback HTTP API failed to spawn: {e}");
             } else {
                 *holder.lock().await = Some(api);
+            }
+
+            // v2.2 — Receipts ledger for chat-channel events.
+            {
+                let app_data = crate::auth::AuthState::storage_dir();
+                install_ledger(&app_data, &host_id);
+                if let Some(ledger) = shared_ledger().read().as_ref().cloned() {
+                    // Bind the global receipt emitter so every chat adapter
+                    // and bridge call can append receipts without jugglery.
+                    integrations::receipt_emit::install_emitter(ledger.clone());
+                    let _ = ledger.append(
+                        serde_json::json!({
+                            "kind": "boot",
+                            "loopback_port": 8765,
+                            "loopback_host_id": host_id,
+                        }),
+                        receipts::Stage::ChannelIngress,
+                    );
+                }
             }
 
             // v2.1 — Convex publisher disabled-by-default; turn on when
@@ -1393,6 +1565,91 @@ pub fn run() {
                         log::info!("convex publisher started (handle: {handle:?})");
                     }
                 }
+            }
+
+            // v2.2 — multi-channel remote admin.
+            // We always build the router closure (it just loads the on-disk
+            // ServerConfig per command). Then we conditionally spawn each
+            // channel adapter based on its dedicated env vars.
+            let router_fn = move |ctx: integrations::command_router::RemoteCommandContext,
+                                   cmd: integrations::command_router::RemoteCommand| {
+                let cfg_path = std::env::var("ARK_ASA_CONFIG_PATH")
+                    .unwrap_or_else(|_| "server-config.toml".to_string());
+                let cfg_path_pb = std::path::PathBuf::from(cfg_path);
+                let cfg = match tauri::async_runtime::block_on(
+                    crate::config::loader::ConfigLoader::load_or_default(&cfg_path_pb),
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return Err::<integrations::command_router::RouterOutcome, String>(
+                            format!("config load failed: {e}"),
+                        );
+                    }
+                };
+                let _ = ctx;
+                let outcome = tauri::async_runtime::block_on(
+                    integrations::dispatch(&cfg, cmd.kind, cmd.map_index, cmd.tail),
+                );
+                match outcome {
+                    Ok(o) => Ok(o),
+                    Err(e) => Ok(integrations::command_router::RouterOutcome::Error {
+                        reason: format!("{e}"),
+                    }),
+                }
+            };
+            let router_arc: std::sync::Arc<
+                dyn Fn(
+                    integrations::command_router::RemoteCommandContext,
+                    integrations::command_router::RemoteCommand,
+                )
+                    -> Result<integrations::command_router::RouterOutcome, String>
+                    + Send
+                    + Sync
+                    + 'static,
+            > = std::sync::Arc::new(router_fn);
+
+            // Telegram
+            let bot_cfg = integrations::telegram::TelegramConfig::default();
+            if bot_cfg.enabled {
+                let bot = integrations::telegram::TelegramBot::new(bot_cfg);
+                let _ = tauri::async_runtime::spawn(
+                    integrations::telegram::spawn_looper(bot, router_arc.clone()),
+                );
+                log::info!("telegram bot looper started");
+            }
+
+            // v2.2 — Discord bot (real WebSocket gateway).
+            let discord_cfg = integrations::discord::DiscordConfig::default();
+            if discord_cfg.is_active() {
+                let discord_bot = integrations::discord::DiscordBot::new(discord_cfg);
+                let _ = tauri::async_runtime::spawn(
+                    integrations::discord::spawn_looper(discord_bot, router_arc.clone()),
+                );
+                log::info!("discord bot gateway started");
+            }
+
+            // v2.2 — Slack bot (Socket Mode WebSocket, no public URL required).
+            let slack_cfg = integrations::slack::SlackConfig::default();
+            if slack_cfg.is_active() {
+                let slack_bot = integrations::slack::SlackBot::new(slack_cfg);
+                let _ = tauri::async_runtime::spawn(
+                    integrations::slack::spawn_looper(slack_bot, router_arc.clone()),
+                );
+                log::info!("slack socket mode looper started");
+            }
+
+            // v2.2 — Audit-log database (default = SQLite at APPDATA).
+            let db_cfg = integrations::database::DatabaseConfig::default();
+            if db_cfg.is_active() {
+                let db_cfg_clone = db_cfg.clone();
+                tauri::async_runtime::spawn(async move {
+                    match integrations::database::build_dao(&db_cfg_clone).await {
+                        Ok(_dao) => {
+                            log::info!("audit DAO ready ({})", db_cfg_clone.backend.label());
+                        }
+                        Err(e) => log::warn!("audit DAO init failed: {e}"),
+                    }
+                });
             }
         });
     }
@@ -1515,6 +1772,17 @@ pub fn run() {
             parse_config_from_toml,
             config_to_toml,
             parse_config_from_zip,
+            // v2.2 — multi-cloud hosting & database adapters
+            render_hosting_script,
+            render_provider_run_script,
+            list_hosting_providers,
+            list_database_backends,
+            validate_database_config,
+            record_hosting_deployment,
+            // v2.2 — Receipts ledger
+            receipts_probe,
+            receipts_today_path,
+            receipts_tail,
             // Ping / Tailscale
             start_ping,
             stop_ping,

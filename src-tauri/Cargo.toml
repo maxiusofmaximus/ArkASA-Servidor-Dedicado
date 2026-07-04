@@ -33,6 +33,11 @@ sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
+# v2.2 — multi-channel chat bridge WebSocket support (Discord, Slack, Supabase, InsForge)
+tungstenite = "0.21"
+tokio-tungstenite = "0.21"
+# v2.2 — local SQLite audit-log DAO (default, no network required)
+rusqlite = { version = "0.31", features = ["bundled"] }
 # v2.1 — remote admin API + auth
 axum = { version = "0.7", features = ["json", "tokio"] }
 tower = "0.4"

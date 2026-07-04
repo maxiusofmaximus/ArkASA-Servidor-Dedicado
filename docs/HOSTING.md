@@ -1,0 +1,150 @@
+# Multi-cloud Hosting & Database Adapters (v2.2)
+
+This document covers the **Hosting Adapter** and **Database Adapter** layers introduced in v2.2.
+The desktop application now generates VPS provisioning scripts for **seven major providers** and
+the audit log can live in **six different back-ends** without rewriting a single line of code.
+
+## TL;DR — the operator perspective
+
+1. Open the desktop app, go to **Settings → Hosting → Provider**, choose between
+   Oracle Cloud, Hetzner, DigitalOcean, AWS EC2, Azure VM, GCP Compute or Self-hosted.
+2. The application renders a complete **cloud-init / startup script** you can paste into the
+   "User data" field of your VPS marketplace. SteamCMD downloads ARK's dedicated server,
+   the systemd unit runs the cluster under the chosen TOML config, and the host appears
+   ready in your ARK browser list.
+3. Open **Settings → Database → Backend**, pick between the six supported databases to
+   persist command history: SQLite (default, on disk), Convex, Supabase, InsForge, PostgreSQL
+   (raw libpq/PostgREST), MongoDB Atlas.
+4. All four chat channels (Telegram, Discord, Slack, REST/Convex) automatically start writing
+   audit rows to whichever database you chose.
+
+## Database backends
+
+| Backend     | Auth shape                            | Notes                                                |
+| ----------- | ------------------------------------- | ---------------------------------------------------- |
+| SQLite      | None (file path)                      | Default. Local file `.ark-config.db`.                |
+| Convex      | `Bearer <deploy-key>` + HMAC          | Re-uses the existing `convex_push.rs` channel.        |
+| Supabase    | `apikey` + `Bearer` (PostgREST)       | Enables RLS-friendly audit log; same URL for WebUI.  |
+| InsForge    | `Bearer <anon>`                       | Can pull AI-generated summaries from the audit log.  |
+| PostgreSQL  | `Bearer` or `postgres://` style       | Plain PostgREST-compatible; great on Neon/Timescale. |
+| MongoDB     | `apiKey` (Atlas Data API)             | Document store; pairs well with serverless fns.      |
+
+The `audit_row` row is **identical** everywhere — eight fields, no schema knowledge needed
+by the rest of the application. Adding a new backend is a single trait implementation
+(`AuditDao` with `append`/`recent`/`by_host`).
+
+## Hosting providers
+
+The `HostTarget` struct describes an environment-independent description of the server box:
+* `provider`, `region`, `ssh_user`, `ssh_host`, `ssh_port`, `ssh_key_path`
+* `env` — KV pairs you want available as `ENV` to the systemd unit
+* `disk_gb` — informational, used to log a warning when < 50 GB
+
+`provision_script(target, bundle_url)` returns one of:
+
+| Provider        | Output format    | Where the script runs                         |
+| --------------- | ---------------- | --------------------------------------------- |
+| Oracle Cloud    | `#cloud-config`  | Create-Instance Wizard → User data            |
+| Hetzner         | `#!/bin/bash`    | Server create → Cloud-init / User data        |
+| DigitalOcean    | `#!/bin/bash`    | Marketplace → Custom User Data                |
+| AWS EC2         | multipart MIME    | Advanced Details → User Data                  |
+| Azure VM        | `#!/bin/bash`    | Custom Data + cloud-init                      |
+| GCP Compute     | `#!/bin/bash`    | VM metadata → startup-script                  |
+| Self-hosted     | `#!/bin/bash`    | Run on the box with `bash bootstrap.sh`       |
+
+Each script:
+
+1. Installs `lib32gcc-s1`, `libc6-i386`, `wget`, `curl`, `screen`, etc.
+2. Adds the `arkasa` user.
+3. Boots `steamcmd` and asks for the ARK dedicated server (AppID `2430930`).
+4. Downloads the operator's backup bundle (config + savegame) from the URL the operator
+   provides (e.g. an S3 link to a `.zip` produced by the desktop app).
+5. Writes a `systemd` unit with the right env file so the cluster auto-starts.
+
+## Provider CLI runners (alpha toward v2.1)
+
+`provision_script()` returns the **cloud-init** for the chosen provider. To actually
+launch the VM, the operator authenticates with their cloud's official CLI and calls it
+— we deliberately do **not** reimplement OAuth, Sigv4 or device-code flows in Rust.
+
+The desktop app exposes a second Tauri command — `render_provider_run_script(target, bundle_url)` —
+that wraps the cloud-init into a single bash file the operator copies onto their workstation.
+The script writes the cloud-init to `/tmp/arkasa-init-*.sh`, then invokes the right CLI
+(`hcloud`, `doctl`, `aws`, `az`, `gcloud`, `oci`, or `rsync+ssh` for self-hosted).
+
+### Example — Hetzner
+
+```bash
+# On your workstation, after `hcloud login`:
+$ ark-runner.sh   # paste the contents of the panel "Provider runner" field
+
+#!/bin/bash
+set -euo pipefail
+
+mkdir -p "$(dirname '/tmp/arkasa-init-1731395482213.sh')"
+cat >'/tmp/arkasa-init-1731395482213.sh' <<'__ARKASA_INIT__'
+#!/bin/bash
+# ARK ASA provisioning generated by ARK ASA Configuration Manager
+# ...cloud-init body...
+__ARKASA_INIT__
+
+# Hetzner Cloud (hcloud CLI must be installed: brew install hcloud-cli)
+hcloud ssh-key describe --with-fingerprint --format json --name "arkasa" \
+  || hcloud ssh-key create --name arkasa --public-key-from-file "~/.ssh/id_ed25519.pub"
+
+hcloud server create \
+  --name arkasa-fsn1-80 \
+  --image ubuntu-24.04 --type cax11 --location fsn1 \
+  --ssh-key "arkasa" \
+  --user-data-from-file /tmp/arkasa-init-1731395482213.sh \
+  --start-after-create
+```
+
+### Quick reference
+
+| Provider      | CLI                 | Auth command            | Operator must have     |
+| ------------- | ------------------- | ----------------------- | ---------------------- |
+| Hetzner       | `hcloud`            | `hcloud login`          | API token in env       |
+| DigitalOcean  | `doctl`             | `doctl auth init`       | Spaces + PAT            |
+| AWS EC2       | `aws`               | `aws sso login` or env  | IAM perm `ec2:*`        |
+| GCP Compute   | `gcloud`            | `gcloud auth login`     | compute.instances.*     |
+| Azure VM      | `az`                | `az login`              | Contributor + RG        |
+| Oracle Always | `oci`               | `oci session authenticate` | COMPARTMENT_OCID    |
+| Self-hosted   | `ssh` + `rsync`     | N/A                     | SSH key on target box    |
+
+### Why not auto-provisioning?
+
+Because each cloud's auth contract is **drastically different**:
+
+- **AWS** needs Sigv4 signing (request-by-request, header-stamped).
+- **Azure** needs interactive device-code flow + tenant selection.
+- **Oracle** needs three different config files (`config`, `key_file`, `emulator`).
+- **GCP** needs a service-account JSON + `gcloud config set project`.
+- **Hetzner / DO** use **bearer tokens** that we *could* call directly — and we don't,
+  because hard-coding tokens into the desktop app defeats every audit story we have.
+
+So the operator authenticates with the cloud in their own shell, then pastes the bash the
+app generated. The cloud-init still flows end-to-end without a man-in-the-middle.
+
+### Fail-closed receipts (alpha toward v2.1)
+
+Every render of a runner emits a `Stage::Hosting` receipt with the
+provider/region/ssh_host/disk_gb to the local `receipts/` JSONL ledger. Operators can:
+- `cat "$(pnpm tauri receipts:today)"` — recent deployments
+- `pnpm tauri receipts:tail 50` — last 50 actions
+
+## Security
+
+- All bot adapter allowlists remain in TOML / env vars and are checked **before** the
+  `Bridge::dispatch` is invoked — so a forbidden user never gets to the bridge.
+- Rate-limit per channel: 1 message per 3 seconds (Telegram), per-thread deduping on
+  Discord (Docs mention 5 commands every 2 seconds for the gateway itself).
+- Socket Mode for Slack **does not require** a public HTTPS endpoint, removing the attack
+  surface of ingress rules.
+- Discord privileged intents (`MESSAGE_CONTENT`) require explicit enablement in the
+  Discord Developer Portal — not enabled by default; the operator opts in.
+
+## Tests
+
+- 41 unit tests across the workspace (5 AI, 4 Database, 3 Discord, 2 Slack, 5 Hosting, etc.).
+- All build checks green — `cargo check`, `cargo test`, `pnpm run build`.

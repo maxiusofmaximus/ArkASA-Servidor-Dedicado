@@ -4,7 +4,123 @@ All notable changes to this project are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [v2.1.0-alpha] — 2026-06-30 — INCOMPLETE / CONFIGURATION REQUIRED
+---
+
+> ## v2.1.0-alpha is still INCOMPLETE.
+>
+> This branch is **untagged** alpha work toward CLI-bridge plugins
+> (Convex, Vercel, hosting) and bot pipeline. **Do not ship it as
+> v2.3.0 yet.**
+>
+> **v2.1 cannot be declared complete until:**
+> 1. **Remote Convex backend** — deployable from the app (currently
+>    requires operator secrets at runtime; no first-class `push schema`
+>    button from the desktop UI to a tenant-owned Convex cloud).
+> 2. **Hosted Vercel web admin** — the operator clicks **Deploy web**
+>    and `vercel deploy --prod` produces a real URL they can share
+>    with players on phones / other machines. Today this only stubs
+>    a CLI-bridge plugin without a baked deploy flow.
+> 3. **Self-hosted VPS bootstrap** — for users who don't want a BaaS
+>    and just want to run the desktop on a Raspberry Pi 5 / spare PC.
+>    The 7-provider CLI runners ship the *script* but there's no
+>    end-to-end "I have an IPv4 → ARK running in 10 minutes" guide
+>    validated on real hardware (Pi 4/5, Intel NUC, old workstation).
+>
+> Until those three land, this file's `[Unreleased]` section is the
+> source of truth. Nothing in `main` deserves a version bump yet.
+
+## [Unreleased] — alpha work toward v2.1.0
+
+### Added — bot adapters & identity
+
+- **`integrations::identity::Identity` 7-axis model** — every chat-bot
+  inbound now resolves to a `Identity { platform, accountId, channelId,
+  userId, agentId, sessionKey, runtimeClass }` snapshot before
+  `Bridge::dispatch` is reached. Mirrors Agent Harness Core / OpenClaw
+  contracts. `ChannelBinding::resolve()` is **fail-closed** (`AllowlistMiss`
+  + `MalformedActorId` rejections).
+- **ALL adapters** (Telegram, Discord, Slack) now emit the full 5-stage
+  pipeline per inbound message via the new `receipt_emit::Emitter`:
+  `ChannelIngress → IdentityCheck → [QueueEnqueue] → RuntimePipeline →
+  ChannelDelivery`. Slack additionally emits `QueueEnqueue` because its
+  Socket-Mode contract requires ACK in ≤3s.
+- **`receipts::ReceiptLedger`** — JSONL append-only ledger
+  under `${AppData}/receipts/YYYY-MM-DD.jsonl`, fsync-on-write, daily
+  rotation. Three new Tauri commands: `receipts_probe`,
+  `receipts_today_path`, `receipts_tail(n)`. Initial entry written at
+  boot with `loopback_port=8765` and `loopback_host_id`.
+
+### Added — chat adapters
+
+- **Discord bot** (`integrations::discord`) — real Discord Gateway v10
+  WebSocket client; identify/heartbeat/MESSAGE_CREATE; supports admins
+  allowlist, AI-natural-language through `[COMMAND: ...]` tag (same
+  protocol as Telegram).
+- **Slack bot** (`integrations::slack`) — Socket Mode WebSocket, no
+  public HTTPS endpoint needed. App-Level Token + Bot OAuth token.
+- **Telegram bot upgrade** — same 7-axis pipeline; rate-limit per
+  `chat_id` (3s) preserved.
+
+### Added — hosting CLI runners (target for v2.1 completion)
+
+- **`render_provider_run_script(target, bundle_url)`** Tauri command —
+  wraps the cloud-init into a **single bash file** the operator copies
+  onto their authenticated workstation. Each provider dispatches to its
+  official CLI: `hcloud` / `doctl` / `aws` / `az` / `gcloud` / `oci` or
+  `rsync+ssh` for self-hosted. We deliberately do NOT reimplement OAuth
+  flows in Rust.
+- New tests covering Hetzner, DigitalOcean, AWS, GCP, Azure, Oracle and
+  Self-hosted path parsing.
+
+### Added — hosting & database tabs (frontend)
+
+- `frontend/src/components/options/HostingTab.tsx` — provider dropdown
+  + form + generate script + generate CLI runner + copy-to-clipboard.
+- `frontend/src/components/options/DatabaseTab.tsx` — backend dropdown
+  + validate button + status indicator.
+- New primitives `Select` and `TextArea` in
+  `frontend/src/components/ui/OptionsUI.tsx`.
+- 5-language i18n (EN/ES/DE/PT/FR) updated for new tabs.
+
+### Test coverage
+
+- `cargo test --lib` — **66/66 passing**.
+- `frontend tsc --noEmit` — clean.
+
+### Backwards compatibility
+
+- `RemoteCommandContext::desktop(actor, actor_name, role)` constructor
+  populated with `identity: None`. Existing UI callers continue to
+  flow through `authorize()` unchanged.
+- `http_api.rs` still passes `identity: None` for now (next session
+  will switch to `auth.rs` role mapping).
+
+### Open work to actually close `v2.1.0`
+
+- **Convex deploy flow** (`plugins/convex/`) — operator clicks
+  "Connect Convex" in the desktop UI; plugin spawns the official
+  `npx convex login` CLI; OAuth device-code completes; deploy URL
+  flows back into the UI config without the operator manually editing
+  TOMLs. Today this code reads the credentials file but no end-to-end
+  test exists on a fresh machine.
+- **Vercel deploy flow** (`plugins/vercel/`) — equivalent for the web
+  admin. Operator pastes their Vercel token, deploy runs `vercel
+  deploy --prod`, public URL is saved into the desktop app state.
+  Currently a CLI-bridge stub.
+- **VPS self-host guide** (`docs/HOSTING.md` + `supervisor.ps1` + the
+  bash runners shipping in this commit) — test on:
+  - a clean Raspberry Pi 5 bookworm install (8 GB RAM)
+  - an Intel NUC i3 with Ubuntu Server 24.04
+  - if the operator can't pay for a cloud, repurpose an old Win10 PC
+    with WSL2 and the `Self-hosted` runner.
+  Each path needs an **end-to-end 10-minute validation**: blank OS →
+  ARK server reachable via DNS / public IP.
+- **Network & Tailscale docs** — `docs/NETWORK_SETUP.md` exists but
+  doesn't yet walk a fresh user through choosing Tailscale when they
+  have a CGNAT-only ISP. Should cover the wizard in the existing
+  `General → Network` tab.
+
+## [v2.1.0-alpha.2] — 2026-06-30 — OAuth-removed, CLI-bridge plugin pattern
 
 > **Status: ALPHA — Not production-ready.**
 > Convex OAuth + Vercel deploy + per-bot credentials are wired in code

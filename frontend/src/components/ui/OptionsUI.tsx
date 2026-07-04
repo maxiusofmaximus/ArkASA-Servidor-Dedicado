@@ -44,3 +44,53 @@ export function Field({
     </div>
   )
 }
+
+export function Select({
+  label, value, onChange, options, placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+  placeholder?: string
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <label className="text-ark-cyan/50 text-xs w-32 flex-shrink-0 text-right">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 bg-transparent border border-ark-cyan/25 text-ark-cyan/90 text-xs px-3 py-1.5 rounded focus:outline-none focus:border-ark-cyan/60 font-mono"
+        style={{ appearance: 'auto' }}
+      >
+        {placeholder && !value && <option value="">{placeholder}</option>}
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+export function TextArea({
+  label, value, onChange, placeholder, rows = 8,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  rows?: number
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-ark-cyan/50 text-[10px] uppercase tracking-widest font-bold">{label}</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        className="w-full bg-black/40 border border-ark-cyan/25 text-ark-cyan/85 text-[11px] leading-relaxed px-3 py-2 rounded focus:outline-none focus:border-ark-cyan/60 placeholder-ark-cyan/20 font-mono resize-y"
+      />
+    </div>
+  )
+}

@@ -48,20 +48,35 @@ impl LogReader {
     /// Parse ARK server log line
     /// Format: [YYYY.MM.DD-HH:MM:SS:UUU][CHANNEL][LEVEL] Message
     fn parse_log_line(line: &str) -> Option<LogEntry> {
-        // Example: [2026.06.11-14.30.45.123][000]LogOnline: Warning: OnlineSub: Something happened
+        // Example: [2026.06.11-14.30.45.123][000]LogOnline: Warning: Something happened
         let parts: Vec<&str> = line.split(']').collect();
-        if parts.len() < 4 {
+        if parts.len() < 3 {
             return None;
         }
 
         let timestamp = parts[0].trim_start_matches('[').to_string();
         let _channel = parts[1].trim_start_matches('[').to_string();
 
-        // Extract level and message from the rest
         let rest = parts[2..].join("]");
-        let (level, message) = if let Some(colon_pos) = rest.find(':') {
-            let (lev, msg) = rest.split_at(colon_pos);
-            (lev.trim().to_string(), msg.trim_start_matches(':').trim().to_string())
+        
+        let (level, message) = if let Some(first_colon) = rest.find(':') {
+            let channel_part = rest[..first_colon].trim();
+            let remainder = rest[first_colon + 1..].trim();
+            
+            if let Some(second_colon) = remainder.find(':') {
+                let level_part = remainder[..second_colon].trim();
+                let msg_part = remainder[second_colon + 1..].trim();
+                
+                // Check if the level_part matches any standard log level
+                let known_levels = ["warning", "error", "info", "display", "fatal", "success", "log", "verbose"];
+                if known_levels.contains(&level_part.to_lowercase().as_str()) {
+                    (level_part.to_string(), msg_part.to_string())
+                } else {
+                    (channel_part.to_string(), remainder.to_string())
+                }
+            } else {
+                (channel_part.to_string(), remainder.to_string())
+            }
         } else {
             ("INFO".to_string(), rest.trim().to_string())
         };
