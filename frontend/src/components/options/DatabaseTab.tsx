@@ -31,6 +31,10 @@ export default function DatabaseTab() {
   const [status, setStatus] = useState<'idle' | 'ok' | 'fail'>('idle')
   const [error, setError] = useState('')
   const [validating, setValidating] = useState(false)
+  const [deploying, setDeploying] = useState(false)
+  const [deployStatus, setDeployStatus] = useState<'idle' | 'ok' | 'fail'>('idle')
+  const [deployError, setDeployError] = useState('')
+  const [deployLog, setDeployLog] = useState('')
 
   useEffect(() => {
     invoke<DbBackendView[]>('list_database_backends')
@@ -58,6 +62,28 @@ export default function DatabaseTab() {
       setError(String(e))
     } finally {
       setValidating(false)
+    }
+  }
+
+  const handleConvexDeploy = async () => {
+    setDeploying(true)
+    setDeployStatus('idle')
+    setDeployError('')
+    setDeployLog('')
+    try {
+      const out = await invoke<string>('convex_deploy', {
+        deploymentUrl: cfg.url,
+        deployKey: cfg.api_key,
+      })
+      setDeployStatus('ok')
+      setDeployLog(out)
+    } catch (e: unknown) {
+      setDeployStatus('fail')
+      const errText = String(e)
+      setDeployError(errText)
+      setDeployLog(errText)
+    } finally {
+      setDeploying(false)
     }
   }
 
@@ -140,6 +166,38 @@ export default function DatabaseTab() {
           <li>{tk('db_note_4', 'MongoDB uses Atlas Data API — drop the raw connection string, use the API base URL.')}</li>
         </ul>
       </Section>
+
+      {cfg.backend === 'convex' && (
+        <Section title={tk('convex_one_click_title', 'Convex One-Click Deploy')}>
+          <div className="space-y-4">
+            <p className="text-ark-cyan/40 text-[10px] leading-relaxed">
+              {tk('convex_one_click_desc',
+                'Push the schema and database functions directly to your Convex deployment. Make sure you entered your Convex URL and Deploy Key above, then click DEPLOY.')}
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={handleConvexDeploy}
+                disabled={deploying || !cfg.url || !cfg.api_key}
+                className="ark-action-btn px-4 py-2 text-xs tracking-widest disabled:opacity-40"
+                style={{ borderColor: 'rgba(0, 200, 255, 0.4)' }}
+              >
+                {deploying ? tk('deploying', 'Deploying…') : tk('btn_deploy', 'DEPLOY TO CONVEX')}
+              </button>
+              {deployStatus === 'ok' && (
+                <span className="text-emerald-400 text-xs tracking-widest">{tk('deploy_success', 'Deployed successfully')}</span>
+              )}
+              {deployStatus === 'fail' && (
+                <span className="text-red-400 text-xs">⚠ {deployError}</span>
+              )}
+            </div>
+            {deployLog && (
+              <pre className="text-[10px] bg-black/40 text-ark-cyan/60 p-3 rounded font-mono max-h-40 overflow-y-auto whitespace-pre-wrap leading-tight border border-ark-cyan/5">
+                {deployLog}
+              </pre>
+            )}
+          </div>
+        </Section>
+      )}
     </>
   )
 }

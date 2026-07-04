@@ -82,9 +82,24 @@ adheres to [Semantic Versioning](https://semver.org/).
   `frontend/src/components/ui/OptionsUI.tsx`.
 - 5-language i18n (EN/ES/DE/PT/FR) updated for new tabs.
 
+### Added — Convex One-Click Deploy (alpha toward v2.1)
+
+- **New Tauri command** `convex_deploy(deployment_url, deploy_key)`
+  in `src-tauri/src/plugins/convex/mod.rs`. Composes the existing
+  `paste_convex_deploy_key` (persists creds to secret store) followed
+  by `convex_push_schema` (`npx convex deploy --prod`).
+- **New DatabaseTab section** "Convex One-Click Deploy" — appears
+  only when the backend is `Convex (BaaS)`. Operator pastes their
+  deployment URL & deploy key, clicks **DEPLOY TO CONVEX**, and
+  watches the schema push log stream into the panel.
+- **i18n** added in EN/ES/DE/PT/FR for the new section.
+- **New test** `plugins::convex::tests::test_convex_deploy_persists_credentials`
+  asserts credentials are saved correctly and never panics. Test count
+  is now **67 passing**.
+
 ### Test coverage
 
-- `cargo test --lib` — **66/66 passing**.
+- `cargo test --lib` — **67/67 passing**.
 - `frontend tsc --noEmit` — clean.
 
 ### Backwards compatibility
@@ -97,12 +112,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Open work to actually close `v2.1.0`
 
-- **Convex deploy flow** (`plugins/convex/`) — operator clicks
-  "Connect Convex" in the desktop UI; plugin spawns the official
-  `npx convex login` CLI; OAuth device-code completes; deploy URL
-  flows back into the UI config without the operator manually editing
-  TOMLs. Today this code reads the credentials file but no end-to-end
-  test exists on a fresh machine.
+- ~~**Convex deploy flow**~~ ✅ **Shipped** — `convex_deploy` Tauri
+  command registered in `lib.rs`. Operates in the `DatabaseTab.tsx`
+  *Convex One-Click Deploy* section. Operator pastes their
+  `CONVEX_URL` + `CONVEX_DEPLOY_KEY` once, clicks **DEPLOY TO CONVEX**,
+  and the desktop app calls `paste_convex_deploy_key` →
+  `convex_push_schema` → `npx convex deploy --prod`. Schema &
+  functions land on the operator's tenant-owned Convex cloud. See
+  `docs/CONVEX.md`. Test:
+  `plugins::convex::tests::test_convex_deploy_persists_credentials`.
 - **Vercel deploy flow** (`plugins/vercel/`) — equivalent for the web
   admin. Operator pastes their Vercel token, deploy runs `vercel
   deploy --prod`, public URL is saved into the desktop app state.

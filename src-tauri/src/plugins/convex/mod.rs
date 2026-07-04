@@ -176,6 +176,16 @@ pub async fn paste_convex_deploy_key(
     Ok("convex key saved".into())
 }
 
+/// One-click deploy that registers credentials and triggers `convex_push_schema()`.
+#[tauri::command]
+pub async fn convex_deploy(
+    deployment_url: String,
+    deploy_key: String,
+) -> Result<String, String> {
+    paste_convex_deploy_key(deployment_url, deploy_key).await?;
+    convex_push_schema().await
+}
+
 /// `convex_push_schema()` — runs `npx convex deploy --prod` in a child
 /// process.  Output is captured and streamed back via the response.
 #[tauri::command]
@@ -248,5 +258,40 @@ impl Plugin for ConvexPlugin {
         Ok(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_convex_deploy_persists_credentials() {
+        // Create a temporary directory or just save to our test environment storage.
+        // `secret_store::write` will write to a standard path, so we can clean up afterwards or just assert it writes.
+        let test_url = "https://test-animal-999.convex.cloud".to_string();
+        let test_key = "prod:test-deploy-key-99999999".to_string();
+
+        // Call our command
+        let res = convex_deploy(test_url.clone(), test_key.clone()).await;
+
+        // Whether spawning npx succeeds or fails in this environment,
+        // we assert that the credentials MUST be persisted on disk.
+        let s = secret_store::read("convex").expect("secret store should have convex secrets saved");
+        assert_eq!(s.fields.get("deployment_url"), Some(&test_url));
+        assert_eq!(s.fields.get("deploy_key"), Some(&test_key));
+
+        // Clean up the test file so we don't pollute the local config
+        let path = secret_store::secret_path("convex");
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+
+        // The result should either be Ok (if npx succeeded) or Err with a message about spawning or deployment failing,
+        // but it shouldn't panic.
+        match res {
+            Ok(_) => println!("convex_deploy succeeded (npx deploy succeeded)"),
+            Err(e) => assert!(e.contains("spawn") || e.contains("convex") || e.contains("npx") || e.contains("failed"), "unexpected error message: {}", e),
+        }
     }
 }

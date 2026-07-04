@@ -1723,6 +1723,7 @@ pub fn run() {
             // Plugin auth flows (v2.1) — Convex uses CLI bridge, not OAuth
             crate::plugins::convex::begin_convex_link,
             crate::plugins::convex::paste_convex_deploy_key,
+            crate::plugins::convex::convex_deploy,
             crate::plugins::convex::convex_status,
             crate::plugins::convex::convex_push_schema,
             // Vercel: also CLI-bridge (uses VERCEL_TOKEN env var)

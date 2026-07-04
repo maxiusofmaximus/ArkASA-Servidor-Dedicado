@@ -398,6 +398,11 @@ const en: Translations = {
   'db_note_2':              'Supabase & InsForge both expose RLS-friendly PostgREST; reuse the same URL for the Web Admin.',
   'db_note_3':              'Postgres backend accepts libpq or PostgREST URLs.',
   'db_note_4':              'MongoDB uses Atlas Data API — drop the raw connection string, use the API base URL.',
+  'convex_one_click_title': 'Convex One-Click Deploy',
+  'convex_one_click_desc':  'Push the schema and database functions directly to your Convex deployment. Make sure you entered your Convex URL and Deploy Key above, then click DEPLOY.',
+  'deploying':              'Deploying…',
+  'btn_deploy':             'DEPLOY TO CONVEX',
+  'deploy_success':         'Deployed successfully',
 }
 
 // ─── Español ─────────────────────────────────────────────────────────────────
@@ -795,6 +800,11 @@ const es: Translations = {
   'db_note_2':              'Supabase e InsForge exponen PostgREST RLS-friendly; reusan la URL para el Web Admin.',
   'db_note_3':              'Postgres acepta libpq o PostgREST.',
   'db_note_4':              'MongoDB usa Atlas Data API — no pasar el connection string, sólo la URL base.',
+  'convex_one_click_title': 'Despliegue rápido Convex',
+  'convex_one_click_desc':  'Sube el esquema y funciones a Convex. Asegúrate de ingresar la URL y Deploy Key arriba, y haz clic en DESPLEGAR.',
+  'deploying':              'Desplegando…',
+  'btn_deploy':             'DESPLEGAR EN CONVEX',
+  'deploy_success':         'Desplegado con éxito',
 }
 
 // ─── Deutsch ─────────────────────────────────────────────────────────────────
@@ -896,6 +906,11 @@ const de: Translations = {
   'db_note_2':              'Supabase & InsForge bieten RLS-fähiges PostgREST; gib die URL im Web-Admin weiter.',
   'db_note_3':              'Postgres akzeptiert libpq oder PostgREST URLs.',
   'db_note_4':              'MongoDB nutzt die Atlas Data API — nicht den Connection-String, sondern nur die Basis-URL.',
+  'convex_one_click_title': 'Convex One-Click-Deploy',
+  'convex_one_click_desc':  'Schema und Datenbankfunktionen direkt auf Convex übertragen. Stell sicher, dass URL und Deploy Key oben eingetragen sind, dann auf BEREITSTELLEN klicken.',
+  'deploying':              'Bereitstellen…',
+  'btn_deploy':             'AUF CONVEX BEREITSTELLEN',
+  'deploy_success':         'Erfolgreich bereitgestellt',
 }
 
 // ─── Português ───────────────────────────────────────────────────────────────
@@ -948,6 +963,11 @@ const pt: Translations = {
   'db_note_2':              'Supabase e InsForge expõem PostgREST RLS-friendly; reuse a URL no Web Admin.',
   'db_note_3':              'Postgres aceita libpq ou PostgREST.',
   'db_note_4':              'MongoDB usa Atlas Data API — não passe o connection string, só a URL base.',
+  'convex_one_click_title': 'Implantação Convex um-clique',
+  'convex_one_click_desc':  'Envie o esquema e as funções do banco de dados diretamente para sua implantação Convex. Confira se preencheu URL e Deploy Key acima, depois clique em IMPLANTAR.',
+  'deploying':              'Implantando…',
+  'btn_deploy':             'IMPLANTAR NO CONVEX',
+  'deploy_success':         'Implantado com sucesso',
 }
 
 // ─── Français ────────────────────────────────────────────────────────────────
@@ -1000,6 +1020,11 @@ const fr: Translations = {
   'db_note_2':              'Supabase et InsForge exposent PostgREST RLS-friendly; réutilisez la même URL pour le Web Admin.',
   'db_note_3':              'Postgres accepte libpq ou PostgREST.',
   'db_note_4':              'MongoDB utilise Atlas Data API — passer l\'URL de base, pas la chaîne de connexion.',
+  'convex_one_click_title': 'Déploiement Convex en un clic',
+  'convex_one_click_desc':  'Envoyez le schéma et les fonctions de la base de données directement vers votre déploiement Convex. Vérifiez avoir saisi l\'URL et la clé de déploiement ci-dessus, puis cliquez sur DÉPLOYER.',
+  'deploying':              'Déploiement…',
+  'btn_deploy':             'DÉPLOYER SUR CONVEX',
+  'deploy_success':         'Déployé avec succès',
 }
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
