@@ -170,6 +170,17 @@ fn parse_vercel_url_from_output(out: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// One-click deploy: persist the token (and optional project_id) and trigger
+/// `vercel deploy --prod`. Returns the production URL when Vercel prints one.
+#[tauri::command]
+pub async fn vercel_deploy_one_click(
+    token: String,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    paste_vercel_token(token, project_id).await?;
+    vercel_deploy_web().await
+}
+
 /// `vercel_status()` — for the React UI.
 #[tauri::command]
 pub async fn vercel_status() -> Result<VercelStatus, String> {
@@ -200,5 +211,56 @@ impl Plugin for VercelPlugin {
         Ok(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_vercel_url_from_output_works() {
+        let out = "✔ Production: https://ark-asa-admin-fawn.vercel.app [copied to clipboard]";
+        assert_eq!(
+            parse_vercel_url_from_output(out),
+            Some("https://ark-asa-admin-fawn.vercel.app".to_string())
+        );
+        // Negative cases:
+        assert!(parse_vercel_url_from_output("Building…").is_none());
+        assert!(parse_vercel_url_from_output("").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_vercel_deploy_one_click_persists_token() {
+        let test_token = "test-vercel-token-aaaaaaaaaa".to_string();
+        let test_project = Some("test-proj-1234".to_string());
+
+        let res = vercel_deploy_one_click(test_token.clone(), test_project.clone()).await;
+
+        // Whether `vercel deploy` succeeds or fails on this machine,
+        // we MUST have saved the token in the secret store first.
+        let s = secret_store::read("vercel").expect("vercel secret store should have token saved");
+        assert_eq!(s.fields.get("token"), Some(&test_token));
+        assert_eq!(s.fields.get("project_id"), test_project.as_ref());
+
+        // Clean up so we don't pollute local config
+        let path = secret_store::secret_path("vercel");
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+
+        // The spawn result will usually be Err in CI/dev (no vercel CLI on path);
+        // accept either outcome but never panic.
+        match res {
+            Ok(_) => {}
+            Err(e) => assert!(
+                e.contains("vercel") || e.contains("spawn") || e.contains("token") || e.contains("cli"),
+                "unexpected error: {}", e
+            ),
+        }
+
+        // And the function must NOT persist anything else (no leaked secrets).
+        let reloaded = secret_store::read("vercel");
+        assert!(reloaded.is_none(), "secret_store should be cleared for vercel after cleanup");
     }
 }

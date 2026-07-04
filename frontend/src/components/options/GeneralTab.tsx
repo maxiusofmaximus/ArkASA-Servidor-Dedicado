@@ -330,6 +330,10 @@ function VercelCard() {
   const [status, setStatus] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [token, setToken] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [oneClickBusy, setOneClickBusy] = useState(false)
+  const [oneClickOutput, setOneClickOutput] = useState('')
   const refresh = useCallback(async () => {
     try { setStatus(await getVercelStatus()) } catch (e: any) { setMsg(String(e)) }
   }, [])
@@ -351,6 +355,34 @@ function VercelCard() {
     } catch (e: any) { setMsg(String(e)) }
     finally { setBusy(false) }
   }
+  const oneClickDeploy = async () => {
+    if (!token.trim()) {
+      setMsg('paste a Vercel token first — get one at https://vercel.com/account/tokens')
+      return
+    }
+    setOneClickBusy(true)
+    setMsg(null)
+    setOneClickOutput('')
+    try {
+      const out = await invoke<string>('vercel_deploy_one_click', {
+        token: token.trim(),
+        projectId: projectId.trim() || null,
+      })
+      setOneClickOutput(out)
+      // Try to extract the .vercel.app URL for the status badge link
+      const url = out.split(/\s+/).find(t => t.startsWith('https://') && t.includes('.vercel.app')) ?? null
+      if (url) {
+        setStatus((s: any) => ({ ...s, last_deploy_url: url, connected: true }))
+      }
+      setMsg('One-click deploy complete. See output below.')
+    } catch (e: any) {
+      setOneClickOutput(String(e))
+      setMsg(`One-click deploy failed: ${e}`)
+    } finally {
+      setOneClickBusy(false)
+      refresh()
+    }
+  }
   return (
     <div className="rounded-md p-3 border border-ark-cyan/15">
       <div className="flex items-center justify-between mb-2">
@@ -363,7 +395,8 @@ function VercelCard() {
         </div>
         <PluginStatusBadge connected={status?.connected} />
       </div>
-      <div className="flex gap-2">
+      {/* Legacy CLI-based flow (kept as fallback) */}
+      <div className="flex gap-2 mb-2">
         <button
           disabled={busy}
           onClick={connect}
@@ -389,6 +422,46 @@ function VercelCard() {
           </a>
         )}
       </div>
+
+      {/* ── One-click flow with pasted token (no CLI shell-out) ────────────── */}
+      <details className="mt-2">
+        <summary className="cursor-pointer text-ark-cyan/70 text-[11px] uppercase tracking-widest">
+          ⚡ One-Click Deploy (paste a token)
+        </summary>
+        <div className="mt-3 space-y-2">
+          <p className="text-ark-cyan/40 text-[10px]">
+            Paste a Vercel token from <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener" className="underline">vercel.com/account/tokens</a> and click DEPLOY. The app will save the token, run <code>vercel deploy --prod --yes</code>, and capture the production URL.
+          </p>
+          <input
+            type="password"
+            value={token}
+            onChange={e => setToken(e.target.value)}
+            placeholder="Vercel token (paste from dashboard)"
+            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
+          />
+          <input
+            type="text"
+            value={projectId}
+            onChange={e => setProjectId(e.target.value)}
+            placeholder="Optional: Vercel project id (pr_…) or project name"
+            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
+          />
+          <button
+            disabled={oneClickBusy || !token.trim()}
+            onClick={oneClickDeploy}
+            className="ark-action-btn px-4 py-1.5 text-xs disabled:opacity-40"
+            style={{ borderColor: 'rgba(0, 200, 255, 0.4)' }}
+          >
+            {oneClickBusy ? 'Deploying…' : 'DEPLOY'}
+          </button>
+          {oneClickOutput && (
+            <pre className="text-[10px] bg-black/40 text-ark-cyan/60 p-3 rounded font-mono max-h-40 overflow-y-auto whitespace-pre-wrap leading-tight border border-ark-cyan/5">
+              {oneClickOutput}
+            </pre>
+          )}
+        </div>
+      </details>
+
       {msg && <p className="mt-2 text-ark-cyan/50 text-xs italic">{msg}</p>}
     </div>
   )

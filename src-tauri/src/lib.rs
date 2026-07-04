@@ -1730,6 +1730,7 @@ pub fn run() {
             crate::plugins::vercel::begin_vercel_link,
             crate::plugins::vercel::paste_vercel_token,
             crate::plugins::vercel::vercel_deploy_web,
+            crate::plugins::vercel::vercel_deploy_one_click,
             crate::plugins::vercel::vercel_status,
             // CurseForge
             get_curseforge_api_key,

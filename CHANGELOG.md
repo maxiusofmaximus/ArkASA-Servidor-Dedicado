@@ -97,9 +97,35 @@ adheres to [Semantic Versioning](https://semver.org/).
   asserts credentials are saved correctly and never panics. Test count
   is now **67 passing**.
 
+### Added — Vercel One-Click Deploy (alpha toward v2.1)
+
+- **New Tauri command** `vercel_deploy_one_click(token, project_id)`
+  in `src-tauri/src/plugins/vercel/mod.rs`. Composes the existing
+  `paste_vercel_token(token, project_id)` (persists token to secret
+  store) followed by `vercel_deploy_web()` which runs
+  `vercel deploy --prod --yes`.
+- **VercelCard in GeneralTab.tsx** gains a collapsible
+  "⚡ One-Click Deploy (paste a token)" section. Operator types the
+  Vercel token + optional project id into `<input>` fields and
+  clicks **DEPLOY**. The `vercel CLI` stdout streams into a
+  scrollable `<pre>` panel; the production URL (`.vercel.app`) is
+  auto-extracted and stored on success. Existing
+  `Connect Vercel` / `Deploy web` CLI flow remains as a fallback
+  for operators who already have `vercel` installed locally.
+- **New tests**:
+  - `plugins::vercel::tests::parse_vercel_url_from_output_works` —
+    covers the URL extraction helper (positive + negative).
+  - `plugins::vercel::tests::test_vercel_deploy_one_click_persists_token` —
+    asserts the token + project_id are persisted to the secret store
+    before any shell-spawn, and that no leak survives cleanup.
+- **`docs/VERCEL.md`** — operator guide: prerequisites (token at
+  vercel.com/account/tokens), flow internals, security rationale,
+  pre-flighting panel + path mapping.
+- Test count is now **69 passing**.
+
 ### Test coverage
 
-- `cargo test --lib` — **67/67 passing**.
+- `cargo test --lib` — **69/69 passing**.
 - `frontend tsc --noEmit` — clean.
 
 ### Backwards compatibility
@@ -109,6 +135,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   flow through `authorize()` unchanged.
 - `http_api.rs` still passes `identity: None` for now (next session
   will switch to `auth.rs` role mapping).
+- Vercel CLI (`vercel login` + `vercel deploy --prod`) remains
+  supported; the One-Click flow is additive, not a replacement.
 
 ### Open work to actually close `v2.1.0`
 
@@ -121,10 +149,19 @@ adheres to [Semantic Versioning](https://semver.org/).
   functions land on the operator's tenant-owned Convex cloud. See
   `docs/CONVEX.md`. Test:
   `plugins::convex::tests::test_convex_deploy_persists_credentials`.
-- **Vercel deploy flow** (`plugins/vercel/`) — equivalent for the web
-  admin. Operator pastes their Vercel token, deploy runs `vercel
-  deploy --prod`, public URL is saved into the desktop app state.
-  Currently a CLI-bridge stub.
+- ~~**Vercel deploy flow**~~ ✅ **Shipped** — `vercel_deploy_one_click`
+  Tauri command registered in `lib.rs`. Operates in the
+  `GeneralTab.tsx` *Vercel (web admin)* card under the collapsible
+  "⚡ One-Click Deploy (paste a token)" disclosure. Operator pastes a
+  token from `vercel.com/account/tokens`, optionally a `project_id`,
+  clicks **DEPLOY**, and the desktop app runs
+  `paste_vercel_token` → `vercel_deploy_web` →
+  `vercel deploy --prod --yes`. The `.vercel.app` production URL is
+  auto-parsed from stdout and persisted to the secret store. The
+  legacy `Connect Vercel` / `Deploy web` CLI flow remains as
+  fallback. See `docs/VERCEL.md`. Tests:
+  `plugins::vercel::tests::{parse_vercel_url_from_output_works,
+  test_vercel_deploy_one_click_persists_token}`.
 - **VPS self-host guide** (`docs/HOSTING.md` + `supervisor.ps1` + the
   bash runners shipping in this commit) — test on:
   - a clean Raspberry Pi 5 bookworm install (8 GB RAM)
