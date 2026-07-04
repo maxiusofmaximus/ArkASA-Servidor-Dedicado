@@ -28,6 +28,7 @@ pub mod identity;
 pub mod local_provision;
 pub mod receipt_emit;
 pub mod slack;
+pub mod tailscale;
 pub mod telegram;
 
 pub use command_router::{CommandRouter, RouterError, RouterOutcome, RemoteCommandContext, Channel, Role};

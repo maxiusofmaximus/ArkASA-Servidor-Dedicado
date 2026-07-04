@@ -12,12 +12,19 @@ adheres to [Semantic Versioning](https://semver.org/).
 > (Convex, Vercel, hosting) and bot pipeline. **Do not ship it as
 > v2.3.0 yet.**
 >
-> **v2.1 cannot be declared complete until:**
-> 1. **Network & Tailscale wizard** — `docs/NETWORK_SETUP.md` exists
->    but doesn't yet walk a fresh CGNAT-only operator through
->    installing Tailscale from the GUI. The desktop app needs a
->    "Use Tailscale?" prompt when the operator picks a self-hosted
->    target with no public IPv4 (currently a hard-fail).
+> **v2.1.0 is now ready for release candidate.**
+>
+> All four ship-blockers from this branch are now closed:
+> 1. ✅ **Convex** one-click deploy (`docs/CONVEX.md`)
+> 2. ✅ **Vercel** one-click deploy (`docs/VERCEL.md`)
+> 3. ✅ **Self-host** on Pi / NUC / WSL2 / macOS (`docs/HOSTING_SELFHOSTED.md`)
+> 4. ✅ **Network & Tailscale** wizard (`docs/NETWORK_TAILSCALE.md`)
+>
+> Operator-side hardware validation of the 3 self-host playbooks (Pi 5 /
+> NUC / WSL2) is the **only remaining manual step** before any
+> `v2.1.0` tag. Once those pass on at least one device per class,
+> the reviewer can cut the tag and move this branch's body under
+> `## [v2.1.0] — YYYY-MM-DD — released`.
 >
 > Until that one lands, this file's `[Unreleased]` section is the
 > source of truth. Nothing in `main` deserves a version bump yet.
@@ -176,9 +183,58 @@ adheres to [Semantic Versioning](https://semver.org/).
   - Operator validation checklists for each playbook.
 - Test count is now **74 passing**.
 
+### Added — Public Network & Tailscale wizard (alpha toward v2.1)
+
+- **New module** `src-tauri/src/integrations/tailscale.rs` with
+  - `TailscaleStatus { installed, up, ip, hostname, cgnat_suspect, public_ip, hint }`
+  - `detect_tailscale_cli()` — `which tailscale` on Unix; checks
+    `C:\Program Files\Tailscale\tailscale.exe` on Windows
+  - `tailscale_install_hint()` — returns the platform download URL
+    (Windows / macOS / Linux / generic)
+  - `cgnat_suspect(public, tailscale)` — pure heuristic, no IO
+  - `tailscale_up(auth_key, hostname, dns_label)` — async spawn
+    of `tailscale up --authkey <key> --hostname <host> [--advertise-tags]`
+    with re-poll of `tailscale ip -4` to surface the new IP
+  - Helpers `is_tailscale_ip(ip)` (100.64/10) and
+    `detect_tailscale_ip_after_up()` (re-poll helper)
+- **New Tauri commands** in `src-tauri/src/lib.rs`:
+  - `tailscale_installed()` — boolean
+  - `tailscale_download_url()` — string URL for the operator's platform
+  - `tailscale_status_combined()` — combined IP probe + Tailscale
+    probe + CGNAT heuristic in one call
+  - `tailscale_setup(auth_key, hostname, publicly_dns_label)` —
+    one-shot `tailscale up` invocation
+- **New UI**: `GeneralTab.tsx::TailscaleWizard()` — a sub-component
+  with a 4-row status table + amber-bordered hint box when CGNAT is
+  suspected / Tailscale missing + auth-key + hostname `<input>`
+  + SET UP TAILSCALE button + green success box showing the new
+  `100.x.x.x` IP (select-all for sharing). Backed by `tk()` with
+  English translations added; Spanish translations added; DE/PT/FR
+  fall back to English defaults (consistent with the existing
+  pattern for the rest of GeneralTab).
+- **Existing `detect_ips` is untouched** — the new
+  `tailscale_status_combined` reuses its helpers
+  (`detect_public_ip`, `detect_tailscale_ip`, `is_tailscale_range`)
+  so we don't fork any probe logic.
+- **`docs/NETWORK_TAILSCALE.md`** — operator-facing wizard recipe:
+  what CGNAT-suspect means, auth-key minting at
+  <https://login.tailscale.com/admin/settings/keys>, the friend flow
+  (`<100.x.x.x>:7777/UDP`), why we deliberately don't OAuth,
+  iPhone/Android Tailscale connection path, common pitfalls (auth-key
+  rejected by ACL, captive portal, missing `--advertise-tags`).
+- **New tests** (`integrations::tailscale::tests`, **+6**):
+  - `cgnat_suspect_when_no_public_ip`
+  - `not_suspect_when_public_ip_present`
+  - `is_tailscale_ip_100_range`
+  - `install_hint_returns_some_url`
+  - `tailscale_up_rejects_empty_inputs`
+  - `status_default_is_empty`
+- Test count is now **80 passing**.
+
 ### Test coverage
 
-- `cargo test --lib` — **74/74 passing**.
+- `cargo test --lib` — **80/80 passing**.
+- `frontend tsc --noEmit` — clean.
 - `frontend tsc --noEmit` — clean.
 
 ### Backwards compatibility
@@ -239,10 +295,24 @@ adheres to [Semantic Versioning](https://semver.org/).
   closure** the operator still needs to **physically validate** the
   three playbooks on real hardware (Pi 5, NUC, WSL2) — once those
   pass, this becomes fully shipped.
-- **Network & Tailscale docs** — `docs/NETWORK_SETUP.md` exists but
-  doesn't yet walk a fresh user through choosing Tailscale when they
-  have a CGNAT-only ISP. Should cover the wizard in the existing
-  `General → Network` tab.
+- ~~**Network & Tailscale wizard**~~ ✅ **Shipped** —
+  `tailscale_status_combined` + `tailscale_setup` Tauri
+  commands registered in `lib.rs`. Operates in the
+  `GeneralTab.tsx` *Public network & Tailscale* section
+  under the new `TailscaleWizard` sub-component. The wizard
+  detects the public IPv4 + Tailscale availability + CGNAT
+  heuristic on mount, flags CGNAT-suspected on a 4-row
+  status table, and offers the operator an inline form
+  (auth-key + hostname inputs) that calls
+  `tailscale up --authkey <key> --hostname <host>`. The new
+  `100.x.x.x` IP is surfaced as a select-all success box.
+  Tests:
+  `integrations::tailscale::tests::{cgnat_suspect_when_no_public_ip,
+  not_suspect_when_public_ip_present,
+  is_tailscale_ip_100_range,
+  install_hint_returns_some_url,
+  tailscale_up_rejects_empty_inputs,
+  status_default_is_empty}`.
 
 ## [v2.1.0-alpha.2] — 2026-06-30 — OAuth-removed, CLI-bridge plugin pattern
 

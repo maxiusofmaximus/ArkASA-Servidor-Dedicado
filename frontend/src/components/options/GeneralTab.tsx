@@ -167,6 +167,11 @@ export default function GeneralTab() {
         </div>
       </Section>
 
+      {/* ── Public network & Tailscale (v2.1) ──────────────────────────── */}
+      <Section title={tk('section_tailscale', 'Public network & Tailscale')}>
+        <TailscaleWizard />
+      </Section>
+
       <Section title={tk('section_close_behavior', 'Close Behavior')}>
         <div className="flex items-center justify-between">
           <div>
@@ -474,10 +479,216 @@ function PluginStatusBadge({ connected }: { connected: boolean | undefined }) {
       style={{
         color:      connected ? 'rgba(74,222,128,0.9)' : 'rgba(239,68,68,0.9)',
         background: connected ? 'rgba(74,222,128,0.1)' : 'rgba(239,68,68,0.1)',
-        border:     connected ? '1px solid rgba(74,222,128,0.4)' : '1px solid rgba(239,68,68,0.4)',
+        border:     connected ? '1px solid rgba(74,222,128,0.4)' : 'rgba(239,68,68,0.4)',
       }}
     >
       {connected ? '● connected' : '○ not connected'}
     </span>
+  )
+}
+
+/**
+ * Tailscale wizard (v2.1, Network blocker #4) — surfaces the local
+ * public-IP detection + CGNAT heuristic. When CGNAT is *suspected*
+ * (no public IPv4 visible), the wizard offers a one-shot button to
+ * run `tailscale up` against an auth key the operator pastes from
+ * the Tailscale admin panel. The resulting `100.x.x.x` IP is
+ * surfaced so the operator can plug it into the Web Admin player
+ * connection entry.
+ */
+function TailscaleWizard() {
+  const { tk } = useI18n()
+  const [status, setStatus] = useState<{
+    installed: boolean
+    up: boolean
+    ip: string | null
+    hostname: string | null
+    cgnat_suspect: boolean
+    public_ip: string | null
+    hint: string
+  } | null>(null)
+  const [downloadUrl, setDownloadUrl] = useState('')
+  const [authKey, setAuthKey] = useState('')
+  const [hostname, setHostname] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const s = await invoke<any>('tailscale_status_combined')
+      setStatus(s)
+      const url = await invoke<string>('tailscale_download_url')
+      setDownloadUrl(url)
+    } catch (e: any) {
+      setMsg(String(e))
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const setup = async () => {
+    if (!authKey.trim()) {
+      setMsg(tk('tailscale_missing_auth_key',
+        'Paste an auth key — get one at https://login.tailscale.com/admin/settings/keys'))
+      return
+    }
+    if (!hostname.trim()) {
+      setMsg(tk('tailscale_missing_hostname',
+        'Pick a hostname (e.g. arkasa-pi5) — this is the MagicDNS name your friends will use.'))
+      return
+    }
+    setBusy(true)
+    setMsg(null)
+    try {
+      const out = await invoke<any>('tailscale_setup', {
+        authKey: authKey.trim(),
+        hostname: hostname.trim(),
+        publiclyDnsLabel: null,
+      })
+      setStatus(out)
+      setMsg(out.hint ?? '')
+    } catch (e: any) {
+      setMsg(String(e))
+    } finally {
+      setBusy(false)
+      refresh()
+    }
+  }
+
+  const installTailscale = async () => {
+    if (!downloadUrl) { await refresh(); return }
+    try { await openExternal(downloadUrl) } catch { /* ignore */ }
+  }
+
+  const cgnat  = status?.cgnat_suspect ?? false
+  const ip     = status?.ip ?? null
+  const pub    = status?.public_ip ?? null
+  const installed = status?.installed ?? false
+  const up    = status?.up ?? false
+
+  return (
+    <div className="rounded-md p-3 border border-ark-cyan/15 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-ark-cyan/85 font-semibold">{tk('tailscale_title', 'Public network & Tailscale')}</p>
+          <p className="text-ark-cyan/40 text-xs">
+            {tk('tailscale_intro',
+              'Detects if your ISP gives you a public IPv4 (port-forwarding works) or CGNAT-only (use Tailscale).')}
+          </p>
+        </div>
+        <PluginStatusBadge connected={up} />
+      </div>
+
+      {/* 1. Status table */}
+      <ul className="text-[11px] space-y-1 font-mono">
+        <li className="flex justify-between text-ark-cyan/70">
+          <span>Public IPv4</span>
+          <span className={pub ? 'text-emerald-400' : 'text-amber-400'}>
+            {pub ?? tk('tailscale_none', '(none)') }
+          </span>
+        </li>
+        <li className="flex justify-between text-ark-cyan/70">
+          <span>Tailscale CLI</span>
+          <span className={installed ? 'text-emerald-400' : 'text-amber-400'}>
+            {installed ? tk('tailscale_installed_yes', 'installed')
+                       : tk('tailscale_installed_no',  'not installed')}
+          </span>
+        </li>
+        <li className="flex justify-between text-ark-cyan/70">
+          <span>Tailscale IP</span>
+          <span className={ip ? 'text-emerald-400' : 'text-amber-400'}>
+            {ip ?? tk('tailscale_none', '(none)')}
+          </span>
+        </li>
+        <li className="flex justify-between text-ark-cyan/70">
+          <span>CGNAT</span>
+          <span className={cgnat ? 'text-amber-400' : 'text-emerald-400'}>
+            {cgnat ? tk('tailscale_cgnat_yes', 'suspected')
+                   : tk('tailscale_cgnat_no',  'no')}
+          </span>
+        </li>
+      </ul>
+
+      {/* 2. Hint box — when CGNAT or Tailscale missing */}
+      {(cgnat || !installed) && (
+        <div className="rounded border border-amber-400/30 bg-amber-400/5 p-2 text-[11px] space-y-1">
+          <p className="text-amber-300">{status?.hint ?? tk('tailscale_probing', 'Probing status…')}</p>
+          {!installed && downloadUrl && (
+            <button
+              onClick={installTailscale}
+              className="text-ark-cyan/80 underline text-[11px] tracking-widest"
+            >
+              ↓ {tk('tailscale_install_btn', 'INSTALL TAILSCALE')}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 3. Setup form (only when installed but not up) */}
+      {installed && !up && (
+        <div className="space-y-2">
+          <p className="text-ark-cyan/40 text-[10px]">
+            {tk('tailscale_setup_intro',
+              'Paste a one-off Auth Key and pick a Tailscale hostname. Click SET UP — the desktop app runs `tailscale up` via the official CLI.')}
+          </p>
+          <input
+            type="password"
+            value={authKey}
+            onChange={e => setAuthKey(e.target.value)}
+            placeholder="tskey-auth-…  (paste from Tailscale admin panel)"
+            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
+          />
+          <input
+            type="text"
+            value={hostname}
+            onChange={e => setHostname(e.target.value)}
+            placeholder="arkasa-pi5  (MagicDNS name)"
+            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
+          />
+          <button
+            disabled={busy}
+            onClick={setup}
+            className="ark-action-btn px-4 py-1.5 text-xs disabled:opacity-40"
+            style={{ borderColor: 'rgba(0, 200, 255, 0.4)' }}
+          >
+            {busy ? tk('tailscale_setting_up', 'Setting up…')
+                  : tk('tailscale_setup_btn',   'SET UP TAILSCALE')}
+          </button>
+        </div>
+      )}
+
+      {/* 4. When up: show the IP, ready to use */}
+      {up && ip && (
+        <div className="rounded border border-emerald-400/30 bg-emerald-400/5 p-2 text-[11px] text-emerald-300 space-y-1">
+          <p>{tk('tailscale_ready', '🟢 Tailscale is up. Share this IP with your friends:')}</p>
+          <code className="font-mono text-emerald-200 text-sm select-all">{ip}</code>
+          <p className="text-ark-cyan/45">
+            {tk('tailscale_ready_friend',
+              'Friends install Tailscale, you add them on your tailnet, they connect to <100.x.x.x> on UDP 7777.')}
+          </p>
+        </div>
+      )}
+
+      {/* 5. Manual refresh + last note */}
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={refresh}
+          className="text-ark-cyan/60 hover:text-ark-cyan text-[10px] tracking-widest uppercase"
+        >
+          ↻ {tk('btn_refresh', 'REFRESH')}
+        </button>
+        <button
+          onClick={() => openExternal('https://login.tailscale.com/admin/settings/keys')}
+          className="text-ark-cyan/60 hover:text-ark-cyan text-[10px] tracking-widest uppercase"
+        >
+          → {tk('tailscale_get_key', 'GET AUTH KEY')}
+        </button>
+      </div>
+      {msg && (
+        <p className="text-ark-cyan/55 text-[10px] mt-1 font-mono whitespace-pre-wrap leading-tight">
+          {msg}
+        </p>
+      )}
+    </div>
   )
 }

@@ -1110,6 +1110,74 @@ async fn detect_ips() -> DetectedIps {
     DetectedIps { public_ip, tailscale_ip, local_ip }
 }
 
+// ─── Tailscale wizard (v2.1, Network blocker #4) ──────────────────────
+
+/// Check whether the `tailscale` CLI binary is installed. The UI
+/// surfaces a hint (download URL) when `installed` is false.
+#[tauri::command]
+fn tailscale_installed() -> bool {
+    integrations::tailscale::detect_tailscale_cli()
+}
+
+/// Returns the Tailscale download URL for the operator's platform.
+#[tauri::command]
+fn tailscale_download_url() -> String {
+    integrations::tailscale::tailscale_install_hint().to_string()
+}
+
+/// Combined status panel: detects public IP + tailscale IP +
+/// decides if CGNAT is *suspected* based on the heuristic. Used
+/// by the React UI to decide whether to suggest the Tailscale
+/// wizard.
+#[tauri::command]
+async fn tailscale_status_combined() -> integrations::tailscale::TailscaleStatus {
+    let (public_ip, ts_ip) = tokio::join!(
+        detect_public_ip(),
+        detect_tailscale_ip(),
+    );
+    let installed = integrations::tailscale::detect_tailscale_cli();
+    let ts_has_ip = ts_ip.is_some();
+    let cgnat = integrations::tailscale::cgnat_suspect(&public_ip, &ts_ip);
+    integrations::tailscale::TailscaleStatus {
+        installed,
+        up:           installed && ts_has_ip,
+        ip:           ts_ip,
+        hostname:     None,
+        cgnat_suspect: cgnat,
+        public_ip,
+        hint: if installed {
+            if cgnat {
+                "CGNAT detected (no public IP). Consider setting up Tailscale.".into()
+            } else if ts_has_ip {
+                "Public IP reachable. Tailscale is up but you may not need it.".into()
+            } else {
+                "Public IP reachable. Tailscale installed but not up — pastes Auth Key to enable.".into()
+            }
+        } else {
+            format!(
+                "Tailscale not installed. Download from {} and rerun Setup.",
+                integrations::tailscale::tailscale_install_hint()
+            )
+        },
+    }
+}
+
+/// Run `tailscale up --authkey <key> --hostname <host>` against
+/// the official CLI. We persist nothing — secrets stay in the
+/// `secret_store` if the operator wants to refresh later.
+#[tauri::command]
+async fn tailscale_setup(
+    auth_key:          String,
+    hostname:          String,
+    publicly_dns_label: Option<String>,
+) -> Result<integrations::tailscale::TailscaleStatus, String> {
+    integrations::tailscale::tailscale_up(
+        &auth_key,
+        &hostname,
+        publicly_dns_label.as_deref(),
+    ).await
+}
+
 #[tauri::command]
 fn parse_config_from_toml(toml_str: String) -> Result<config::ServerConfig, String> {
     let mut config: config::ServerConfig = toml::from_str(&toml_str)
@@ -1804,6 +1872,11 @@ pub fn run() {
             // IP detection
             detect_ips,
             check_internet,
+            // Tailscale wizard (v2.1, Network blocker #4)
+            tailscale_installed,
+            tailscale_download_url,
+            tailscale_status_combined,
+            tailscale_setup,
             parse_config_from_toml,
             config_to_toml,
             parse_config_from_zip,
