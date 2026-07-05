@@ -449,6 +449,7 @@ pub mod connection;
 pub mod model;
 pub mod whatsapp_bridge;
 pub mod extra_bridges;
+pub mod runtime_hooks;
 
 /// Plugin registration — called once at startup, fills `PluginRegistry`.
 /// Built-in plugins (Convex, Vercel, WhatsApp) get registered here.

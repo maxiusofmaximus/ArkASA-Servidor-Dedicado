@@ -1838,6 +1838,9 @@ pub fn run() {
             crate::plugins::pluginhub::enable_plugin,
             crate::plugins::pluginhub::disable_plugin,
             crate::plugins::pluginhub::plugin_registry_snapshot,
+            // Plugin runtime hooks (Session 9) — surfaces what each
+            // plugin's start() should be doing right now.
+            crate::plugins::runtime_hooks::runtime_status,
             // WhatsApp (Session 7)
             crate::plugins::whatsapp_bridge::begin_whatsapp_link,
             crate::plugins::whatsapp_bridge::paste_whatsapp_credentials,
