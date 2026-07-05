@@ -302,6 +302,19 @@ impl AnyPlugin for vercel::VercelPlugin {
     }
 }
 
+#[async_trait::async_trait]
+impl AnyPlugin for crate::integrations::whatsapp::WhatsAppPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
+}
+
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {
@@ -382,11 +395,12 @@ pub mod registry;
 pub mod pluginhub;
 pub mod connection;
 pub mod model;
+pub mod whatsapp_bridge;
 
 /// Plugin registration — called once at startup, fills `PluginRegistry`.
-/// Built-in plugins (Convex, Vercel) get registered here. Operators
-/// enable/disable at runtime through the Plugin Hub UI without
-/// recompiling.
+/// Built-in plugins (Convex, Vercel, WhatsApp) get registered here.
+/// Operators enable/disable at runtime through the Plugin Hub UI
+/// without recompiling.
 pub fn register_default_plugins(reg: &mut PluginRegistry) {
     if !reg.catalog.iter().any(|e| e.id == convex::DESCRIPTOR.id) {
         let entry = PluginEntry {
@@ -401,6 +415,16 @@ pub fn register_default_plugins(reg: &mut PluginRegistry) {
             id:        vercel::DESCRIPTOR.id,
             descriptor: vercel::DESCRIPTOR,
             inner:     Box::new(vercel::VercelPlugin),
+        };
+        reg.register(entry);
+    }
+    // WhatsApp Business Cloud (Session 7) — webhook-based inbound.
+    if !reg.catalog.iter().any(|e| e.id == "whatsapp") {
+        use crate::integrations::whatsapp;
+        let entry = PluginEntry {
+            id:        "whatsapp",
+            descriptor: whatsapp::DESCRIPTOR,
+            inner:     Box::new(whatsapp::WhatsAppPlugin),
         };
         reg.register(entry);
     }

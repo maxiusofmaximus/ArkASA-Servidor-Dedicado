@@ -95,7 +95,7 @@ impl RemoteCommandContext {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CommandKind {
     Start,
     Stop,

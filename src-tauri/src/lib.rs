@@ -1838,6 +1838,10 @@ pub fn run() {
             crate::plugins::pluginhub::enable_plugin,
             crate::plugins::pluginhub::disable_plugin,
             crate::plugins::pluginhub::plugin_registry_snapshot,
+            // WhatsApp (Session 7)
+            crate::plugins::whatsapp_bridge::begin_whatsapp_link,
+            crate::plugins::whatsapp_bridge::paste_whatsapp_credentials,
+            crate::plugins::whatsapp_bridge::whatsapp_status,
             // Connection plugin catalog (Session 6 / P2) — declarative
             // metadata for the 7 VPS providers. Layered on top of the
             // existing `HostProvider` enum so the React-side contracts

@@ -30,6 +30,7 @@ pub mod receipt_emit;
 pub mod slack;
 pub mod tailscale;
 pub mod telegram;
+pub mod whatsapp;
 
 pub use command_router::{CommandRouter, RouterError, RouterOutcome, RemoteCommandContext, Channel, Role};
 pub use identity::{Identity, IdentityResolution, ChannelBinding, Platform, RuntimeClass, RejectionReason};
