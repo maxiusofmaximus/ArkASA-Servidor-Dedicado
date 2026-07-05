@@ -102,7 +102,18 @@ pub fn runtime_state_for(plugin_id: &str) -> PluginRuntimeState {
         "ssh" => {
             if has_required_fields("ssh", &["listen_port", "allowed_fingerprints"])
             {
-                PluginRuntimeState::Running
+                // Sidecar approach: confirm sshd is alive on the
+                // listen_port via TCP probe. If yes, surface as
+                // 'running'. If no, the operator hasn't started
+                // sshd yet — surface as 'pending_credentials' so the
+                // UI correctly reflects reality.
+                let cfg = crate::integrations::ssh::SshConfig::from_secrets_or_env();
+                let port: u16 = cfg.listen_port;
+                if sshd_sidecar_alive(port) {
+                    PluginRuntimeState::Running
+                } else {
+                    PluginRuntimeState::PendingCredentials
+                }
             } else {
                 PluginRuntimeState::PendingCredentials
             }
@@ -120,6 +131,22 @@ fn has_required_fields(plugin_id: &str, fields: &[&str]) -> bool {
     } else {
         false
     }
+}
+
+/// TCP-connect probe for sidecar sshd on :2222. Used by
+/// `runtime_state_for("ssh")` so the operator's sidecar
+/// approach surfaces a truthful 'running' state when the
+/// port is reachable. Non-blocking probe with a small
+/// timeout — fall back to 'pending_credentials' if no sshd
+/// found.
+fn sshd_sidecar_alive(listen_port: u16) -> bool {
+    if listen_port == 0 { return false; }
+    use std::net::TcpStream;
+    let addr = format!("127.0.0.1:{listen_port}");
+    TcpStream::connect_timeout(
+        &addr.parse().unwrap_or_else(|_| "127.0.0.1:22".parse().unwrap()),
+        std::time::Duration::from_millis(300),
+    ).is_ok()
 }
 
 /// Public helper: lookup the runtime state of *every* catalog
@@ -230,5 +257,19 @@ mod tests {
     fn plugin_runtime_state_derives_partial_eq() {
         assert_eq!(PluginRuntimeState::Disabled, PluginRuntimeState::Disabled);
         assert_ne!(PluginRuntimeState::Disabled, PluginRuntimeState::EventDriven);
+    }
+
+    #[test]
+    fn sshd_sidecar_alive_returns_false_for_zero_port() {
+        assert!(!sshd_sidecar_alive(0),
+            "port 0 should always be considered not-listening");
+    }
+
+    #[test]
+    fn sshd_sidecar_alive_returns_false_for_unbound_port() {
+        // Pick a port that's almost certainly not listening. We use
+        // 0 ourselves; runtime_state_for checks sshd_sidecar
+        // anyway — the helper must be safe in either case.
+        assert!(!sshd_sidecar_alive(65530));
     }
 }

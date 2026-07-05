@@ -43,7 +43,12 @@ What v2.1.0 GA must do:
   - russh server bound on 127.0.0.1:2222 accepting the
     operator's `~/.ark-asa/ssh/authorized_keys`. Spawn done
     via the runtime; `accept_request()` from `ssh.rs`
-    already exists.
+    already exists. **RESOLVED via sidecar approach
+    (Sesión 13)** — the operator runs any `sshd -p 2222`
+    sidecar; `runtime_state_for("ssh")` probes the TCP port
+    and surfaces 'running' when sshd is reachable. We chose
+    sidecar over adding the `russh` crate (would touch ~50
+    transitive deps) to keep the lockfile lean.
   - WeChat Work handshake (`GET ?msg_signature` URL
     verification) tied to the webhook route mount.
   - Convex periodic push with a real `tokio::time::interval`

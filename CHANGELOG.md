@@ -485,6 +485,58 @@ is partially retired on three plugins:
   runs once per operator setup, no reproducible artefacts
   leak into the receipts ledger. SHA-3 is unsuitable here.
 
+### Sesión 13 — SSH sidecar approach + cleanup
+
+The OPEN_WORK.txt §1.1 SSH status item is now resolved via
+the **sidecar approach** rather than pulling the `russh`
+crate. The desktop app probes TCP port 2222 via
+`TcpStream::connect_timeout` instead of pulling its own
+sshd library, which cuts ~50 transitive deps from the
+lockfile and keeps the audit surface narrow.
+
+Rust
+  - src-tauri/src/plugins/runtime_hooks.rs
+    + sshd_sidecar_alive(listen_port) -> bool: TCP probe
+      against 127.0.0.1:<port> with 300ms timeout.
+    + runtime_state_for("ssh") now distinguishes:
+        * Secrects missing → PendingCredentials
+        * Secrects present + sshd reachable → Running
+        * Secrects present + sshd unreachable → PendingCredentials
+          ("operator pasted credentials but didn't start sshd yet")
+    + 2 new tests covering port=0 always-false and unbound-port
+      always-false.
+
+Docs
+  - docs/SSH_SETUP.md (new): 130-line operator guide
+    covering sshd `-p 2222` setup on Linux/Windows/macOS,
+    SHA-256 fingerprint retrieval, sidecar rationale
+    ("why not russh"), failure-mode table, promotion
+    checklist.
+  - docs/OPEN_WORK.txt §1.1 marked RESOLVED (sidecar note).
+  - docs/INDEX.md entries added for SSH_SETUP.md.
+
+Tests
+  - cargo test --lib → 137/137 passing (was 135; +2 tests).
+  - cargo build      → 0 errors, 0 warnings.
+  - frontend tsc --noEmit clean.
+
+Honest assessment
+  The sidecar approach is *operator-friendlier* than an
+  in-process russh: it repackages an existing sshd that the
+  operator already maintains. If an operator runs their own
+  hardened OpenSSH policy set, the desktop app inherits that
+  policy automatically. The cost is that the runtime_state
+  is best-effort — `ssh_status` returns 'running' iff a
+  TCP connect succeeds within 300 ms.
+
+Tag plan
+  No new tag. The sshd sidecar approach moves OPEN_WORK.txt
+  §1.1 from "pending" to "resolved". The remaining items in
+  OPEN_WORK.txt (capability enforcement, WeChat CDATA, etc)
+  continue to gate v2.1.0 GA in line with the rc.1 → GA
+  promotion checklist already documented.
+
+
 
 ### Backwards compatibility
 

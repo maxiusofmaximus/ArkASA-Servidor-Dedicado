@@ -20,6 +20,7 @@
 | [`FAQ.md`](./FAQ.md) | Frequently asked questions |  |
 | [`ARCHITECTURE_AUDIT.md`](./ARCHITECTURE_AUDIT.md) | Honest gap analysis vs OpenClaw/Hermes/Mastra | 230 |
 | [`OPEN_WORK.txt`](./OPEN_WORK.txt) | Open work to `v2.1.0` GA + `v2.1.1`/`v2.2.0` roadmap | 230 |
+| [`SSH_SETUP.md`](./SSH_SETUP.md) | Sidecar sshd setup for the SSH inbound dispatcher | 130 |
 
 ## Plugin-level docs (in code)
 
