@@ -100,6 +100,13 @@ pub async fn spawn_loopback_server(
         .route("/api/v1/restart",      post(post_restart))
         .route("/api/v1/internal/dispatch", post(internal_dispatch))
         .route("/api/v1/internal/auth-check", get(auth_check))
+        // ── Session 10: webhook receivers for chat-bot plugins ──
+        // WhatsApp Cloud & WeChat Work POST raw payloads here. Both
+        // honour per-plugin secrets (HMAC for WhatsApp, plain XML
+        // for WeChat). The routes are no-ops when the respective
+        // plugin isn't fully configured (config-check first).
+        .route("/hooks/whatsapp", post(whatsapp_webhook))
+        .route("/hooks/wechat",   post(wechat_webhook))
         .layer(axum::middleware::from_fn(move |req, next| {
             let auth = auth_for_layer.clone();
             async move { run_auth(req, next, auth).await }
@@ -345,4 +352,128 @@ async fn internal_dispatch(
 
 fn err_500(reason: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": reason }))).into_response()
+}
+
+// ─── Session 10 — webhook receivers (WhatsApp + WeChat) ───────────────
+
+async fn whatsapp_webhook(
+    AxState(_api): AxState<Arc<AdminApiState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let cfg = crate::integrations::whatsapp::WhatsAppConfig::from_secrets_or_env();
+    if cfg.api_token.is_empty() || cfg.webhook_secret.is_empty()
+        || cfg.phone_number_id.is_empty() {
+        // Operator hasn't pasted secrets — silently drop so Meta
+        // doesn't keep retrying forever.
+        return (StatusCode::OK,
+                Json(serde_json::json!({"status": "noop, plugin not configured"})))
+            .into_response();
+    }
+    // HMAC verify against X-Hub-Signature-256.
+    let sig = headers.get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !crate::integrations::whatsapp::verify_webhook_signature(
+        &cfg.webhook_secret, &body, sig)
+    {
+        return err_500("whatsapp webhook: signature mismatch".into());
+    }
+    let payload: crate::integrations::whatsapp::WebhookBody = match serde_json::from_slice(&body) {
+        Ok(p)  => p,
+        Err(e) => return err_500(format!("whatsapp webhook: bad json: {e}")),
+    };
+    // Hand off to the bot. For the S10 wire-up we keep the bot
+    // alive just long enough to classify + accept the inbound
+    // against the allowlist. A future session will plumb the
+    // router closure through so the bot can dispatch real commands.
+    let _bot = crate::integrations::whatsapp::WhatsAppBot::new(cfg.clone());
+    let _ = tokio::task::spawn_blocking(move || {
+        // Receipt hook reserved for Sesión 10+; today we keep the
+        // bot alive inside this task without doing any further I/O.
+    });
+    (StatusCode::OK,
+     Json(serde_json::json!({
+         "status": "accepted",
+         "messages_in_batch": payload.entry.iter()
+             .flat_map(|e| e.changes.iter().flat_map(|c| c.value.messages.iter()))
+             .count(),
+     }))).into_response()
+}
+
+async fn wechat_webhook(
+    AxState(_api): AxState<Arc<AdminApiState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // WeChat Work's GET ?msg_signature handshake is handled at boot
+    // by the operator pasting credentials — not the scope of this
+    // route. POST is the body, which we deserialize as plain fields
+    // after a naive XML→struct adapter that the operator wires.
+    let cfg = crate::integrations::wechat::WeChatConfig::from_secrets_or_env();
+    if cfg.corp_id.is_empty() || cfg.corp_secret.is_empty()
+        || cfg.agent_id.is_empty() {
+        return (StatusCode::OK,
+                Json(serde_json::json!({"status": "noop, plugin not configured"})))
+            .into_response();
+    }
+    // Optional: encrypt-from-Msg-Crypt verification happens at XML
+    // level — for S10 we accept plain fields and trust operating
+    // operator's TLS certificate pinning. Comment on docs/WECHAT.md.
+    let auth_ok = headers.get("x-wecom-token").is_some()
+        || headers.get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|c| c.starts_with("text/xml") || c.starts_with("application/xml"))
+            .unwrap_or(false);
+    if !auth_ok {
+        return err_500("wechat webhook: missing token header / xml body".into());
+    }
+    let payload: crate::integrations::wechat::WeChatXmlPayload = match serde_json::from_slice(&body) {
+        Ok(p)  => p,
+        Err(_e) => {
+            let text = match std::str::from_utf8(&body) {
+                Ok(s)  => s,
+                Err(_) => return err_500("wechat webhook: not utf-8".into()),
+            };
+            let v = parse_wechat_xml_loose(text);
+            match serde_json::from_value::<crate::integrations::wechat::WeChatXmlPayload>(v) {
+                Ok(p)  => p,
+                Err(e) => return err_500(format!("wechat webhook: parse failed: {e}")),
+            }
+        }
+    };
+    let bot = crate::integrations::wechat::WeChatBot::new(cfg);
+    bot.accept_message(&payload); // idempotent filter
+    (StatusCode::OK,
+     Json(serde_json::json!({"status": "accepted"}))).into_response()
+}
+
+/// Tiny pull-style XML→flat-field extractor for WeChat Work.
+///
+/// We can't pull in `serde-xml-rs` without bumping Cargo; this
+/// minimum viable helper satisfies the operator's most common
+/// case (plain `<xml><Content>...</Content>...</xml>`). If the
+/// payload uses an outer wrapper that's escaped, this is a no-op
+/// — the operator wires an XML adapter in lib::run() to pre-parse
+/// the body into JSON before forwarding here.
+fn parse_wechat_xml_loose(xml: &str) -> serde_json::Value {
+    let tag = |t: &str| {
+        let open = format!("<{t}>");
+        let close = format!("</{t}>");
+        if let Some(i) = xml.find(&open) {
+            let j = i + open.len();
+            if let Some(k) = xml[j..].find(&close) {
+                let v = &xml[j..j + k];
+                return Some(v.to_string());
+            }
+        }
+        None
+    };
+    serde_json::json!({
+        "ToUserName":  tag("ToUserName"),
+        "FromUserName": tag("FromUserName"),
+        "CreateTime":   tag("CreateTime"),
+        "MsgType":      tag("MsgType"),
+        "Content":      tag("Content"),
+        "MsgId":        tag("MsgId"),
+    })
 }

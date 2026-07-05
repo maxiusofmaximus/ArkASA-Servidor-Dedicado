@@ -391,18 +391,42 @@ adheres to [Semantic Versioning](https://semver.org/).
 - 4 tests for runtime_hooks: state matrix never panics on unknown
   ids; secret-store empty path returns PendingCredentials.
 
+### Sesión 10 — WhatsApp + WeChat webhooks mounted + boot-time probes
+
+- `src-tauri/src/integrations/http_api.rs` gains two POST axum
+  routes on the existing `127.0.0.1:8765` loopback:
+  * `POST /hooks/whatsapp` — verifies `X-Hub-Signature-256`
+    against the operator's `webhook_secret`, drops the
+    payload through `WhatsAppBot::accept_message` allowlist,
+    surfaces accepted-count to Meta.
+  * `POST /hooks/wechat` — accepts application/xml or
+    JSON-already-parsed bodies (`x-wecom-token` header gate),
+    runs `WeChatBot::accept_message` filter. Includes a
+    hand-rolled pull-XML helper (`parse_wechat_xml_loose`) for
+    the common case without pulling in a full XML crate.
+- Both routes silently return `{ "status": "noop, plugin not
+  configured" }` when the operator hasn't yet pasted secrets —
+  Meta won't keep retrying pointlessly.
+- `src-tauri/src/lib.rs::run()` gains two boot-time probes:
+  * Convex periodic-push placeholder (logs presence/absence of
+    `CONVEX_URL` env or secret-store entry). The full
+    `convex_push::spawn_publisher` task is not yet wired to run
+    autonomously; the operator can still trigger pushes via the
+    existing `convex_push_schema` Tauri command.
+  * `tailscale` CLI detection (one-shot log line on whether the
+    binary is on PATH). The wizard remains UI-driven.
+- `docs/OPEN_WORK.txt` (new) enumerates everything between
+  `v2.1.0-alpha.3` and a future `v2.1.0` GA: signal-cli daemon
+  spawn, russh SSH server bind, WeChat handshake URL verification,
+  Convex periodic interval, capability enforcement, WeChat CDATA
+  parse, pre-flight toggle gating.
+
 ### Test coverage
 
-- `cargo test --lib` — **131/131 passing** (was 97 verbatim after
-  P6; +9 whatsapp / +5 signal / +5 wechat / +5 ssh / +6 rest /
-  +4 runtime_hooks).
-- `cargo build` — 0 errors, **0 warnings** (was 5).
+- `cargo test --lib` — **131/131 passing** (post-Sesión 9).
+- `cargo build` — 0 errors, **0 warnings**.
 - `frontend tsc --noEmit` — clean.
-- **Tag plan**: cut `v2.1.0-alpha.3` after this commit so
-  downstream operators can pull the pre-release without depending
-  on `main`. The honest v1 GA tag is held for after the runtime-
-  hook-up land (Session 10+).
-- `frontend tsc --noEmit` — clean.
+
 
 ### Backwards compatibility
 

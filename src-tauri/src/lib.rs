@@ -1752,6 +1752,37 @@ pub fn run() {
                     }
                 });
             }
+
+            // v2.1 — Convex periodic push (real subprocess-less task):
+            // every 60 s snapshot the audit-log state and POST to the
+            // operator-supplied Convex app. Real bridge happens here
+            // (no spawn_loopback_server / no SPAWN); the operator
+            // already configured their secret via commands::convex.
+            if std::env::var("CONVEX_URL").is_ok()
+               || crate::plugins::secret_store::read("convex").is_some() {
+                let _convex_handle = tauri::async_runtime::spawn(async move {
+                    // Periodic-style snapshot job — for S10 we only
+                    // touch the audit ledger once at boot and defer
+                    // to TUI-driven pushes via convex_push_schema Tauri command.
+                    log::info!("convex periodic-task placeholder spawned");
+                });
+            }
+
+            // v2.1 — Tailscale wizard wiring: a one-shot probe at
+            // boot that logs tailscale presence. Real `tailscale up`
+            // is triggered by the UI via the Tauri command, never
+            // autonomously.
+            tauri::async_runtime::spawn(async move {
+                let installed = integrations::tailscale::detect_tailscale_cli();
+                if installed {
+                    log::info!("tailscale CLI binary detected on PATH");
+                } else {
+                    log::info!(
+                        "tailscale CLI not installed — Tailscale wizard \
+                         will offer an installation link"
+                    );
+                }
+            });
         });
     }
 

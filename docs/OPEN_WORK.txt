@@ -1,0 +1,129 @@
+# Open work after v2.1.0-α.3
+
+This document tracks the items that did NOT get closed by the
+`v2.1.0-alpha.3` tag at commit `4a5536f`. They are tagged by
+severity and ordered roughly by independence (the lower items
+block on the higher ones).
+
+Operator-facing: nothing here is broken on α.3. These items make
+α.3 → v2.1.0 (GA) closer.
+
+## Roadmap to v2.1.0 GA
+
+### 1. runtime hooks — full spawn (high priority)
+
+The 8 chat-bot + 2 server-dispatcher plugins currently return
+parked futures from `start()`. They only become "actually
+running" when their daemon / webhook route / russh server is
+spawned by `lib::run()`.
+
+What α.3 does today:
+  - **TelegramBot / DiscordBot / SlackBot** — already
+    wired: `lib::run()` calls `spawn_looper(...)`. Real WebSocket
+    or long-poll loops. ✅ (S1-α.2 era)
+
+  - **Convex / Vercel** — event-driven; the UI triggers them via
+    Tauri commands. ✅
+
+  - **WhatsApp / WeChat / Signal / SSH / REST** — partial.
+    WhatsApp + WeChat have **axum webhook routes mounted** at
+    `/hooks/whatsapp` and `/hooks/wechat` on the existing
+    127.0.0.1:8765 loopback (S10). The other three return
+    parked futures; the operator must wire `signal-cli daemon
+    --json`, russh, and the SSH sidecar by hand.
+
+  - **Tailscale wizard** — Tauri command fires when the UI
+    clicks SET UP (no autonomous loop). Audio-level probe at
+    boot logs presence or absence of `tailscale` binary.
+
+What v2.1.0 GA must do:
+  - `signal-cli daemon --json` subprocess manager with stdout
+    line → `SignalBot::accept_envelope` per line (and a
+    graceful shutdown via SIGTERM).
+  - russh server bound on 127.0.0.1:2222 accepting the
+    operator's `~/.ark-asa/ssh/authorized_keys`. Spawn done
+    via the runtime; `accept_request()` from `ssh.rs`
+    already exists.
+  - WeChat Work handshake (`GET ?msg_signature` URL
+    verification) tied to the webhook route mount.
+  - Convex periodic push with a real `tokio::time::interval`
+    that snapshots state and POSTs to `/api/internal/
+    servers/upsert`. `convex_push::spawn_publisher` exists;
+    `lib::run()` does not call it yet.
+
+### 2. Plugin capability enforcement (medium)
+
+The `PluginCapability` enum declared on every plugin is **just
+metadata**. There's no gateway in `command_router` that rejects
+a `send_message` call from a plugin that only declared
+`MessagesRecv`. The `architecture_audit.md` flagged this as
+high-risk for v2.1.1+.
+
+Implementation: a `PluginGateway` wrapper that the runtime mount
+inserts between the inbound adapter and `command_router::dispatch`.
+Tests first; then mount.
+
+### 3. Slack per-user rate limit (low)
+
+Today's `SlackBot`/`TelegramBot` rate-limits per chat id. A
+malicious admin spamming from one chat still hits the dispatcher
+unrestricted. v2.1.1+ adds `messages_per_user` with a sliding
+window.
+
+### 4. WeChat XML body parse fallback (low)
+
+`http_api::wechat_webhook` has a hand-rolled pull-XML helper
+that handles `<ToUserName>...</ToUserName>` flat structs.
+Lex the WeChat test suite adds cases for CDATA-wrapped
+content (common for emoji). v2.1.1+.
+
+### 5. Pre-flight UI for InstallerPlugin (low)
+
+The PluginsTab in `frontend/src/components/options/PluginsTab.tsx`
+shows the catalog + AMBER pill for missing secrets. v2.1.1+
+should grey-out the toggle for plugins the operator can't run
+(installed + credentials present gate), instead of letting
+the user-toggle fail at runtime.
+
+## Roadmap to v2.1.1 / v2.2.0
+
+Captured in `docs/ARCHITECTURE_AUDIT.md` §6:
+
+* **P1**: `PluginGateway` capability enforcement.
+* **P2**: OpenTelemetry / Gelf telemetry exporter.
+* **P3**: `provider_schema.toml` for self-host / Pi 5 install
+  flow.
+* **P4**: per-user rate limiter.
+* **P5**: WASM runtime for 3rd-party plugins (months of work).
+* **P6**: Apple Silicon notarization pipeline.
+
+None of these are required for v2.1.0 GA but each one becomes
+mandatory the hour a second operator adopts the desktop app.
+
+## Roadmap beyond v2.2.0
+
+* `crates.io` publishing for the OSS crates (ARK ASA Config is
+  current standalone).
+* Mac/Linux code signing pipeline.
+* Plugin marketplace web page (`pulse` README-based catalog
+  with link to `docs/PLUGIN_CATALOG.md`).
+* Native systemd unit (Pi/Linux) installation story.
+
+## Status of gate-to-marketing
+
+α.3 is intentionally **not** marketed. We cut α.3:
+
+  1. so downstream operators will pull a known-good pre-release
+     and have something to nail down their deployment plans around;
+  2. so we can tag release notes against an actual commit for
+     anybody filing issue reports.
+
+GA v2.1.0 is cut when:
+  - runtime hooks (item 1) all wire up as real subprocesses or
+    axum routes;
+  - the operator can complete an end-to-end wire-up on a fresh
+    Pi 5 in <=10 minutes (acceptance check from
+    `docs/HOSTING_SELFHOSTED.md` Playbook 1).
+
+No GA date is announced until both conditions are observed by
+the operator in production.
