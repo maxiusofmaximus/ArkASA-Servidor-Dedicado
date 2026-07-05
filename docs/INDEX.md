@@ -1,342 +1,73 @@
----
-layout: default
-title: ARK ASA Configuration Manager - Documentación Completa
-description: Guías completas explicadas para cualquiera, sin importar el nivel técnico
----
-
-# 📚 Documentación Completa - ARK ASA Configuration Manager
-
-> **Una guía exhaustiva explicada para cualquiera, sin importar el nivel técnico**
-
----
-
-## 🎯 Elige tu punto de partida
-
-### 🚀 **Acabo de descargar, ¿por dónde empiezo?**
-
-→ **[GETTING_STARTED.md](GETTING_STARTED.md)**
-
-- Instalación paso a paso
-- Configuración básica inicial
-- Arrancar el servidor por primera vez
-- Conectarse localmente
-- Invitar amigos
-
-**Tiempo:** 30 minutos de lectura + 1-2 horas de setup
-
----
-
-### 🎮 **Quiero conectar a amigos desde internet**
-
-→ **[STEAM_A2S.md](STEAM_A2S.md)**
-
-- Cómo obtener tu IP pública
-- Configurar port forwarding en el router
-- Abrir firewall de Windows
-- Usar Tailscale como alternativa fácil
-- Verificar que funciona
-
-**Tiempo:** 20 minutos de lectura + 30 min configuración
-
----
-
-### 🌐 **Quiero configurar la red desde cero (o en otro PC/router)**
-
-→ **[NETWORK_SETUP.md](NETWORK_SETUP.md)**
-
-- Qué puertos necesita ARK ASA y cuáles NUNCA exponer (RCON)
-- IP local fija: reserva DHCP o IP estática en Windows
-- Port forwarding paso a paso (genérico + Movistar Colombia MITRASTAR)
-- Firewall de Windows con reglas seguras por puerto
-- DDNS con DuckDNS (hostname fijo cuando cambia la IP pública)
-- Diagnóstico de CG-NAT y alternativas
-- Checklist de verificación completo
-
-**Ideal para:** reinstalar desde cero, mover el servidor a otro PC, o vender/ceder el setup a alguien más.
-
-**Tiempo:** 30 minutos de lectura + 1 hora de configuración
-
----
-
-### 🔧 **Algo no funciona, necesito ayuda**
-
-→ **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
-
-- Problema: La app no abre
-- Problema: El servidor no arranca
-- Problema: Amigos no pueden conectar
-- Problema: Timeout / conexión rechazada
-- Problema: El servidor va lentísimo
-- ...y 10+ problemas más
-
-**Busca tu síntoma, encontrarás la solución.**
-
----
-
-### ❓ **Tengo una pregunta rápida**
-
-→ **[FAQ.md](FAQ.md)**
-
-- ¿Qué requisitos necesito?
-- ¿Cuántos jugadores puedo tener?
-- ¿Cuántos mods puedo agregar?
-- ¿Cómo hago backup?
-- ...y 50+ preguntas más
-
----
-
-### 📖 **Quiero dominar TODAS las opciones**
-
-→ **[USER_GUIDE.md](USER_GUIDE.md)**
-
-- Explicación detallada de cada pestaña
-- Qué hace cada ajuste
-- Valores recomendados
-- Ejemplos prácticos
-- Flujo completo de creación de servidor
-
-**Tiempo:** 1-2 horas de lectura (referencia)
-
----
-
-## 📋 Mapa del Contenido
-
-```
-📚 DOCUMENTACIÓN
-├── 🚀 GETTING_STARTED.md
-│   ├─ Requisitos
-│   ├─ Instalación
-│   ├─ Configuración básica
-│   ├─ Arrancar servidor
-│   ├─ Conectarse localmente
-│   ├─ Invitar amigos
-│   ├─ Glosario simple
-│   └─ Troubleshooting rápido
-│
-├── 🔗 STEAM_A2S.md
-│   ├─ Conexión local (WiFi)
-│   ├─ Conexión remota (IP pública)
-│   ├─ Port Forwarding paso a paso
-│   ├─ Firewall de Windows
-│   ├─ Diagnóstico de conectividad
-│   ├─ Tailscale (alternativa fácil)
-│   ├─ Troubleshooting de conexión
-│   └─ Obelisco y cluster
-│
-├── 🌐 NETWORK_SETUP.md
-│   ├─ Puertos de ARK ASA (7777/7778/27015/27020)
-│   ├─ IP local fija (DHCP o estática en Windows)
-│   ├─ Port forwarding genérico + Movistar MITRASTAR
-│   ├─ Firewall de Windows (reglas seguras por puerto)
-│   ├─ DDNS con DuckDNS
-│   ├─ Seguridad RCON
-│   ├─ CG-NAT diagnóstico y alternativas
-│   ├─ Checklist de verificación
-│   ├─ Apéndice A: Movistar Colombia (quirks del API)
-│   └─ Apéndice B: Scripts de utilidad
-│
-├── 🔧 TROUBLESHOOTING.md
-│   ├─ La app no abre
-│   ├─ El servidor no arranca
-│   ├─ Amigos no pueden entrar
-│   ├─ Timeout / conexión rechazada
-│   ├─ Servidor lento
-│   ├─ Error al guardar
-│   ├─ Mods no cargan
-│   ├─ Servidor crashea
-│   ├─ No puedo cambiar mapa
-│   ├─ Logs vacíos
-│   └─ Tabla de referencia rápida
-│
-├── ❓ FAQ.md
-│   ├─ Instalación y requisitos
-│   ├─ Funcionalidad general
-│   ├─ Múltiples servidores
-│   ├─ Límites de jugadores y mods
-│   ├─ Networking y Port Forwarding
-│   ├─ CG-NAT y seguridad
-│   ├─ Performance
-│   ├─ Backups
-│   ├─ Mods
-│   ├─ Problemas comunes
-│   ├─ Uso avanzado
-│   ├─ Soporte
-│   └─ Glosario de términos
-│
-└── 📖 USER_GUIDE.md
-    ├─ Interfaz general
-    ├─ Pestaña ARKS (identidad, mapa, puertos)
-    ├─ Pestaña MOD SETTINGS (gestión de mods)
-    ├─ Pestaña GAME RULES (dinosaurios, jugadores, dificultad)
-    ├─ Pestaña ADVANCED (PvE/PvP, estadísticas)
-    ├─ Pestaña ENGRAMS (tecnologías)
-    ├─ Options Modal (settings globales, backup)
-    ├─ Server Logs Panel (monitoreo)
-    ├─ Comandos de administrador
-    ├─ Keyboard Shortcuts
-    ├─ Flujo completo de configuración
-    └─ Pro Tips
-```
-
----
-
-## 🎓 Flujo de aprendizaje recomendado
-
-### Para principiantes completos
-
-1. Leer **GETTING_STARTED.md** (la guía principal)
-2. Instalar siguiendo los pasos
-3. Configurar básicamente
-4. Si algo falla, buscar en **TROUBLESHOOTING.md**
-
-**Objetivo:** Tener servidor corriendo localmente en ~2 horas
-
----
-
-### Para invitar amigos desde internet
-
-1. Leer **STEAM_A2S.md** (sección "Conectar desde AFUERA")
-2. Configurar router y firewall
-3. Probar con herramientas (Port Checker)
-4. Dar IP y puerto a amigos
-
-**Objetivo:** Amigos conectados remotamente en ~1 hora
-
----
-
-### Para usuarios avanzados
-
-1. Leer **USER_GUIDE.md** (entender cada opción)
-2. Explorar **ADVANCED** tab
-3. Agregar mods desde **MOD SETTINGS**
-4. Configurar cluster (múltiples mapas)
-5. Usar RCON para administración
-
-**Objetivo:** Servidor profesional con múltiples mapas y mods
-
----
-
-## 🔍 Búsqueda rápida por problema
-
-| Síntoma | Documento | Sección |
-|---------|-----------|---------|
-| ¿Qué necesito para empezar? | GETTING_STARTED | Requisitos previos |
-| ¿Cómo instalo? | GETTING_STARTED | Descargar e instalar |
-| ¿Cómo arranco el servidor? | GETTING_STARTED | Iniciar el servidor |
-| ¿Cómo se conecta alguien? | STEAM_A2S | Caso 1: WiFi local / Caso 2: Internet |
-| La app no abre | TROUBLESHOOTING | La app no abre |
-| El servidor no arranca | TROUBLESHOOTING | El servidor no arranca |
-| Amigos no pueden conectar | TROUBLESHOOTING / STEAM_A2S | Secciones de conectividad |
-| Configurar router / port forwarding | NETWORK_SETUP | Port forwarding + Checklist |
-| Router Movistar Colombia | NETWORK_SETUP | Apéndice A |
-| IP local cambia al reiniciar router | NETWORK_SETUP | IP local fija |
-| DDNS / hostname fijo | NETWORK_SETUP | DDNS con DuckDNS |
-| Lag, servidor lento | TROUBLESHOOTING | El servidor va lento |
-| ¿Cuántos jugadores? | FAQ | ¿Cuál es el límite de jugadores? |
-| ¿Qué mods puedo usar? | FAQ | ¿Qué mods puedo usar? |
-| ¿Cómo agrego un mod? | FAQ / USER_GUIDE | Mods y MOD SETTINGS |
-| Backup automático | USER_GUIDE | OPTIONS Modal → Backup |
-| Comandos admin | USER_GUIDE | Comandos de administrador |
-| Cambiar dificultad | USER_GUIDE | GAME RULES tab |
-| Múltiples mapas (cluster) | FAQ / USER_GUIDE | Cluster Mode |
-
----
-
-## 📊 Tiempo estimado
-
-| Actividad | Tiempo |
-|-----------|--------|
-| Leer GETTING_STARTED | 30 min |
-| Instalar app | 5 min |
-| Descargar servidor (SteamCMD) | 1-2 horas |
-| Configuración inicial | 15 min |
-| Primer arranque | 5 min |
-| Invitar amigos (local) | 5 min |
-| Port forwarding (remoto) | 30 min |
-| Leer USER_GUIDE completo | 2 horas |
-
-**Total para servidor básico:** ~2-3 horas
-**Total para servidor remoto con amigos:** ~4-5 horas
-
----
-
-## 💡 Pro Tips
-
-- Comienza simple (sin mods, 1 mapa)
-- Agrega complejidad gradualmente
-- Haz backup ANTES de cambios grandes
-- Revisa logs regularmente
-- Reinicia el servidor diariamente (automático)
-
----
-
-## 🆘 Nivel de dificultad por tópico
-
-| Tópico | Dificultad | Documento |
-|--------|-----------|-----------|
-| Instalación | ⭐ Muy fácil | GETTING_STARTED |
-| Configuración básica | ⭐ Muy fácil | GETTING_STARTED |
-| Conectarse localmente | ⭐ Muy fácil | GETTING_STARTED |
-| Invitar amigos (remoto) | ⭐⭐ Fácil | STEAM_A2S |
-| Agregar mods | ⭐⭐ Fácil | FAQ |
-| Cambiar configuración | ⭐⭐ Fácil | USER_GUIDE |
-| Troubleshooting | ⭐⭐⭐ Medio | TROUBLESHOOTING |
-| Port forwarding | ⭐⭐⭐ Medio | STEAM_A2S / NETWORK_SETUP |
-| Cluster (multi-mapa) | ⭐⭐⭐⭐ Avanzado | USER_GUIDE |
-| RCON / Administración | ⭐⭐⭐⭐ Avanzado | USER_GUIDE |
-| Optimización | ⭐⭐⭐⭐⭐ Muy avanzado | TROUBLESHOOTING |
-
----
-
-## 🔗 Enlaces rápidos
-
-### Descarga
-- **Latest Release:** https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/releases
-
-### Reportar problemas
-- **GitHub Issues:** https://github.com/maxiusofmaximus/ArkASA-Servidor-Dedicado/issues
-
-### Recursos externos
-- **CurseForge Mods:** https://www.curseforge.com/ark-survival-ascended/mods
-- **ARK Wiki:** https://ark.wiki.gg/
-- **ARK Console Commands:** https://ark.wiki.gg/wiki/Console_Commands
-- **Tailscale:** https://tailscale.com/
-
----
-
-## 📝 Notas de versión
-
-Esta documentación corresponde a:
-- **Aplicación:** ARK ASA Configuration Manager v2.0+
-- **Plataforma:** Windows 10/11
-- **Última actualización:** 2026-06-25
-
-### Novedades v2.0
-
-- **Multi-instance server management** — Inicia/detén mapas individuales desde el ActionBar
-- **Form Editor** — Edición estructurada de claves por sección (sin texto crudo)
-- **Undo/Redo** — Ctrl+Z / Ctrl+Y con historial de cambios
-- **On-demand server** — Modo sleep/wake para mapas individuales
-
----
-
-## 🙋 ¿Aún necesitas ayuda?
-
-1. **Busca aquí primero:** FAQ.md
-2. **No encontraste:** TROUBLESHOOTING.md
-3. **Aún no:** GitHub Issues
-4. **Emergencia:** Pregunta en comunidad (Discord/Reddit)
-
----
-
-## 📄 Licencia
-
-Toda esta documentación está bajo licencia MIT (libre para usar, modificar, compartir).
-
----
-
-**¡Felicitaciones por decidirte a alojar tu propio servidor ARK! 🎮**
-
-Esta documentación está diseñada para que cualquiera, sin importar su experiencia técnica, pueda tener un servidor funcionando y listo para jugar con amigos.
-
-**¡A disfrutar!**
+# ARK ASA Documentation Index
+
+> Operator-facing docs you can read top-to-bottom in 30 minutes.
+> All paths are relative to `docs/`. Docs are committed to the
+> main branch; no external dependencies.
+
+## Quick links
+
+| Page | When to read | Lines |
+|---|---|---|
+| [`CONVEX.md`](./CONVEX.md) | Setting up Convex one-click deploy | 130 |
+| [`VERCEL.md`](./VERCEL.md) | Setting up Vercel one-click deploy | 130 |
+| [`HOSTING_SELFHOSTED.md`](./HOSTING_SELFHOSTED.md) | Running ARK on Pi 5 / NUC / WSL2 / macOS | 270 |
+| [`NETWORK_TAILSCALE.md`](./NETWORK_TAILSCALE.md) | CGNAT recovery & Tailscale wizard | 130 |
+| [`HOSTING.md`](./HOSTING.md) | 7 provider CLI runners for cloud VPS | 200 |
+| [`NETWORK_SETUP.md`](./NETWORK_SETUP.md) | Router port-forwarding & DDNS | 245 |
+| [`GETTING_STARTED.md`](./GETTING_STARTED.md) | First-run guide for the basic operator |  |
+| [`USER_GUIDE.md`](./USER_GUIDE.md) | In-app navigation reference |  |
+| [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) | 5 common operator errors |  |
+| [`FAQ.md`](./FAQ.md) | Frequently asked questions |  |
+| [`ARCHITECTURE_AUDIT.md`](./ARCHITECTURE_AUDIT.md) | Honest gap analysis vs OpenClaw/Hermes/Mastra | 230 |
+| [`OPEN_WORK.txt`](./OPEN_WORK.txt) | Open work to `v2.1.0` GA + `v2.1.1`/`v2.2.0` roadmap | 230 |
+
+## Plugin-level docs (in code)
+
+| Plugin | Where it lives | Status | Doc |
+|---|---|---|---|
+| **Convex** | `src-tauri/src/plugins/convex/mod.rs` | One-click deploy ✅ | [CONVEX.md](./CONVEX.md) |
+| **Vercel** | `src-tauri/src/plugins/vercel/mod.rs` | One-click deploy ✅ | [VERCEL.md](./VERCEL.md) |
+| **Telegram** | `src-tauri/src/integrations/telegram.rs` | Real WS long-poll ✅ | this |
+| **Discord** | `src-tauri/src/integrations/discord.rs` | Real WS Gateway v10 ✅ | this |
+| **Slack** | `src-tauri/src/integrations/slack.rs` | Real Socket Mode ✅ | this |
+| **WhatsApp** | `src-tauri/src/integrations/whatsapp.rs` | webhook mount (S10) ✅ | this |
+| **Signal** | `src-tauri/src/integrations/signal.rs` | `runtime_status` parked; signal-cli spawn (post-α.3) | [`OPEN_WORK.txt`](./OPEN_WORK.txt) |
+| **WeChat** | `src-tauri/src/integrations/wechat.rs` | webhook mount (S10) ✅ | this |
+| **SSH** | `src-tauri/src/integrations/ssh.rs` | `runtime_status` parked; russh spawn (post-α.3) | [`OPEN_WORK.txt`](./OPEN_WORK.txt) |
+| **REST** | `src-tauri/src/integrations/rest.rs` | routed through `http_api` (event-driven) ✅ | this |
+| **Tailscale** | `src-tauri/src/integrations/tailscale.rs` | wizard wired to Tauri command ✅ | [`NETWORK_TAILSCALE.md`](./NETWORK_TAILSCALE.md) |
+| **Self-host (Pi/NUC/WSL2)** | `src-tauri/src/integrations/local_provision.rs` | 7 hardware classes ✅ | [`HOSTING_SELFHOSTED.md`](./HOSTING_SELFHOSTED.md) |
+
+## Connection / model plugins (catalogs added in S6 P2/P3)
+
+| Catalog | Where | Classes |
+|---|---|---|
+| **VPS providers** | `src-tauri/src/plugins/connection.rs` | Oracle/Hetzner/DO/Self-hosted/AWS/Azure/GCP |
+| **AI model plugins** | `src-tauri/src/plugins/model.rs` | OpenAI/Cerebras/NVIDIA NIM/llama.cpp/olllama/vLLM/LM Studio/Custom |
+
+## Status legend
+
+| Mark | Meaning |
+|---|---|
+| ✅ | Code + tests + honest-truth surfaces (debug-time logs / `runtime_status()`) |
+| 🟡 | Listed in `runtime_status()` but real subprocess not yet spawned by `lib::run()` |
+
+## Version timeline
+
+| Tag | Commit | Title |
+|---|---|---|
+| `v2.0.0` | `<v2.0.0>` | Original release |
+| `v2.1.0-alpha` | `<v2.1.0-alpha>` | First alpha (Sesiones 1-5) |
+| `v2.1.0-alpha.2` | `<v2.1.0-alpha.2>` | Sesiones 1-5 (clean tag cut) |
+| `v2.1.0-alpha.3` | `4a5536f` | Pre-release with 8 bots + 2 dispatchers |
+| `v2.1.0` | — | GA. Pending until runtime hooks real + operator acceptance test passes |
+
+## Where to start if you're new
+
+1. Read [`GETTING_STARTED.md`](./GETTING_STARTED.md) (~5 min).
+2. Decide: cloud VPS (use [`HOSTING.md`](./HOSTING.md)) or local hardware (use [`HOSTING_SELFHOSTED.md`](./HOSTING_SELFHOSTED.md)).
+3. For CGNAT, read [`NETWORK_TAILSCALE.md`](./NETWORK_TAILSCALE.md).
+4. For chat-bot ops, peek at `src-tauri/src/integrations/{telegram,discord,slack}.rs`.
+5. For architecture decisions, see [`ARCHITECTURE_AUDIT.md`](./ARCHITECTURE_AUDIT.md).
+
+If something looks wrong or missing, the operator-side interactive is: `cargo test --lib` (should report `131/131 passing`) and `cargo build` (should emit 0 warnings).
