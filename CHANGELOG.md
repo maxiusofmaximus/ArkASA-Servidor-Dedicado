@@ -231,9 +231,101 @@ adheres to [Semantic Versioning](https://semver.org/).
   - `status_default_is_empty`
 - Test count is now **80 passing**.
 
+### Sesión 6 / P5 — Deuda técnica pre-tag
+
+- `cargo build` ahora compila con **0 warnings** (was 5 pre-existentes).
+- `src-tauri/src/auth/mod.rs`: new `validate_with_claims()` returns full
+  identity claims; existing `validate()` is now a thin wrapper. The
+  previously-unused `claims` field is now read by the new method.
+- `src-tauri/src/integrations/http_api.rs`: admin endpoint now binds a
+  real 7-axis `Identity` derived from validated claims (was
+  `identity: None`). Receipts ledger can correlate admin ingress to the
+  operator who proved bearer / JWT.
+- `src-tauri/src/integrations/slack.rs`: `handle_inbound` takes new
+  `envelope_id` param threaded through from the Socket-Mode WS frame,
+  instead of a `trace_id` placeholder. `queue_enqueued` now emits the
+  real envelope id.
+- `src-tauri/src/integrations/discord.rs`, `telegram.rs`,
+  `http_commands.rs`: clean up the remaining dead-code warnings
+  (`resume_url` removed / `User.id` marked allow-dead / `map_index` marked
+  allow-dead + stub handlers log `{body:?}`).
+- Sesión 6 prelude closes P5 (deuda) before expanding product surface.
+
+### Sesión 6 / P1 — Plugin Hub core (dyn add/remove)
+
+- `src-tauri/src/plugins/mod.rs`: `PluginRegistry` rewritten from
+  hardcoded `Option<ConvexPlugin>` / `Option<VercelPlugin>` to
+  `Vec<PluginEntry>` + `BTreeSet<String> enabled`. New trait `AnyPlugin`
+  (object-safe adapter over the existing associated-function `Plugin`
+  trait) so heterogeneous plugin types can sit in the same catalog.
+  Methods: `register()`, `enable()`, `disable()`, `enable_id_no_start()`,
+  `catalog_iter()`, `enabled_ids()`.
+- `src-tauri/src/plugins/registry.rs` (new): registry.toml persistence
+  under `~/.ark-asa/plugins/registry.toml`. Functions `read()`,
+  `write()`, `enable_id()`, `disable_id()`. 2 tests.
+- `src-tauri/src/plugins/pluginhub.rs` (new): 4 Tauri commands —
+  `list_plugin_catalog`, `enable_plugin`, `disable_plugin`,
+  `plugin_registry_snapshot`. Shared `OnceLock<Mutex<PluginRegistry>>`
+  for state. 3 tests.
+
+### Sesión 6 / P2 — Connection plugins catalog
+
+- `src-tauri/src/plugins/connection.rs` (new): 7 VPS providers as a
+  discoverable catalog (`Oracle Always-Free`, `Hetzner`, `DigitalOcean`,
+  `Self-hosted`, `AWS EC2`, `Azure VM`, `GCP Compute`) with
+  `description`, `free_tier`, `requires_cli`, `requires_credentials`,
+  `docs_url`. 6 tests.
+- 2 Tauri commands: `list_connection_plugins`, `get_connection_plugin`.
+- 100% backwards compatible — existing `HostProvider` enum and the
+  `provision_script` / `render_provider_run_script` paths are
+  untouched.
+
+### Sesión 6 / P3 — AI model plugins (8 adapters)
+
+- `src-tauri/src/plugins/model.rs` (new): 8 OpenAI-API-compatible
+  adapters as a discoverable catalog: OpenAI, Cerebras, NVIDIA NIM,
+  llama.cpp, Ollama, vLLM, LM Studio, Custom. Each entry pins
+  `defaultBaseUrl`, `defaultModel`, `requires_api_key`, `is_local`,
+  `install_hint`, `docs_url`. 6 tests.
+- 2 Tauri commands: `list_model_plugins`, `get_model_plugin`.
+- Cero cambios al runtime AI — `integrations::ai::AiClient` ya habla
+  OpenAI Chat Completions con cualquier endpoint.
+
+### Sesión 6 / P4 — UI Plugin Hub tab
+
+- `frontend/src/components/options/PluginsTab.tsx` (new): three
+  sections in one tab — Plugin Hub (toggleable Convex/Vercel with
+  missing-secrets amber pills), Connection Providers (declarative
+  metadata list), AI Model Plugins (8 adapters with LOCAL/API KEY
+  pills). Toggle is `enable_plugin` / `disable_plugin` Tauri calls —
+  operator changes apply without restarting the app.
+- `frontend/src/components/OptionsModal.tsx`: new `plugins` Tab.
+- `frontend/src/i18n/translations.ts`: 12 new i18n keys (EN full,
+  ES full, DE/PT/FR partial with English default fallback).
+
+### Sesión 6 / P6 — Architecture audit
+
+- `docs/ARCHITECTURE_AUDIT.md` (new): honest gap analysis vs
+  OpenClaw / Hermes Agent / Agent Harness Core / Mastra / OpenSAGE /
+  Bullwork. Identifies:
+  * 0 critical risks today.
+  * 3 high-risk gaps for v2.1.1+ (capability enforcement, slack
+    parser mismatch, telegram per-user message limit).
+  * 3 medium risks (CGNAT false positives, plugin-abort lifecycle,
+    WSL2 portproxy firewall interactions).
+  * 3 low risks (AI prompt injection, hardcoded Tailscale
+    --advertise-tags, Apple Silicon notarization latency).
+  * 6-item roadmap (P1: PluginGateway, P2: OTLP, P3: provider-schema
+    TOML, P4: per-user rate-limit, P5: WASM runtime, P6: macOS
+    notarization CI).
+  Recommend: v2.1.0 can ship as RC today; v2.1.1+ takes the open
+  gaps. Conclusión: **sin urgencia de feature-parity con OpenClaw**
+
 ### Test coverage
 
-- `cargo test --lib` — **80/80 passing**.
+- `cargo test --lib` — **97/97 passing** (was 80; +17 for P1-P6: 3
+  pluginhub, 2 registry, 6 connection, 6 model).
+- `cargo build` — 0 errors, **0 warnings** (was 5).
 - `frontend tsc --noEmit` — clean.
 - `frontend tsc --noEmit` — clean.
 
