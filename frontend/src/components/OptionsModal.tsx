@@ -10,6 +10,7 @@ import BackupTab from './options/BackupTab'
 import ConfigTab from './options/ConfigTab'
 import HostingTab from './options/HostingTab'
 import DatabaseTab from './options/DatabaseTab'
+import PluginsTab from './options/PluginsTab'
 import type { ServerConfig } from '../types'
 
 interface OptionsModalProps {
@@ -23,7 +24,7 @@ interface OptionsModalProps {
   isSaving?: boolean
 }
 
-type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'actions'
+type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'plugins' | 'actions'
 
 export default function OptionsModal({
   onClose,
@@ -75,7 +76,7 @@ export default function OptionsModal({
     e.target.value = ''
   }
 
-  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'actions']
+  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'plugins', 'actions']
 
   return (
     <div
@@ -109,11 +110,12 @@ export default function OptionsModal({
               }}
             >
               {t === 'general' ? tk('tab_general', 'General')
-               : t === 'backup' ? tk('tab_backup', 'Backup')
-               : t === 'config' ? tk('tab_config_ini', 'Config INI')
-               : t === 'hosting' ? tk('tab_hosting', 'Hosting')
-               : t === 'database' ? tk('tab_database', 'Database')
-               : tk('tab_actions', 'Actions')}
+                : t === 'backup' ? tk('tab_backup', 'Backup')
+                : t === 'config' ? tk('tab_config_ini', 'Config INI')
+                : t === 'hosting' ? tk('tab_hosting', 'Hosting')
+                : t === 'database' ? tk('tab_database', 'Database')
+                : t === 'plugins' ? tk('tab_plugins', 'Plugins')
+                : tk('tab_actions', 'Actions')}
             </button>
           ))}
         </div>
@@ -132,6 +134,7 @@ export default function OptionsModal({
           )}
           {tab === 'hosting' && <HostingTab />}
           {tab === 'database' && <DatabaseTab />}
+          {tab === 'plugins' && <PluginsTab />}
           {tab === 'actions' && (
             <div className="space-y-3">
               {onReset && (
