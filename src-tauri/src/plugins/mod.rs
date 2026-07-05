@@ -315,6 +315,58 @@ impl AnyPlugin for crate::integrations::whatsapp::WhatsAppPlugin {
     }
 }
 
+#[async_trait::async_trait]
+impl AnyPlugin for crate::integrations::signal::SignalPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
+}
+
+#[async_trait::async_trait]
+impl AnyPlugin for crate::integrations::wechat::WeChatPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
+}
+
+#[async_trait::async_trait]
+impl AnyPlugin for crate::integrations::ssh::SshPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
+}
+
+#[async_trait::async_trait]
+impl AnyPlugin for crate::integrations::rest::RestPlugin {
+    fn id(&self) -> &'static str { <Self as Plugin>::id() }
+    fn descriptor(&self) -> PluginDescriptor {
+        descriptor_clone(&<Self as Plugin>::descriptor())
+    }
+    async fn start(&self, ctx: PluginContext)
+        -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+    {
+        <Self as Plugin>::start(ctx).await
+    }
+}
+
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {
@@ -396,6 +448,7 @@ pub mod pluginhub;
 pub mod connection;
 pub mod model;
 pub mod whatsapp_bridge;
+pub mod extra_bridges;
 
 /// Plugin registration — called once at startup, fills `PluginRegistry`.
 /// Built-in plugins (Convex, Vercel, WhatsApp) get registered here.
@@ -420,11 +473,46 @@ pub fn register_default_plugins(reg: &mut PluginRegistry) {
     }
     // WhatsApp Business Cloud (Session 7) — webhook-based inbound.
     if !reg.catalog.iter().any(|e| e.id == "whatsapp") {
-        use crate::integrations::whatsapp;
         let entry = PluginEntry {
             id:        "whatsapp",
-            descriptor: whatsapp::DESCRIPTOR,
-            inner:     Box::new(whatsapp::WhatsAppPlugin),
+            descriptor: crate::integrations::whatsapp::DESCRIPTOR,
+            inner:     Box::new(crate::integrations::whatsapp::WhatsAppPlugin),
+        };
+        reg.register(entry);
+    }
+    // Signal (Session 8) — signal-cli JSON daemon.
+    if !reg.catalog.iter().any(|e| e.id == "signal") {
+        let entry = PluginEntry {
+            id:        "signal",
+            descriptor: crate::integrations::signal::DESCRIPTOR,
+            inner:     Box::new(crate::integrations::signal::SignalPlugin),
+        };
+        reg.register(entry);
+    }
+    // WeChat Work (Session 8) — XML webhook relay.
+    if !reg.catalog.iter().any(|e| e.id == "wechat") {
+        let entry = PluginEntry {
+            id:        "wechat",
+            descriptor: crate::integrations::wechat::DESCRIPTOR,
+            inner:     Box::new(crate::integrations::wechat::WeChatPlugin),
+        };
+        reg.register(entry);
+    }
+    // SSH dispatcher (Session 8) — public-key authenticated channels.
+    if !reg.catalog.iter().any(|e| e.id == "ssh") {
+        let entry = PluginEntry {
+            id:        "ssh",
+            descriptor: crate::integrations::ssh::DESCRIPTOR,
+            inner:     Box::new(crate::integrations::ssh::SshPlugin),
+        };
+        reg.register(entry);
+    }
+    // REST/HTTP dispatcher (Session 8) — Bearer-only admin bridge.
+    if !reg.catalog.iter().any(|e| e.id == "rest") {
+        let entry = PluginEntry {
+            id:        "rest",
+            descriptor: crate::integrations::rest::DESCRIPTOR,
+            inner:     Box::new(crate::integrations::rest::RestPlugin),
         };
         reg.register(entry);
     }

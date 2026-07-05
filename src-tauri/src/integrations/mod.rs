@@ -27,10 +27,14 @@ pub mod http_commands;
 pub mod identity;
 pub mod local_provision;
 pub mod receipt_emit;
+pub mod signal;
 pub mod slack;
 pub mod tailscale;
 pub mod telegram;
 pub mod whatsapp;
+pub mod wechat;
+pub mod ssh;
+pub mod rest;
 
 pub use command_router::{CommandRouter, RouterError, RouterOutcome, RemoteCommandContext, Channel, Role};
 pub use identity::{Identity, IdentityResolution, ChannelBinding, Platform, RuntimeClass, RejectionReason};

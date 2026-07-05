@@ -1842,6 +1842,15 @@ pub fn run() {
             crate::plugins::whatsapp_bridge::begin_whatsapp_link,
             crate::plugins::whatsapp_bridge::paste_whatsapp_credentials,
             crate::plugins::whatsapp_bridge::whatsapp_status,
+            // Signal / WeChat / SSH / REST (Session 8)
+            crate::plugins::extra_bridges::paste_signal_credentials,
+            crate::plugins::extra_bridges::signal_status,
+            crate::plugins::extra_bridges::paste_wechat_credentials,
+            crate::plugins::extra_bridges::wechat_status,
+            crate::plugins::extra_bridges::paste_ssh_credentials,
+            crate::plugins::extra_bridges::ssh_status,
+            crate::plugins::extra_bridges::paste_rest_credentials,
+            crate::plugins::extra_bridges::rest_status,
             // Connection plugin catalog (Session 6 / P2) — declarative
             // metadata for the 7 VPS providers. Layered on top of the
             // existing `HostProvider` enum so the React-side contracts
