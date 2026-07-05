@@ -106,7 +106,7 @@ pub async fn spawn_loopback_server(
         // for WeChat). The routes are no-ops when the respective
         // plugin isn't fully configured (config-check first).
         .route("/hooks/whatsapp", post(whatsapp_webhook))
-        .route("/hooks/wechat",   post(wechat_webhook))
+        .route("/hooks/wechat",   post(wechat_webhook).get(wechat_handshake))
         .layer(axum::middleware::from_fn(move |req, next| {
             let auth = auth_for_layer.clone();
             async move { run_auth(req, next, auth).await }
@@ -445,6 +445,92 @@ async fn wechat_webhook(
     bot.accept_message(&payload); // idempotent filter
     (StatusCode::OK,
      Json(serde_json::json!({"status": "accepted"}))).into_response()
+}
+
+/// WeChat Work handshake handler: the operator's WeCom
+/// console callback URL is `https://host/hooks/wechat` and
+/// the platform sends a `GET ?msg_signature=...&timestamp=...
+/// &nonce=...&echostr=...` to verify. We recompute SHA1 over
+/// sorted `[token, timestamp, nonce]` and compare in constant
+/// time; on success we return `echostr` so WeCom accepts our
+/// callback. On failure we return an empty body — WeCom will
+/// retry a couple times before giving up.
+async fn wechat_handshake(
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> String {
+    let cfg = crate::integrations::wechat::WeChatConfig::from_secrets_or_env();
+    let token = cfg.corp_secret.as_str();
+    if token.is_empty() {
+        // No creds pasted — WeCom will retry; nothing to do.
+        return String::new();
+    }
+    let signature = query.get("msg_signature").cloned().unwrap_or_default();
+    let timestamp = query.get("timestamp").cloned().unwrap_or_default();
+    let nonce     = query.get("nonce").cloned().unwrap_or_default();
+    let echostr   = query.get("echostr").cloned().unwrap_or_default();
+    if signature.is_empty() || timestamp.is_empty()
+        || nonce.is_empty() || echostr.is_empty() {
+        return String::new();
+    }
+    // token + timestamp + nonce sorted lexicographically then
+    // SHA1'd; compare against operator's `msg_signature` in
+    // constant time.
+    let mut parts = vec![token.to_string(), timestamp.clone(), nonce.clone()];
+    parts.sort();
+    let concat = parts.join("");
+    let nonce_for_log = nonce.clone();
+    // sha1_smol = 1 — SHA-1 is mandated by WeChat Work's URL
+    // verification handshake (`token + timestamp + nonce`
+    // lex-sorted, then SHA-1 hex). Switching to SHA-3 here would
+    // silently break the operator's WeCom webhook verification.
+    // SHA-1 remains safe in this specific use because: (a)
+    // corp_secret is a high-entropy shared key (256+ bits); (b)
+    // the handshake runs once per operator setup; (c) no stored
+    // secrets depend on this output. SHA-3 would break WeCom
+    // compatibility, so we hold to SHA-1 by protocol mandate.
+    let computed = {
+        let d = sha1_smol::Sha1::from(concat.as_bytes()).digest();
+        let mut hex = String::with_capacity(d.bytes().len() * 2);
+        for b in d.bytes() {
+            use std::fmt::Write;
+            let _ = write!(&mut hex, "{b:02x}");
+        }
+        hex
+    };
+    if constant_time_eq(computed.as_bytes(), signature.as_bytes()) {
+        echostr
+    } else {
+        log::warn!("wechat handshake: signature mismatch for nonce={nonce_for_log}");
+        String::new()
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    a.iter().zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_eq;
+
+    #[test]
+    fn constant_time_eq_matches_equal_inputs() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"\x00\x01\x02", b"\x00\x01\x02"));
+    }
+
+    #[test]
+    fn constant_time_eq_rejects_different_inputs() {
+        assert!(!constant_time_eq(b"hello", b"Hello"));
+        assert!(!constant_time_eq(b"hello", b"hello!"));
+        assert!(!constant_time_eq(b"", b"."));
+        // Length mismatch through first guard
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+    }
 }
 
 /// Tiny pull-style XML→flat-field extractor for WeChat Work.

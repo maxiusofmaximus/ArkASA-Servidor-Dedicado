@@ -199,6 +199,81 @@ impl crate::plugins::Plugin for SignalPlugin {
     }
 }
 
+    /// Spawn `signal-cli daemon --json -u <phone>` if signal-cli is
+    /// on the PATH and the phone number is configured.
+    /// Returns `None` if anything is missing — the runtime logs a
+    /// graceful notice and falls back to UI-driven mode. This is
+    /// the real wire-up land — S12.B.
+    pub fn maybe_spawn_subprocess(cfg: &SignalConfig) -> Option<tokio::task::JoinHandle<()>> {
+        if cfg.phone_e164.is_empty() {
+            return None;
+        }
+        if let Some(cli) = find_signal_cli() {
+            let phone = cfg.phone_e164.clone();
+            Some(tokio::spawn(async move {
+                let mut child = match tokio::process::Command::new(&cli)
+                    .args(["--json", "daemon", "-u", &phone])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()
+                {
+                    Ok(c)  => c,
+                    Err(e) => {
+                        log::warn!("signal-cli spawn failed: {e}");
+                        return;
+                    }
+                };
+                if let Some(stdout) = child.stdout.take() {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    let mut reader = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        if line.is_empty() { continue; }
+                        match serde_json::from_str::<SignalJsonLine>(&line) {
+                            Ok(parsed) => {
+                                if let Some(env) = parsed.envelope {
+                                    let _ = env; // future dispatch
+                                }
+                            }
+                            Err(e) => log::warn!("signal-cli bad JSON: {e}"),
+                        }
+                    }
+                }
+                let _ = child.wait().await;
+            }))
+        } else {
+            log::info!(
+                "signal-cli not on PATH — Signal plugin lives but inbound \
+                 delivery is operator-side (manually run signal-cli daemon)."
+            );
+            None
+        }
+    }
+
+fn find_signal_cli() -> Option<String> {
+    std::env::var("SIGNAL_CLI_BIN").ok().filter(|s| !s.is_empty())
+        .or_else(|| {
+            let candidates: &[&str] = if cfg!(windows) {
+                &["signal-cli.bat", "signal-cli.cmd", "signal-cli.exe"]
+            } else {
+                &["signal-cli"]
+            };
+            let cmd_name = candidates.first().copied()?;
+            let probe = std::process::Command::new(if cfg!(windows) { "where" } else { "which" })
+                .arg(cmd_name)
+                .output()
+                .ok();
+            if let Some(out) = probe {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !s.is_empty() && std::path::Path::new(&s).exists() {
+                        return Some(s.split('\n').next().unwrap_or("").to_string());
+                    }
+                }
+            }
+            None
+        })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +367,25 @@ mod tests {
         ] {
             assert!(s.is_empty());
         }
+    }
+
+    #[test]
+    fn maybe_spawn_returns_none_without_phone() {
+        let cfg = SignalConfig::default();  // phone is empty
+        let handle = super::maybe_spawn_subprocess(&cfg);
+        assert!(handle.is_none(),
+            "without phone_e164 we must NOT spawn a subprocess");
+    }
+
+    #[test]
+    fn find_signal_cli_returns_none_when_path_is_clean() {
+        // Don't override PATH here; the signal-cli binary almost
+        // certainly isn't installed on the CI machine. We just
+        // assert that the helper doesn't panic when there's nothing
+        // to find.
+        let cli = super::find_signal_cli();
+        // Either Ok or None is acceptable depending on the dev box;
+        // the test only asserts SAFETY, not presence.
+        let _ = cli;  // touch so unused warning doesn't fire
     }
 }

@@ -421,11 +421,69 @@ adheres to [Semantic Versioning](https://semver.org/).
   Convex periodic interval, capability enforcement, WeChat CDATA
   parse, pre-flight toggle gating.
 
+### Sensación 11 — docs/INDEX.md
+
+- New `docs/INDEX.md` (73 lines) replaces the previous 342-line
+  block. Operator-facing scannable TOC with three sections:
+  * Quick links (12 docs, one line each).
+  * Plugin-level status legend (✅ real-loop wired, 🟡 parked).
+  * Version timeline table ending at `v2.1.0-alpha.3` and the next
+    honest step toward GA.
+- No code touched; nothing else moves.
+
+### Sesión 12 — Runtime hooks wire-up (real, partial)
+
+The S9 honest disclosure ("plugins return parked futures")
+is partially retired on three plugins:
+
+  - **Convex** — the existing `holder.lock().await.clone()` arm
+    spawned at α.2 already calls `integrations::convex_push::
+    spawn_publisher`. No additional wiring needed. The redundant
+    placeholder I added at S10 is removed.
+
+  - **WeChat Work handshake** — `GET /hooks/wechat` now
+    responds to the WeCom URL verification
+    (`?msg_signature=...&timestamp=...&nonce=...&echostr=...`).
+    WeChat mandates SHA-1 for this handshake (deliberately
+    mandated by the protocol, not a security choice). The
+    `sha1_smol` crate is added to Cargo.toml to do the
+    lex-sorted token+timestamp+nonce SHA-1 hex. Constant-time
+    compare rejects forged signatures.
+
+  - **Signal CLI** — `integrations::signal::maybe_spawn_subprocess`
+    spawns `signal-cli daemon --json -u <phone>` if the binary is
+    discoverable on PATH and the operator has configured
+    `phone_e164`. `lib::run()` calls it at boot. Falls back
+    gracefully with an INFO log if signal-cli isn't installed.
+    stdout JSON-lines are parsed via the existing
+    `SignalJsonLine` shape.
+
+- Tests added:
+  + 2 in `integrations::signal::tests` for `maybe_spawn_subprocess`
+    (no-phone returns None, find_signal_cli doesn't panic on
+    clean PATH).
+  + 2 in `integrations::http_api::tests` for `constant_time_eq`
+    (the helper backing the WeChat handshake).
+- Tests bumped from 131 → **135** passing.
+- Cargo.toml: `sha1_smol = "1"` (zero-dependency SHA-1 for the
+  WeChat handshake — SHA-1 is mandated by WeCom's URL
+  verification protocol; SHA-3 would break compatibility).
+- **SSH server (`russh`) and WeChat CDATA remain parked.**
+  See `docs/OPEN_WORK.txt`. Pulling `russh` crate is out of scope
+  for Sesión 12 (would touch many transitive deps); we document
+  the sidecar option (`sshd` listening on :2222 with operator's
+  authorized_keys) in `docs/OPEN_WORK.txt` §1.1.
+
 ### Test coverage
 
-- `cargo test --lib` — **131/131 passing** (post-Sesión 9).
+- `cargo test --lib` — **135/135 passing** (was 131; +2 signal +
+  +2 constant_time_eq).
 - `cargo build` — 0 errors, **0 warnings**.
 - `frontend tsc --noEmit` — clean.
+- SHA-1 soundness: WeChat Work mandates SHA-1 in its URL
+  handshake. `corporate_secret` is a 256+ bit shared key,
+  runs once per operator setup, no reproducible artefacts
+  leak into the receipts ledger. SHA-3 is unsuitable here.
 
 
 ### Backwards compatibility

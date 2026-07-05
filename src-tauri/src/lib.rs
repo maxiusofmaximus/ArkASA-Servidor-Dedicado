@@ -1753,20 +1753,10 @@ pub fn run() {
                 });
             }
 
-            // v2.1 — Convex periodic push (real subprocess-less task):
-            // every 60 s snapshot the audit-log state and POST to the
-            // operator-supplied Convex app. Real bridge happens here
-            // (no spawn_loopback_server / no SPAWN); the operator
-            // already configured their secret via commands::convex.
-            if std::env::var("CONVEX_URL").is_ok()
-               || crate::plugins::secret_store::read("convex").is_some() {
-                let _convex_handle = tauri::async_runtime::spawn(async move {
-                    // Periodic-style snapshot job — for S10 we only
-                    // touch the audit ledger once at boot and defer
-                    // to TUI-driven pushes via convex_push_schema Tauri command.
-                    log::info!("convex periodic-task placeholder spawned");
-                });
-            }
+            // Convex periodic push was wired at the holder.* branch
+            // above (real spawn of `convex_push::spawn_publisher`).
+            // No additional periodic-style job here — the publisher
+            // itself maintains the 60 s `tokio::time::interval`.
 
             // v2.1 — Tailscale wizard wiring: a one-shot probe at
             // boot that logs tailscale presence. Real `tailscale up`
@@ -1783,6 +1773,23 @@ pub fn run() {
                     );
                 }
             });
+
+            // v2.1 — Signal subprocess: real wire-up via
+            // `signal::maybe_spawn_subprocess`. If signal-cli is on
+            // PATH and the operator configured `phone_e164`, spawn
+            // --json daemon. Otherwise log gracefully.
+            let signal_cfg = integrations::signal::SignalConfig::from_secrets_or_env();
+            if let Some(_handle) =
+                integrations::signal::maybe_spawn_subprocess(&signal_cfg) {
+                log::info!(
+                    "signal subprocess spawned; plug the operator's auth \
+                     into signal-cli + add this hook as a 'linked device'"
+                );
+            } else {
+                log::debug!(
+                    "signal subprocess skipped (phone_e164 empty or signal-cli missing)"
+                );
+            }
         });
     }
 
