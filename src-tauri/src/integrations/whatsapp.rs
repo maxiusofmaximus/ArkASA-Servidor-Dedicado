@@ -9,7 +9,7 @@
 //!
 //! Outbound is via the official `https://graph.facebook.com/v18.0/`
 //! messages endpoint. We never store tokens more than the response
-//! cycle; everything rests in `secret_store`.
+//! cycle; everything rests in `secret_store_v2` (OS keyring).
 //!
 //! Operator flow:
 //!   1. Set up a WhatsApp Business account + Cloud API access.

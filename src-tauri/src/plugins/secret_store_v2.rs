@@ -1,10 +1,16 @@
 //! Provider secret lifecycle - v2 backed by OS keyring + Stronghold backup.
 //!
-//! This module supersedes `secret_store.rs` (v1) which wrote TOML files to
-//! disk in plaintext. v2 moves secrets into the OS-native credential store
-//! (Windows Credential Manager / macOS Keychain / Linux libsecret via
-//! `keyring` crate v4) with an optional Stronghold vault backup for offline
-//! recovery scenarios.
+//! This module **replaced** `secret_store.rs` (v1), which wrote TOML files
+//! to disk in plaintext. v2 moves secrets into the OS-native credential
+//! store (Windows Credential Manager / macOS Keychain / Linux libsecret
+//! via the `keyring` crate v4) with an optional Stronghold vault backup
+//! for offline recovery scenarios.
+//!
+//! v1 was deleted in the P2.3d cleanup sub-PR; the only legacy touchpoint
+//! that remains is the migration path: on app startup `migrate_secrets()`
+//! walks `plugin_storage_dir()` and lifts any stray `<plugin>.toml` files
+//! left behind by v1 into keyring, deleting the TOML afterwards. After a
+//! few releases the migration code can be removed too.
 //!
 //! API-surface compatibility:
 //!   - `StoredSecret` struct: identical fields to v1, so serde round-trips
@@ -46,9 +52,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-/// Re-export the v1 stored-secret struct so callers don't need to change
-/// their `StoredSecret` import path when we rename `secret_store` to
-/// `secret_store_v2`. (We use `as secret_store` at each call site.)
+/// The stored-secret struct. Field layout is identical to the v1
+/// `StoredSecret` (kept verbatim) so TOML files emitted by v1 will
+/// deserialise correctly during the migration path — see
+/// `read`'s TOML fallback and `migrate_secrets` for the path.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct StoredSecret {
     pub updated_at_unix: i64,

@@ -1,7 +1,7 @@
 //! Plugin registry state — a single TOML file that records which
 //! plugin ids the operator has enabled through the Plugin Hub UI.
 //!
-//! Lives next to the existing `secret_store` (also TOML-per-plugin).
+//! Lives next to the existing `secret_store_v2` (OS keyring-per-plugin).
 //! The PluginRegistry at startup reads this file, walks the catalog
 //! from `plugins/mod.rs::register_default_plugins`, and calls
 //! `enable(id)` for each id present here. The UI writes here when

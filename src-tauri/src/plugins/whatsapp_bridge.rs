@@ -5,8 +5,8 @@
 //!    because WhatsApp authentication is API-key based
 //!    (`paste_whatsapp_credentials` is the canonical entry).
 //!  - `paste_whatsapp_credentials(deployment_url, deploy_key)` —
-//!    persists the secrets to `secret_store` under the "whatsapp"
-//!    plugin id. Carries `phone_number_id`, `business_id`,
+//!    persists the secrets to `secret_store_v2` (OS keyring) under the
+//!    "whatsapp" plugin id. Carries `phone_number_id`, `business_id`,
 //!    `webhook_secret`, `api_token`, `admin_e164s`.
 //!  - `whatsapp_status()` — surfaces whether the plugin is configured,
 //!    plus a redacted preview of admin_e164s.

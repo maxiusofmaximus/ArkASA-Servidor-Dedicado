@@ -1450,7 +1450,7 @@ async fn tailscale_status_combined() -> integrations::tailscale::TailscaleStatus
 
 /// Run `tailscale up --authkey <key> --hostname <host>` against
 /// the official CLI. We persist nothing — secrets stay in the
-/// `secret_store` if the operator wants to refresh later.
+/// `secret_store_v2` (OS keyring) if the operator wants to refresh later.
 #[tauri::command]
 async fn tailscale_setup(
     auth_key:          String,

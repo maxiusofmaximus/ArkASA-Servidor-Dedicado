@@ -440,7 +440,6 @@ impl Default for PluginRegistry {
     fn default() -> Self { Self::new() }
 }
 
-pub mod secret_store;
 pub mod secret_store_v2;
 pub mod convex;
 pub mod vercel;
