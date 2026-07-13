@@ -14,8 +14,14 @@ let isTauriAvailable = false
 export async function initializeTauri() {
   logger.info('Initializing Tauri connection...')
 
-  // Check if we're in Tauri context by checking for __TAURI__ global
-  const isTauriContext = typeof window !== 'undefined' && '__TAURI__' in window
+  // Check if we're in Tauri context by probing for __TAURI_INTERNALS__.
+  // Note: __TAURI_INTERNALS__ is always injected by the Tauri runtime when
+  // running inside the Tauri webview — it is independent of `withGlobalTauri`
+  // (which only controls the optional `window.__TAURI__` global that exposes
+  // Tauri APIs as a non-bundled import). We use __TAURI_INTERNALS__ because
+  // we now use the @tauri-apps/api/* bundler imports exclusively and disabled
+  // `withGlobalTauri` for a smaller, less-exposed attack surface.
+  const isTauriContext = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
   if (!isTauriContext) {
     logger.info('Not in Tauri context - using mock implementation')
@@ -74,8 +80,11 @@ function createMockInvoke() {
           rcon_port: 27020,
           server_platform: 'ALL',
           no_battleye: false,
-          fixed_port_assignment_per_map: true,
+          fixed_port_assignment_per_map: false,
           allow_start_without_internet: false,
+          auto_update_before_start: true,
+          cluster_failover_enabled: false,
+          cluster_failover_timeout_sec: 60,
           server_ip: '',
         },
         gameplay: {
@@ -302,7 +311,23 @@ function createMockInvoke() {
           only_allow_specific_engrams: false,
           auto_unlock_engrams: [],
           custom_config: {},
+          // AutoSavePeriodMinutes (15 = ARK official default). Operators
+          // bump to 30 for fewer I/O spikes on big clusters, drop to 5
+          // for tighter crash-recovery. UI bound in Opciones → Mundo.
+          auto_save_period_minutes: 15,
+          // Global stack size scalar — 1.0 keeps stock stacks; 2.0 doubles
+          // them globally. Per-item overrides go in item_stack_overrides.
+          item_stack_size_multiplier: 1,
+          // Per-item ABSOLUTE stack overrides (written as
+          // ConfigOverrideItemMaxQuantity=bIgnoreMultiplier=True). Empty by
+          // default. Operators add entries from Opciones → Inventario.
+          item_stack_overrides: {},
         },
+        // Marketplace install set. Operators begin with an empty set;
+        // PluginsTab exposes the catalog with an Install button per
+        // entry, and the PluginsTab → Cloud services section only shows
+        // cards for plugins marked as installed here.
+        installed_plugins: [],
       },
       server_status: {
         running: false,
@@ -313,6 +338,14 @@ function createMockInvoke() {
       get_server_metrics: { cpu: 5, memory: 256, fps: 60 },
       start_ping: null,
       stop_ping: null,
+      // ── Version sync (mock) ──────────────────────────────────────────────
+      check_server_version: {
+        local_buildid: 8822334,
+        latest_buildid: 8822334,
+        needs_update: false,
+        server_dir: 'C:\\ASA\\server',
+      },
+      update_server: 'Update OK (mock)',
       detect_ips: { public_ip: '181.237.12.34', tailscale_ip: '100.71.59.101', local_ip: '192.168.1.100' },
       open_external_url: null,
       set_minimize_to_tray: null,

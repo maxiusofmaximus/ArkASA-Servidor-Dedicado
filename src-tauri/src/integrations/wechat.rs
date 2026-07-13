@@ -21,7 +21,7 @@ use crate::integrations::command_router::{
     RemoteCommandContext, Role, RouterOutcome,
 };
 use crate::integrations::RuntimeClass;
-use crate::plugins::secret_store;
+use crate::plugins::secret_store_v2 as secret_store;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

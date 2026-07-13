@@ -17,7 +17,7 @@
 //! inventing endpoints.
 
 use crate::plugins::{PluginContext, PluginDescriptor, Plugin, PluginCapability, ChannelKind};
-use crate::plugins::secret_store;
+use crate::plugins::secret_store_v2 as secret_store;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -243,11 +243,11 @@ mod tests {
         assert_eq!(s.fields.get("token"), Some(&test_token));
         assert_eq!(s.fields.get("project_id"), test_project.as_ref());
 
-        // Clean up so we don't pollute local config
-        let path = secret_store::secret_path("vercel");
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
-        }
+        // Clean up so we don't pollute local config. v1 of secret_store
+        // kept secrets on disk, and this test used to remove the TOML file
+        // directly. v2 lives in keyring (or the in-memory test store), so
+        // we have to go through `delete()` to actually clear the credential.
+        secret_store::delete("vercel").expect("vercel secret should be deletable");
 
         // The spawn result will usually be Err in CI/dev (no vercel CLI on path);
         // accept either outcome but never panic.

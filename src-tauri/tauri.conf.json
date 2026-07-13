@@ -1,6 +1,6 @@
 {
   "productName": "ARK ASA Config Manager",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "identifier": "com.arkasa.configmanager",
   "build": {
     "beforeDevCommand": "pnpm --dir ./frontend dev",
@@ -8,7 +8,7 @@
     "frontendDist": "../frontend/dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "ARK ASA Configuration Manager",
@@ -22,7 +22,15 @@
       }
     ],
     "security": {
-      "csp": null
+      "capabilities": ["main-capability"],
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://ipc.localhost https://*.convex.cloud",
+        "font-src": "'self' data:",
+        "img-src": "'self' asset: http://asset.localhost blob: data:",
+        "style-src": "'unsafe-inline' 'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'"
+      }
     }
   },
   "bundle": {

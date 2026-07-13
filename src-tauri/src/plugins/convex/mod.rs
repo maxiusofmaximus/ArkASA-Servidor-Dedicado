@@ -26,7 +26,7 @@
 //! persist the secrets on disk.
 
 use crate::plugins::{PluginContext, PluginDescriptor, Plugin, PluginCapability, ChannelKind};
-use crate::plugins::secret_store;
+use crate::plugins::secret_store_v2 as secret_store;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -281,11 +281,11 @@ mod tests {
         assert_eq!(s.fields.get("deployment_url"), Some(&test_url));
         assert_eq!(s.fields.get("deploy_key"), Some(&test_key));
 
-        // Clean up the test file so we don't pollute the local config
-        let path = secret_store::secret_path("convex");
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
-        }
+        // Clean up the test credential so we don't pollute the local config.
+        // v1 kept secrets on disk and this test removed the TOML file directly;
+        // v2 lives in keyring (or the in-memory test store auto-enabled in
+        // cfg(test)), so we have to go through `delete()` to actually clear it.
+        secret_store::delete("convex").expect("convex secret should be deletable");
 
         // The result should either be Ok (if npx succeeded) or Err with a message about spawning or deployment failing,
         // but it shouldn't panic.

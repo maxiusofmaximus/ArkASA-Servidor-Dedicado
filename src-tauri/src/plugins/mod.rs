@@ -441,6 +441,7 @@ impl Default for PluginRegistry {
 }
 
 pub mod secret_store;
+pub mod secret_store_v2;
 pub mod convex;
 pub mod vercel;
 pub mod registry;

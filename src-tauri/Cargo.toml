@@ -8,12 +8,14 @@ license = "MIT"
 default-run = "ark-asa-config"
 
 [build-dependencies]
-tauri-build = { version = "2.0", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["custom-protocol", "devtools", "tray-icon"] }
-tauri-plugin-store = "2.0"
-tauri-plugin-shell = "2.0"
+tauri = { version = "2", features = ["custom-protocol", "devtools", "tray-icon"] }
+tauri-plugin-store = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-stronghold = "2"
+keyring = { version = "4", features = ["v1"] }
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "process", "net", "sync"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -34,6 +36,13 @@ hmac = "0.12"
 hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 sha1_smol = "1"
+# Native Windows API for connectivity detection via INetworkListManager.
+windows = { version = "0.58", features = [
+    "Win32_Networking_NetworkListManager",
+    "Win32_System_Com",
+    "Win32_Foundation",
+] }
+windows-core = "0.58"
 # v2.2 — multi-channel chat bridge WebSocket support (Discord, Slack, Supabase, InsForge)
 tungstenite = "0.21"
 tokio-tungstenite = "0.21"
@@ -52,6 +61,14 @@ libc = "0.2"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.12"
+
+# Stronghold uses argon2 which depends on scrypt; without this profile override
+# the dev build of scrypt runs unoptimized and key derivation takes 30+ seconds
+# on every Stronghold unlock. Upstream-recommended workaround per
+# https://v2.tauri.app/plugin/stronghold/ — keep for release is unaffected
+# because [profile.release] already sets opt-level=3 globally.
+[profile.dev.package.scrypt]
+opt-level = 3
 
 [profile.release]
 opt-level = 3

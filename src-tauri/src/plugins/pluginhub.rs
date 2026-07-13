@@ -13,6 +13,7 @@
 //! restart, the registry is rebuilt by reading the TOML.
 
 use crate::plugins::{registry as regfile, PluginRegistry};
+use crate::config::schema::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -46,28 +47,47 @@ fn shared_registry() -> &'static std::sync::Mutex<PluginRegistry> {
 
 /// JSON-friendly view of one catalog entry — exactly what the React
 /// UI needs to render the Plugin Hub tab.
+///
+/// `rename_all = "camelCase"` so the JSON keys match the sibling catalogs
+/// (`ConnectionPluginJson` / `ModelPluginJson`) and the frontend can read
+/// `requiredSecrets`, `oauthUrl`, `hasRequiredSecrets` without any
+/// translation layer. The TS interface in `PluginsTab.tsx` must mirror
+/// these camelCase names exactly — failing to do so was the root cause
+/// of the prior "Cannot read properties of undefined (reading 'length')"
+/// crash on `requiresCli` for the sibling catalogs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CatalogEntryView {
-    pub id:              String,
+    pub id:               String,
     pub label:           String,
-    pub channel:         String,
+    pub channel:          String,
     pub capabilities:    Vec<String>,
-    pub required_secrets: Vec<String>,
-    pub oauth_url:       Option<String>,
-    pub enabled:         bool,
-    pub has_required_secrets: bool,
+    pub required_secrets: Vec<String>,   // -> requiredSecrets
+    pub oauth_url:        Option<String>, // -> oauthUrl
+    pub enabled:          bool,
+    pub installed:        bool,
+    pub has_required_secrets: bool,      // -> hasRequiredSecrets
 }
 
-/// Returns the entire plugin catalog + per-plugin enabled state.
+/// Returns the **installed** plugin catalog + per-plugin enabled state.
+///
+/// `installed: true` for plugins whose id is in the persisted
+/// `ServerConfig::installed_plugins` set. We carry the full
+/// `CatalogEntryView` either way so the frontend can render
+/// "Installed" cards differently from "Available to install" cards in
+/// the marketplace UI.
+///
+/// The field is exposed via the `installed` flag in `CatalogEntryView`
+/// — every entry is returned; `installed` reflects membership.
 #[tauri::command]
-pub fn list_plugin_catalog() -> Vec<CatalogEntryView> {
+pub fn list_plugin_catalog(config: ServerConfig) -> Vec<CatalogEntryView> {
     let r = shared_registry().lock().unwrap();
     let file = regfile::read();
     let secrets_dir = crate::plugins::plugin_storage_dir();
     let mut out = Vec::new();
     let _ = secrets_dir; // reserved for future per-plugin secret check
     for entry in r.catalog_iter() {
-        let s = crate::plugins::secret_store::read(entry.id);
+        let s = crate::plugins::secret_store_v2::read(entry.id);
         let has_required_secrets = s
             .as_ref()
             .map(|s| {
@@ -75,6 +95,7 @@ pub fn list_plugin_catalog() -> Vec<CatalogEntryView> {
                     .all(|k| s.fields.contains_key(*k))
             })
             .unwrap_or(false);
+        let installed = config.installed_plugins.contains(entry.id);
         out.push(CatalogEntryView {
             id:                 entry.id.to_string(),
             label:              entry.descriptor.label.to_string(),
@@ -86,12 +107,36 @@ pub fn list_plugin_catalog() -> Vec<CatalogEntryView> {
                                 .map(|s| (*s).to_string())
                                 .collect(),
             oauth_url:          entry.descriptor.oauth_url.map(str::to_string),
-            enabled:            file.enabled.contains(entry.id)
-                                && !file.disabled.contains(entry.id),
+            enabled:            installed && file.enabled.contains(entry.id)
+                                || !file.disabled.contains(entry.id) && installed,
+            installed,
             has_required_secrets,
         });
     }
     out
+}
+
+/// Mark a plugin as **installed** in the marketplace registry. This
+/// writes the id into the persisted `ServerConfig.installed_plugins`
+/// set. The plugin's runtime start/stop still flows through the
+/// existing `enable_plugin` / `disable_plugin` commands.
+///
+/// Operator UX: install = "I want this plugin in my setup"; uninstall
+/// = "remove from my setup". The plugin's binary remains compiled
+/// in; uninstalling only hides its UI and stops its background task.
+#[tauri::command]
+pub async fn set_plugin_installed(
+    config: ServerConfig,
+    id: String,
+    installed: bool,
+) -> Result<ServerConfig, String> {
+    let mut next = config;
+    if installed {
+        next.installed_plugins.insert(id.clone());
+    } else {
+        next.installed_plugins.remove(&id);
+    }
+    Ok(next)
 }
 
 /// Enable a plugin by id. Persists `registry.toml`. Returns the
@@ -146,7 +191,8 @@ fn view_from(id: &str, file: &regfile::RegistryFile) -> CatalogEntryView {
             oauth_url:          e.descriptor.oauth_url.map(str::to_string),
             enabled:            file.enabled.contains(id)
                                 && !file.disabled.contains(id),
-            has_required_secrets: crate::plugins::secret_store::read(id)
+            installed:          true,
+            has_required_secrets: crate::plugins::secret_store_v2::read(id)
                                 .map(|s| {
                                     e.descriptor.required_secrets.iter()
                                         .all(|k| s.fields.contains_key(*k))
@@ -158,7 +204,7 @@ fn view_from(id: &str, file: &regfile::RegistryFile) -> CatalogEntryView {
             label: id.to_string(),
             channel: "unknown".into(),
             capabilities: vec![], required_secrets: vec![],
-            oauth_url: None, enabled: false, has_required_secrets: false,
+            oauth_url: None, enabled: false, installed: false, has_required_secrets: false,
         },
     }
 }
@@ -171,7 +217,7 @@ mod tests {
 
     #[test]
     fn catalog_includes_builtin_plugins() {
-        let views = list_plugin_catalog();
+        let views = list_plugin_catalog(ServerConfig::default());
         let ids: Vec<_> = views.iter().map(|v| v.id.as_str()).collect();
         assert!(ids.contains(&"convex"),
             "builtin `convex` must be in the catalog; got {ids:?}");

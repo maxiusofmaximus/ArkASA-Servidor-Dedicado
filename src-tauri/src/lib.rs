@@ -129,7 +129,7 @@ async fn enable_on_demand(
         .cloned()
         .unwrap_or_else(|| "TheIsland_WP".to_string());
 
-    let (game_port, query_port, rcon_port) = config.network.ports_for_index(map_index);
+    let (game_port, _peer_port, query_port, rcon_port) = config.network.ports_for_index(map_index);
     let args = build_launch_args(&config, &map, map_index);
 
     let params = stub::MapLaunchParams {
@@ -622,12 +622,50 @@ async fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> s
     let maps       = config.effective_maps();
     let is_cluster = maps.len() > 1;
     let exe        = config.paths.ark_exe();
+    let failover_enabled = config.network.cluster_failover_enabled;
+    let failover_timeout = config.network.cluster_failover_timeout_sec.clamp(5, 600);
     let mut launched: Vec<String> = Vec::with_capacity(maps.len());
 
     for (i, raw_map) in maps.iter().enumerate() {
         let map  = if raw_map.trim().is_empty() { "TheIsland_WP".to_string() } else { raw_map.trim().to_string() };
-        let args = build_launch_args(&config, &map, i);
-        let (game_port, _, _) = config.network.ports_for_index(i);
+
+        // ── Cluster failover (runtime only) ─────────────────────────────────
+        // Decide which port slot this map lands on before launch.
+        //
+        // Concrete scenario the user described:
+        //   cluster = [TheIsland_WP, Ragnarok_WP], fixed_port_assignment=false
+        //   expected: idx 0 → 7777, idx 1 → 7779
+        //   bug    : idx 0 fails silently, idx 1 launches anyway at 7779,
+        //           so `open IP` (which defaults to 7777) hits nobody.
+        //
+        // With `cluster_failover_enabled = true` we wait up to
+        // `failover_timeout` sec after launching the primary slot and poll its
+        // UDP game port. If it never binds, the next-pending map reclaims the
+        // primary slot (`ports_for_index(0)` instead of `ports_for_index(i)`).
+        // The recovery is tracked runtime-only via the local `reclaimed` map;
+        // we don't persist the assignment between sessions.
+        let mut instance_idx = i;
+        let mut reclaimed_primary = false;
+        if is_cluster && failover_enabled && i > 0 {
+            let (primary_game, _, _, _) = config.network.ports_for_index(0);
+            log::info!(
+                "[failover] waiting up to {}s for primary map to bind UDP port {}",
+                failover_timeout, primary_game
+            );
+            if !wait_for_udp_bind(primary_game, failover_timeout).await {
+                log::warn!(
+                    "[failover] primary never bound UDP {}; candidate {} (idx {}) will reclaim slot 0",
+                    primary_game, map, i
+                );
+                instance_idx = 0;
+                reclaimed_primary = true;
+            } else {
+                log::info!("[failover] primary bound UDP {} cleanly; {} stays on slot {}", primary_game, map, i);
+            }
+        }
+
+        let args = build_launch_args(&config, &map, instance_idx);
+        let (game_port, _, _, _) = config.network.ports_for_index(instance_idx);
 
         let mut cmd = Command::new(&exe);
         cmd.arg(&args.url_params);
@@ -645,10 +683,15 @@ async fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> s
             unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
         }
 
-        log::info!("Launching ARK {} (cluster={}) port={}", map, is_cluster, game_port);
+        log::info!(
+            "Launching ARK {} (cluster={}, slot={}{}) port={}",
+            map, is_cluster, instance_idx,
+            if reclaimed_primary { " [failover-reclaim]" } else { "" },
+            game_port
+        );
 
         match cmd.spawn() {
-            Ok(child) => launched.push(format!("{} PID {}", map, child.id())),
+            Ok(child) => launched.push(format!("{} PID {} port={}", map, child.id(), game_port)),
             Err(e) => return Err(format!("Failed to start {}: {}. Exe: {}", map, e, exe)),
         }
 
@@ -665,8 +708,14 @@ async fn start_server(config: ServerConfig, cluster_delay_sec: Option<u64>) -> s
     }
 }
 
-/// Graceful shutdown via RCON (saveworld → doexit).
-/// Falls back to taskkill /F for instances that don't respond.
+/// Graceful shutdown via RCON (saveworld → doexit), then a guaranteed
+/// `taskkill /F /IM` net. The net always runs — even on RCON success —
+/// because `doexit` on a heavily-modded or frozen instance can leave
+/// the ArkAscendedServer.exe window hanging. The /F + /IM combo matches
+/// the operator's expected behaviour: "Stop cierra el server, no solo
+/// les dice que se apaguen".
+///
+/// Returns a human-readable summary per cluster instance.
 #[tauri::command]
 async fn stop_server(config: ServerConfig) -> std::result::Result<String, String> {
     let maps     = config.effective_maps();
@@ -676,7 +725,7 @@ async fn stop_server(config: ServerConfig) -> std::result::Result<String, String
     let mut failed:   Vec<String> = vec![];
 
     for (i, map) in maps.iter().enumerate() {
-        let (_, _, rcon_port) = config.network.ports_for_index(i);
+        let (_, _, _, rcon_port) = config.network.ports_for_index(i);
         let label  = map.trim_end_matches("_WP");
         let client = RconClient::new(rcon_port, password.as_str());
 
@@ -692,28 +741,25 @@ async fn stop_server(config: ServerConfig) -> std::result::Result<String, String
         }
     }
 
+    // Small extra grace so `doexit` has time to settle before we apply
+    // the safety net kill. If the operator already saw the saveworld
+    // burst in logs, the kill should hit clean windows.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    // Always run as a safety net, even when RCON succeeded — the ARK
+    // binary's window can stick open even after a clean `doexit`.
+    if let Err(e) = RconClient::force_kill_image().await {
+        log::warn!("taskkill safety-net failed: {}", e);
+    }
+
     if !failed.is_empty() {
         log::warn!("Falling back to taskkill for: {:?}", failed);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/IM", "ArkAscendedServer.exe"])
-                .creation_flags(0x08000000)
-                .output();
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = std::process::Command::new("pkill")
-                .args(["-f", "ArkAscendedServer"])
-                .output();
-        }
     }
 
     Ok(match (graceful.is_empty(), failed.is_empty()) {
-        (true, _)   => "Servidor detenido (taskkill)".to_string(),
-        (_, true)   => format!("Servidor detenido correctamente (saveworld + doexit): {}", graceful.join(", ")),
-        _           => format!("RCON OK: {} | taskkill: {}", graceful.join(", "), failed.join(", ")),
+        (true, _)   => "Servidor detenido (taskkill forzado, sin respuesta RCON)".to_string(),
+        (_, true)   => format!("Servidor detenido correctamente (saveworld + doexit + taskkill): {}", graceful.join(", ")),
+        _           => format!("RCON OK: {} | RCON falló (se aplicó taskkill): {}", graceful.join(", "), failed.join(", ")),
     })
 }
 
@@ -784,6 +830,74 @@ fn is_udp_port_bound(port: u16) -> bool {
     }
 }
 
+/// Native detection of UDP listeners.
+///
+/// On Windows this shells out to `netstat -ano -p UDP` and looks for
+/// `:PORT` in the local address column. On Linux it uses `ss -lunH
+/// sport = :PORT`. Both are zero-dependency, race-free ways to answer
+/// "is *something* bound to this UDP port right now?" without confusing
+/// it with a TCP socket of the same number or with another host's
+/// traffic. This is the same query the Microsoft Learn `GetUdpTable`
+/// docs describe — Windows' MIB table is the underlying data source
+/// for `netstat -ano -p UDP`.
+fn is_udp_port_listening_native(port: u16) -> bool {
+    let port_str = port.to_string();
+    let port_needle = format!(":{}", port_str);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("netstat");
+        cmd.args(["-ano", "-p", "UDP"]);
+        cmd.creation_flags(0x08000000);
+        if let Ok(out) = cmd.output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim_end();
+                if trimmed.contains(&port_needle)
+                    && (trimmed.contains("LISTENING") || trimmed.contains("ESTABLISHED") || !trimmed.contains("State"))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        // ss -lunH 'sport = :PORT'  → lines with non-empty local addr
+        let mut cmd = Command::new("ss");
+        cmd.args(["-lunH", &format!("sport = :{}", port_str)]);
+        if let Ok(out) = cmd.output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            return text.lines().any(|l| !l.trim().is_empty());
+        }
+        false
+    }
+}
+
+/// Poll until `port` is bound by some UDP listener or `max_seconds`
+/// elapses. Used by `start_server` for cluster port-failover:
+/// if the primary map never binds its game port within the timeout,
+/// the next map in the cluster reclaims that slot.
+///
+/// Polling cadence: 500 ms — enough granularity for ARK's typical
+/// 2-10 s boot without flooding the shell.
+async fn wait_for_udp_bind(port: u16, max_seconds: u64) -> bool {
+    use std::time::Duration;
+    let total = max_seconds.max(1);
+    let tick  = Duration::from_millis(500);
+    let max_iters = (total * 1000) / 500;
+    for i in 0..max_iters {
+        if is_udp_port_listening_native(port) {
+            log::info!("[failover] UDP port {} bound after {} ms", port, i * 500);
+            return true;
+        }
+        tokio::time::sleep(tick).await;
+    }
+    log::warn!("[failover] UDP port {} never bound within {} s", port, total);
+    false
+}
+
 #[cfg(windows)]
 fn kill_process_on_port(port: u16) -> std::result::Result<(), String> {
     use std::os::windows::process::CommandExt;
@@ -828,18 +942,41 @@ fn kill_process_on_port(port: u16) -> std::result::Result<(), String> {
 #[tauri::command]
 async fn get_cluster_instance_status(config: ServerConfig) -> std::result::Result<Vec<MapInstanceStatus>, String> {
     let maps = config.effective_maps();
+    let fixed = config.network.fixed_port_assignment_per_map;
     let futures: Vec<_> = maps
         .iter()
         .enumerate()
         .map(|(i, map_id)| {
-            let (_, _, rcon_port) = config.network.ports_for_index(i);
+            // ARK binds **UDP** game port, not TCP RCON. The previous
+            // `is_tcp_port_open(rcon_port)` returned false while the
+            // server was happily accepting players, which made the
+            // Start/Stop button think nothing was running.
+            //
+            // Use the native OS UDP listener table (netstat `GetUdpTable`
+            // on Windows / `ss -lunH` on Linux) on the game port (peer
+            // = game+1, query are corroborated so we don't mistake any
+            // single transient listener).
+            let ports3 = if fixed {
+                config.network.ports_for_map_id3(map_id)
+            } else {
+                config.network.ports_for_index3(i)
+            };
+            let game_port  = ports3.0;
+            let rcon_port  = ports3.2;
             let map_id_owned = map_id.clone();
             let map_label = map_display_label(map_id);
-            tokio::task::spawn_blocking(move || MapInstanceStatus {
-                map_index: i,
-                map_id: map_id_owned,
-                map_label,
-                running: is_tcp_port_open(rcon_port),
+            tokio::task::spawn_blocking(move || {
+                let udp_open = is_udp_port_listening_native(game_port)
+                            || is_udp_port_listening_native(game_port + 1);
+                let rcon_open = is_tcp_port_open(rcon_port);
+                MapInstanceStatus {
+                    map_index: i,
+                    map_id: map_id_owned,
+                    map_label,
+                    // Either game port bound (UDP) or RCON accepting TCP
+                    // ⇒ treat the server as "running".
+                    running: udp_open || rcon_open,
+                }
             })
         })
         .collect();
@@ -868,7 +1005,7 @@ async fn start_server_instance(
     };
     let exe = config.paths.ark_exe();
     let args = build_launch_args(&config, &map, map_index);
-    let (game_port, _, _rcon_port) = config.network.ports_for_index(map_index);
+    let (game_port, _peer_port, _query_port, _rcon_port) = config.network.ports_for_index(map_index);
 
     // Anti double-start guard.
     // ARK binds **UDP** game + query, not TCP. is_tcp_port_open was yielding
@@ -917,20 +1054,32 @@ async fn stop_server_instance(config: ServerConfig, map_index: usize) -> std::re
     let map_id = maps[map_index].clone();
     let label = map_display_label(&map_id);
     let password = &config.identification.admin_password;
-    let (_, _, rcon_port) = config.network.ports_for_index(map_index);
+    let (_, _, _, rcon_port) = config.network.ports_for_index(map_index);
     let client = RconClient::new(rcon_port, password.as_str());
 
-    match client.graceful_shutdown().await {
+    let rcon_result = client.graceful_shutdown().await;
+    match rcon_result {
         Ok(()) => {
             log::info!("RCON graceful shutdown OK for {} (port {})", label, rcon_port);
-            Ok(format!("{} detenido correctamente (saveworld + doexit)", label))
+            // Safety-net sleep so `doexit` can settle, then a guaranteed
+            // taskkill so the operator never sees a stuck .exe window.
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if let Err(e) = RconClient::force_kill_image().await {
+                log::warn!("[{}] safety-net taskkill failed: {}", label, e);
+            }
+            Ok(format!("{} detenido correctamente (saveworld + doexit + taskkill)", label))
         }
         Err(e) => {
             log::warn!("RCON shutdown failed for {} (port {}): {}", label, rcon_port, e);
-            if let Err(kill_err) = kill_process_on_port(rcon_port) {
+            // RCON failed entirely — kill by port (laser-targeted) plus
+            // the image-wide safety net so the operator always gets a
+            // closed window even on a frozen instance.
+            let port_kill = kill_process_on_port(rcon_port);
+            let _ = RconClient::force_kill_image().await;
+            if let Err(kill_err) = port_kill {
                 Err(format!("RCON failed ({}) and could not kill process: {}", e, kill_err))
             } else {
-                Ok(format!("{} detenido (forzado por puerto {})", label, rcon_port))
+                Ok(format!("{} detenido (sin respuesta RCON — kill forzado: puerto {} + imagen)", label, rcon_port))
             }
         }
     }
@@ -1020,31 +1169,50 @@ struct DetectedIps {
 
 #[tauri::command]
 async fn check_internet() -> bool {
-    // Lightweight connectivity probe: HEAD request with a tight 3s budget.
-    // Returns true if any of two reputable endpoints answers 2xx/3xx.
-    let probe = |url: &str| {
-        let url = url.to_string();
-        async move {
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(3))
-                .build()
-                .map_err(|e| e.to_string())?;
-            let resp = client.head(&url).send().await.map_err(|e| e.to_string())?;
-            Ok::<u16, String>(resp.status().as_u16())
-        }
-    };
-    let candidates = [
-        "https://api4.ipify.org",
-        "https://www.google.com",
-        "https://www.cloudflare.com",
-    ];
-    for url in candidates {
-        match probe(url).await {
-            Ok(status) if (200..400).contains(&status) => return true,
-            _ => continue,
+    // Native Windows Network Status via INetworkListManager::GetConnectivity.
+    // NLM_CONNECTIVITY has the following flags:
+    //   NLM_CONNECTIVITY_DISCONNECTED  = 0
+    //   NLM_CONNECTIVITY_IPV4_NOT_AVAILABLE = 0x1
+    //   NLM_CONNECTIVITY_IPV6_NOT_AVAILABLE = 0x2
+    //   NLM_CONNECTIVITY_IPV4_LOCAL_ADDRESS = 0x10  (local subnet)
+    //   NLM_CONNECTIVITY_IPV4_GATEWAY_ADDRESS = 0x20 (gateway ip known)
+    //   NLM_CONNECTIVITY_IPV4_DNS_CLIENT = 0x40   (DNS configured)
+    //   NLM_CONNECTIVITY_IPV4_DNS_RESOLUTION = 0x80 (DNS resolved)
+    //   NLM_CONNECTIVITY_IPV4_INTERNET = 0x100    (interweb traffic works)
+    // Online iff none of the disconnected bits are set AND any capability
+    // (local/gw/dns/dnsres/internet) is available.
+    #[cfg(windows)]
+    {
+        use windows::Win32::Networking::NetworkListManager::INetworkListManager;
+        unsafe {
+            // CLSID_NetworkListManager = {DCB00C01-570F-4A9B-8D69-199FDBA5723B}
+            let clsid: windows_core::GUID =
+                windows_core::GUID::from("DCB00C01-570F-4A9B-8D69-199FDBA5723B");
+            let result: windows_core::Result<INetworkListManager> =
+                windows::Win32::System::Com::CoCreateInstance(
+                    &clsid,
+                    None,
+                    windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+                );
+            match result {
+                Ok(m) => match m.GetConnectivity() {
+                    // NLM_CONNECTIVITY bitmask: any non-zero bit ⇒ the OS has
+                    // IP / gateway / DNS / DNS resolution / internet — i.e.
+                    // it really is connected. A zero mask is the only state
+                    // that maps to "truly offline".
+                    Ok(cn) => return cn.0 != 0,
+                    Err(_) => return false,
+                },
+                Err(_) => return false,
+            }
         }
     }
-    false
+
+    #[cfg(not(windows))]
+    {
+        // OS-level carrier detection is Windows-only in this app.
+        return false;
+    }
 }
 
 #[tauri::command]
@@ -1081,6 +1249,16 @@ async fn set_admin_feature_flag(_key: String, _value: bool) -> Result<(), String
     Ok(())
 }
 
+/// Manually trigger a one-shot migration of any remaining v1 plaintext
+/// `secret_store.toml` files into the OS keyring. Idempotent: returns 0 if
+/// everything has already been lifted. Also runs automatically on app
+/// startup inside the `setup` closure - this command exposes it to the
+/// frontend so an operator can re-trigger it from a diagnostics UI.
+#[tauri::command]
+async fn migrate_secrets() -> Result<usize, String> {
+    crate::plugins::secret_store_v2::migrate_secrets()
+}
+
 /// Static handle to the AuthState, populated by `run()` at startup.
 /// Hito 4 will replace this with a `tauri::manage`-d value once we
 /// settle on the best pattern.
@@ -1098,6 +1276,114 @@ fn machine_host_id() -> Result<String, String> {
     #[cfg(not(target_os = "windows"))]
     let out = Command::new("hostname").output().map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ServerVersionInfo {
+    local_buildid:  Option<u64>,
+    latest_buildid: Option<u64>,
+    needs_update:   bool,
+    server_dir:     String,
+}
+
+#[tauri::command]
+async fn check_server_version(config: ServerConfig) -> Result<ServerVersionInfo, String> {
+    let server_dir = std::path::PathBuf::from(&config.paths.server_dir);
+    let steamapps = server_dir.join("steamapps");
+    let manifest = steamapps.join("appmanifest_2430930.acf");
+    let local_buildid = read_local_buildid(&manifest).map_err(|e| e.to_string())?;
+    let latest_buildid = read_remote_buildid(&config.paths.steam_cmd_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let needs_update = match (local_buildid, latest_buildid) {
+        (Some(l), Some(r)) => l < r,
+        (None, Some(_))    => true,
+        _                  => false,
+    };
+    Ok(ServerVersionInfo {
+        local_buildid,
+        latest_buildid,
+        needs_update,
+        server_dir: server_dir.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+async fn update_server(config: ServerConfig) -> Result<String, String> {
+    let installer = ark::installer::SteamCmdInstaller::new(
+        &config.paths.steam_cmd_dir,
+        &config.paths.server_dir,
+    );
+    use ark::installer::Installer;
+    installer.update().await
+        .map_err(|e| e.to_string())
+        .map(|_| "Update OK".to_string())
+}
+
+fn read_local_buildid(manifest: &std::path::Path) -> std::result::Result<Option<u64>, crate::error::Error> {
+    use crate::error::Error;
+    if !manifest.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(manifest).map_err(Error::IoError)?;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("\"buildid\"") {
+            let v = rest.split_whitespace().next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_matches(',');
+            if let Ok(n) = v.parse::<u64>() {
+                return Ok(Some(n));
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn read_remote_buildid(steam_cmd_dir: &str) -> std::result::Result<Option<u64>, crate::error::Error> {
+    use crate::error::Error;
+    use tokio::process::Command;
+    let exe = std::path::Path::new(steam_cmd_dir);
+    if !exe.exists() {
+        return Err(Error::ProcessError(format!(
+            "SteamCMD not found at {}",
+            steam_cmd_dir
+        )));
+    }
+    let cmd_path = if cfg!(windows) {
+        exe.join("steamcmd.exe")
+    } else {
+        exe.join("steamcmd.sh")
+    };
+    let output = Command::new(&cmd_path)
+        .args(["+login", "anonymous", "+app_info_print", "2430930", "+quit"])
+        .output()
+        .await
+        .map_err(|e| Error::ProcessError(format!("Failed to run SteamCMD: {}", e)))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout, stderr);
+    for line in combined.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("\"buildid\"") {
+            let v = rest.split_whitespace().next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_matches(',');
+            if let Ok(n) = v.parse::<u64>() {
+                if n > 0 {
+                    return Ok(Some(n));
+                }
+            }
+        }
+    }
+    Err(Error::ProcessError(format!(
+        "SteamCMD did not return a buildid. Output: {}",
+        combined
+    )))
 }
 
 #[tauri::command]
@@ -1845,8 +2131,34 @@ pub fn run() {
             // std::mem::forget prevents the destructor from running.
             std::mem::forget(tray);
 
+            // Wire the Stronghold plugin inside setup so we can use
+            // `app.path().app_local_data_dir()` for the salt file (per
+            // https://v2.tauri.app/plugin/stronghold/ example). The salt
+            // must persist across launches under the per-user app data dir,
+            // not in temp_dir which the OS may clear.
+            let salt_path = app
+                .path()
+                .app_local_data_dir()
+                .expect("app_local_data_dir should resolve on all desktop platforms")
+                .join("stronghold-salt.txt");
+            log::debug!("stronghold salt path: {salt_path:?}");
+            app.handle().plugin(
+                tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build()
+            )?;
+
+            // Auto-migrate any v1 plaintext `secret_store.toml` files into the
+            // OS keyring on first launch of 2.1.0 GA. Idempotent - safe to run
+            // every launch. See `secret_store_v2::migrate_secrets`.
+            match crate::plugins::secret_store_v2::migrate_secrets() {
+                Ok(n) if n > 0 => log::info!("migrated {n} secrets from v1 TOML into keyring"),
+                Ok(_) => log::debug!("secret migration: nothing to lift (keyring already primary)"),
+                Err(e) => log::warn!("secret migration failed (continuing with v1 fallback): {e}"),
+            }
+
             Ok(())
         })
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             // Config
             load_config,
@@ -1859,6 +2171,8 @@ pub fn run() {
             admin_token,
             rotate_admin_token,
             set_admin_feature_flag,
+            // Secret-store migration (P2): lift v1 TOML into OS keyring. Auto-run on startup.
+            migrate_secrets,
             // Plugin auth flows (v2.1) — Convex uses CLI bridge, not OAuth
             crate::plugins::convex::begin_convex_link,
             crate::plugins::convex::paste_convex_deploy_key,
@@ -1876,6 +2190,10 @@ pub fn run() {
             crate::plugins::pluginhub::enable_plugin,
             crate::plugins::pluginhub::disable_plugin,
             crate::plugins::pluginhub::plugin_registry_snapshot,
+            // Marketplace install state — operator chooses which plugins
+            // they want in their setup. Persisted in server-config.toml
+            // (`installed_plugins: Vec<String>`).
+            crate::plugins::pluginhub::set_plugin_installed,
             // Plugin runtime hooks (Session 9) — surfaces what each
             // plugin's start() should be doing right now.
             crate::plugins::runtime_hooks::runtime_status,
@@ -1944,6 +2262,12 @@ pub fn run() {
             // IP detection
             detect_ips,
             check_internet,
+            // Diagnostics & repair for the "advertises + IP connect OK but
+            // invisible in in-game Unofficial PC list" ASA symptom.
+            crate::ark::diagnostics::diagnose_server_list,
+            // Version sync (Steam app 2430930)
+            check_server_version,
+            update_server,
             // Tailscale wizard (v2.1, Network blocker #4)
             tailscale_installed,
             tailscale_download_url,

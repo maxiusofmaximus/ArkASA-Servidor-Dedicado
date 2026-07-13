@@ -4,7 +4,7 @@
 //! shape so the GUI can iterate uniformly: persistent secret-store,
 //! plus a status probe that surfaces admin counts and readiness.
 
-use crate::plugins::secret_store;
+use crate::plugins::secret_store_v2 as secret_store;
 use serde::Serialize;
 
 // ─── Signal ───────────────────────────────────────────────────────────────

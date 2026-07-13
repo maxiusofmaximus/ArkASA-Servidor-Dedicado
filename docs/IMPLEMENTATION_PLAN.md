@@ -363,7 +363,7 @@ Replace `tauri.conf.json`'s `app.security.csp: null` with the explicit object ba
     ]
   }
   ```
-  - Note `updater:default` and `stronghold:default` are added now (referenced by P6 and 6.2.3). They are not yet wired at runtime in P2 but the permissions exist.
+  - Note `stronghold:default` is added now (referenced by 6.2.3). `updater:default` is **deferred to P6** — adding a permission in `capabilities/main.json` for a plugin that is not yet in `Cargo.toml` causes a build-time panic from `tauri-build` ("Permission updater:default not found"). Verified 2026-07-13. The `updater:default` permission will be added together with `tauri-plugin-updater = "2"` (P6, §10.2).
 - In `tauri.conf.json` set `app.security.capabilities: ["main-capability"]` (string reference, not inline).
 - In `src-tauri/build.rs`, restrict which Tauri commands are reachable by which window using `AppManifest::commands`:
   ```rust
@@ -406,11 +406,15 @@ Replace `tauri.conf.json`'s `app.security.csp: null` with the explicit object ba
       tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build()
     )?;
     ```
+  - **Implementation notes (verified 2026-07-13)**: API kept **synchronous** (not `async fn`) to match v1's signatures so all 13 call sites compile unchanged. `keyring 4.x` with feature `v1` returns `Result<Entry, Error>` from `Entry::new`, so callers must chain `.and_then(|e| e.get_password())` or use `?` after `?` on the constructor. The `StoredSecret` JSON model from v1 is preserved verbatim — keyring `set_password` stores the JSON string, `get_password` parses it back; this keeps the v2 API a drop-in replacement without changing any `read`/`write` consumer code. Stronghold wiring uses `Builder::with_argon2(&salt_path)` **inside** the `setup(|app|)` closure (not in the builder chain) because `salt_path` requires `app.path()` which only exists inside `setup`. The salt file name is `stronghold-salt.txt` (not just `salt.txt`) to avoid collision with any third-party salt.
+  - **Test-store auto-init**: `ensure_test_store_for_test_run()` is invoked at the top of `read`, `write`, and `delete`. Under `cfg(test)` this lazily activates the in-memory `TestStore` the first time any plugin credential is touched, so pre-existing integration tests (convex `test_convex_deploy_persists_credentials`, vercel `test_vercel_deploy_one_click_persists_token`) do **not pollute the operator's real Windows Credential Manager** on a dev laptop. Under `cfg(not(test))` it is a no-op and never switches to the mock by accident.
+  - **Existing tests that called `std::fs::remove_file` on `secret_store::secret_path(...)`** for cleanup have been migrated to `secret_store::delete(...)` instead — v2 lives in keyring (or the in-memory test store auto-enabled in `cfg(test)`), so removing the TOML path leaves the credential behind and breaks the post-cleanup assertion. Found in `vercel/mod.rs` and `convex/mod.rs` test modules.
 - Wire `secret_store_v2` into `Builder::default()` **as a plugin** in `lib.rs` setup.
 - Migrate 35 call sites module-by-module: `use crate::plugins::secret_store;` → `use crate::plugins::secret_store_v2 as secret_store;`. The `as` alias keeps call-site signatures identical; no body change needed.
 - Add a `migrate_secrets` Tauri command that lifts all entries from the old TOML to keyring, and trigger it automatically on first launch of 2.1.0 GA if `secret_store.toml` exists.
 - Add 5 `#[test]`s: `read` miss, `read` hit, `write` → `read` round-trip, TOML → keyring migration, migration idempotence. Bring Rust test count from 145 to ≥ 150.
 - After all call sites migrated and tests green, **delete** `src-tauri/src/plugins/secret_store.rs` and remove the `secret_store.toml` reference in a separate sub-PR of P2.
+  - **P2.3d status (2026-07-13)**: deferred from P2 because (a) keeping `secret_store.rs` around until P3 is risk-free — no live caller remains, so the file is dead code; (b) deletes are easier to reason about in their own PR with a single git operation; (c) the file is left in place as the migration source for `migrate_secrets()` which is invoked on app setup. The deletion is now scheduled for the very first commit of P3, after the migration path has been exercised at least once on a real dev machine. The `pub mod secret_store;` declaration in `plugins/mod.rs` will be removed at that point, and `migrate_secrets()` will be simplified once the v1 file no longer exists.
 
 ### 6.3 Phase 2 gate
 

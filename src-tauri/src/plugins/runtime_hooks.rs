@@ -40,6 +40,7 @@
 //! reads, so disabled-credentials plugins don't crash.
 
 use crate::plugins::registry;
+use crate::config::schema::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -75,7 +76,7 @@ pub fn runtime_state_for(plugin_id: &str) -> PluginRuntimeState {
         "whatsapp" => {
             // The webhook route is added by http_api.rs when this
             // plugin is enabled. We just confirm secret-store has it.
-            if crate::plugins::secret_store::read("whatsapp").is_some()
+            if crate::plugins::secret_store_v2::read("whatsapp").is_some()
                 && has_required_fields("whatsapp", &["phone_number_id", "api_token", "webhook_secret"])
             {
                 PluginRuntimeState::Running
@@ -125,7 +126,7 @@ pub fn runtime_state_for(plugin_id: &str) -> PluginRuntimeState {
 }
 
 fn has_required_fields(plugin_id: &str, fields: &[&str]) -> bool {
-    if let Some(s) = crate::plugins::secret_store::read(plugin_id) {
+    if let Some(s) = crate::plugins::secret_store_v2::read(plugin_id) {
         fields.iter().all(|k| s.fields.contains_key(*k)
                                   && !s.fields.get(*k).map(|v| v.trim().is_empty()).unwrap_or(true))
     } else {
@@ -153,7 +154,7 @@ fn sshd_sidecar_alive(listen_port: u16) -> bool {
 /// plugin in one pass — used by UI and operator-side diagnostics.
 pub fn snapshot() -> Vec<(String, PluginRuntimeState)> {
     use crate::plugins::pluginhub;
-    pluginhub::list_plugin_catalog()
+    pluginhub::list_plugin_catalog(ServerConfig::default())
         .into_iter()
         .map(|v| {
             let id_for_state = v.id.clone();

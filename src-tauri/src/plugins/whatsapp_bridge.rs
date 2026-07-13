@@ -15,7 +15,7 @@
 //! whatsapp.rs module. Add/remove redactable.
 
 use crate::integrations::whatsapp::WhatsAppConfig;
-use crate::plugins::secret_store;
+use crate::plugins::secret_store_v2 as secret_store;
 use serde::Serialize;
 
 fn unix_now() -> i64 {
