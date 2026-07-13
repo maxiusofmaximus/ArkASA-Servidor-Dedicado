@@ -78,8 +78,41 @@ impl RconClient {
     pub async fn graceful_shutdown(&self) -> Result<(), String> {
         self.exec("saveworld").await?;
         tokio::time::sleep(Duration::from_secs(SAVE_GRACE_SECS)).await;
-        self.exec("doexit").await?;
-        Ok(())
+        self.exec("doexit").await.map(|_| ())
+    }
+
+    /// Hard kill the running ARK process image. Used as a fallback after
+    /// `doexit` so we never leave a zombie `.exe` window open when the
+    /// operator presses Stop. On Windows uses `taskkill /F /IM`, on Linux
+    /// uses `pkill -f` — same semantics as the launcher fallback in
+    /// `lib.rs::stop_server`.
+    pub async fn force_kill_image() -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let out = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", "ArkAscendedServer.exe"])
+                .creation_flags(0x08000000)
+                .output()
+                .map_err(|e| format!("taskkill spawn failed: {}", e))?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                // exit code 128 with "could not find" → nothing to kill, OK
+                if !stderr.to_lowercase().contains("could not find")
+                    && !stderr.to_lowercase().contains("not found")
+                {
+                    log::warn!("taskkill /F (image) → {}", stderr);
+                }
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", "ArkAscendedServer"])
+                .output();
+            Ok(())
+        }
     }
 }
 

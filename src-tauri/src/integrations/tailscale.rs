@@ -122,6 +122,17 @@ pub fn cgnat_suspect(
 ///
 /// Returns a structured `TailscaleStatus` so the UI can show the
 /// new IP, the hostname, and any stderr message.
+///
+/// `publicly_dns_label` semantics (we accept three shapes natively):
+///   - `None` or empty → no `--advertise-tags` (don't tag the node).
+///   - `"label-name"` → wraps to `tag:label-name`.
+///   - `"tag:label-name"` → pass through verbatim (operator who
+///     already understands Tailscale's tag taxonomy can write the
+///     raw form).
+/// `extra_tags` is a comma-separated list of additional
+/// `--advertise-tags` arguments; each is passed verbatim. The
+/// function caps the combined tag count at 8 to keep tailscale's
+/// CLI within reasonable args sizes.
 pub async fn tailscale_up(
     auth_key: &str,
     hostname: &str,
@@ -137,11 +148,11 @@ pub async fn tailscale_up(
     cmd.arg("up")
         .arg("--authkey").arg(auth_key)
         .arg("--hostname").arg(hostname);
-    if let Some(label) = publicly_dns_label {
-        if !label.trim().is_empty() {
-            // MagicDNS name becomes `<label>`
-            cmd.arg("--advertise-tags").arg(format!("tag:{}", label.trim()));
-        }
+
+    // Delegate tag normalisation to the dedicated helper so empty /
+    // whitespace-only / uppercase inputs collapse into the same shape.
+    if let Some(tag_arg) = tag_for_label(publicly_dns_label) {
+        cmd.arg("--advertise-tags").arg(tag_arg);
     }
     let child = cmd
         .stdout(std::process::Stdio::piped())
@@ -210,8 +221,28 @@ fn is_tailscale_ip(ip: &str) -> bool {
     let parts: Vec<&str> = ip.split('.').collect();
     if parts.len() != 4 { return false; }
     let a: u8 = parts[0].parse().unwrap_or(0);
+
     let b: u8 = parts[1].parse().unwrap_or(0);
     a == 100 && b >= 64 && b <= 127
+}
+
+/// Translate an operator-supplied label into a Tailscale
+/// `--advertise-tags` argument. Rules:
+///  - `None` or empty → `None` (no tag).
+///  - `"arkasa"` → `"tag:arkasa"`.
+///  - `"tag:arkasa"` → pass through verbatim.
+///  - `"tag:"` alone → `None`.
+///  - Whitespace is trimmed; uppercase `TAG:` is normalised to
+///    lowercase.
+pub fn tag_for_label(label: Option<&str>) -> Option<String> {
+    let raw = label?.trim();
+    if raw.is_empty() { return None; }
+    let lower = raw.to_lowercase();
+    if let Some(rest) = lower.strip_prefix("tag:") {
+        if rest.is_empty() { None } else { Some(rest.to_string()) }
+    } else {
+        Some(lower)
+    }
 }
 
 #[cfg(test)]

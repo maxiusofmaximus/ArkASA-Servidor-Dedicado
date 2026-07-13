@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+﻿use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -23,6 +23,17 @@ pub struct ServerConfig {
     pub pve: PveConfig,
     pub pvp: PvpConfig,
     pub advanced: AdvancedConfig,
+    /// **Apps-only install registry** — which marketplace plugins the
+    /// operator has chosen to install (Convex, Vercel, WhatsApp, Signal,
+    /// etc.). All plugins ship *as compiled-in defaults* in the binary,
+    /// but only the ones in this set are exposed in the Plugins tab
+    /// UI. We persist this in TOML so the operator's choice survives
+    /// restarts and follows the same backup pipeline as the rest of
+    /// `server-config.toml`.
+    ///
+    /// `BTreeSet` keeps TOML output deterministically sorted, which is
+    /// nice for diff review on backups.
+    pub installed_plugins: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,8 +97,56 @@ impl ConnectionEntry {
         }
     }
 
+    /// Returns the address verbatim — never strips a `:port` suffix on
+    /// read, so the UI keeps showing the user's mistake instead of
+    /// silently letting them think it's fine. The launcher's
+    /// `effective_ip()` strips ports for ARK's `-ip=` flag at the last
+    /// possible moment to keep the bind from breaking.
     pub fn effective_ip(&self) -> &str {
         self.address.trim()
+    }
+
+    /// True when the `address` looks like an IP:port pair (`1.2.3.4:7777`
+    /// or `[::1]:7777`) AND the entry is not a `PlayitTunnel` (the only
+    /// legitimate `:port` consumer — the playit.gg address format is
+    /// `host.gl.at.ply.gg:NNNNN`). DNS hostnames with a port are also
+    /// flagged because ARK's `-ip=` does not resolve them.
+    ///
+    /// Used by the Connection Manager UI to render an inline ⚠ below the
+    /// offending field, and by `NetworkConfig::effective_ip()` to strip
+    /// the port before emitting `-ip=<ip>` so ARK keeps binding.
+    pub fn has_invalid_port_suffix(&self) -> bool {
+        if matches!(self.conn_type, ConnectionType::PlayitTunnel) {
+            return false;
+        }
+        let a = self.address.trim();
+        if a.is_empty() { return false; }
+        // IPv4:port  →  1.2.3.4:7777
+        // IPv6:port  →  [::1]:7777
+        // DNS:port   →  example.com:7777  (we still flag — ARK won't resolve)
+        if let Some(host_part) = a.rsplit(':').next() {
+            // host_part is the bit after the last ':'.
+            // If it parses as a port number (1..65535), AND there was
+            // something before the ':', we treat it as a port suffix.
+            if host_part.parse::<u32>().map(|n| n >= 1 && n <= 65535).unwrap_or(false) {
+                let prefix = &a[..a.len() - host_part.len() - 1];
+                return !prefix.is_empty();
+            }
+        }
+        false
+    }
+
+    /// Returns the address with the `:port` suffix removed, if present
+    /// and the entry type shouldn't carry one. Use this in the launcher
+    /// path (`effective_ip`) so ARK's `-ip=` flag never receives a socket
+    /// string.
+    pub fn ip_without_port(&self) -> String {
+        if !self.has_invalid_port_suffix() {
+            return self.address.trim().to_string();
+        }
+        let a = self.address.trim();
+        let cut = a.rfind(':').unwrap_or(a.len());
+        a[..cut].trim().to_string()
     }
 }
 
@@ -107,13 +166,34 @@ pub struct NetworkConfig {
     /// name instead of relying on its position in `cluster_maps`. This guarantees
     /// TheIsland always uses 7777/27015/27020 even after Ragnarok has booted first.
     /// When false (legacy), preserves the previous order-of-arrival behaviour.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_fixed_ports")]
     pub fixed_port_assignment_per_map: bool,
     /// When true, skip the frontend "no internet" gate and let the operator
     /// launch servers offline (useful during local testing or CDN egress flakiness).
     /// Without this, an offline check is enforced to avoid silent crashes mid-boot.
     #[serde(default)]
     pub allow_start_without_internet: bool,
+    /// When true, the start flow first calls `update_server` so the local
+    /// ARK install always matches Steam's public buildid before players
+    /// can join. Skipped silently if `check_server_version` can't reach Steam.
+    #[serde(default)]
+    pub auto_update_before_start: bool,
+    /// **Cluster port failover** — runtime-only. When true and the cluster
+    /// has >1 maps, the start flow polls the primary map's UDP game port
+    /// for up to `cluster_failover_timeout_sec` seconds. If the primary
+    /// never binds its port, the next map claims the primary slot
+    /// (`ports_for_index(0)` instead of `ports_for_index(i)`).
+    ///
+    /// This prevents secondary maps from stealing consecutive slots — e.g.
+    /// Ragnarok booted while TheIsland crashed still ends up on slot 1
+    /// unless the operator intentionally gives up and reclaims.
+    #[serde(default = "default_false")]
+    pub cluster_failover_enabled: bool,
+    /// Seconds the launcher waits for the primary map to bind its UDP
+    /// game port before allowing the next map to claim its slot.
+    /// Min 5s, default 60s, max 600s.
+    #[serde(default = "default_failover_timeout")]
+    pub cluster_failover_timeout_sec: u64,
     // ── Connection Manager (v2 dynamic list) ───────────────────────────────────
     #[serde(default)]
     pub connection_entries: Vec<ConnectionEntry>,
@@ -128,16 +208,32 @@ pub struct NetworkConfig {
     pub server_ip: String,
 }
 
-fn default_true() -> bool { true }
+fn default_false() -> bool { false }
+fn default_failover_timeout() -> u64 { 60 }
+// ARK ASA's official clustering guide specifies *consecutive* ports
+// (Server 1 → 7777/7778/27015/27020, Server 2 → 7779/7780/27016/27021,
+// query out of Steam Browser silently drops non-consecutive ports above
+// 27019, and the EOS/browser list never registers bursts of hash ports).
+// Default to FALSE so first-launch lands on the official layout.
+fn default_fixed_ports() -> bool { false }
 
 impl NetworkConfig {
     /// Returns the IP string ARK receives as -ip=VALUE.
     /// Prioritizes the primary ConnectionEntry; falls back to legacy fields.
     /// Empty string → omit -ip flag (ARK binds all interfaces).
+    ///
+    /// **Sanitization:** if the operator typed an `IP:port` string into
+    /// the Manual / Local / Public entry (a common mistake), we strip the
+    /// `:port` suffix here so ARK's `-ip=` flag never receives a socket
+    /// string (which breaks the bind silently). The UI surfaces a yellow
+    /// ⚠ chip via `ConnectionEntry::has_invalid_port_suffix`; this is the
+    /// server-side safety net for the same condition. The only `conn_type`
+    /// that legitimately carries a port is `PlayitTunnel` (excluded by
+    /// `ip_without_port()` itself).
     pub fn effective_ip(&self) -> String {
         if let Some(primary) = self.connection_entries.iter().find(|e| e.is_primary) {
-            let ip = primary.effective_ip();
-            if !ip.is_empty() { return ip.to_string(); }
+            let ip = primary.ip_without_port();
+            if !ip.is_empty() { return ip; }
         }
         let resolved = match self.connection_method {
             ConnectionMethod::Tailscale => self.tailscale_ip.trim().to_string(),
@@ -414,6 +510,21 @@ pub struct AdvancedConfig {
     pub only_allow_specific_engrams: bool,
     pub auto_unlock_engrams: Vec<u32>,
     pub custom_config: HashMap<String, String>,
+    /** Auto-save interval (minutes) for the world save. `15.0` matches ARK's
+     * official default; operators raise it to reduce I/O spikes on big
+     * clusters and lower it for harder crash-recovery guarantees.
+     * `0.0` would force constant saves (avoid). */
+    pub auto_save_period_minutes: f32,
+    /** Global item stack size multiplier (ARK ASA). Default `1.0`. Use
+     * `2.0` for a "2× stacks" feel without per-item tweaking. Per-item
+     * overrides go in `Game.ini` via `item_stack_overrides`. */
+    pub item_stack_size_multiplier: f32,
+    /** Per-item stack overrides written into `Game.ini` as
+     * `ConfigOverrideItemMaxQuantity=(ItemClassString="…",Quantity=(MaxItemQuantity=N,bIgnoreMultiplier=True))`.
+     * Each entry must look like
+     * `PrimalItemConsumable_RawPrimeMeat_C=300` (item class → quantity).
+     * Empty by default; operator fills via Opciones → Inventario / Apilables. */
+    pub item_stack_overrides: HashMap<String, u32>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -442,28 +553,44 @@ impl ServerConfig {
 }
 
 impl NetworkConfig {
-    /// Legacy order-of-arrival port triplet. Kept for callers that don't have
-    /// access to the map id (e.g. simple status polling). Prefer
-    /// `ports_for_map_id(map)` in launcher paths so TheIsland always lands on
-    /// the same slot regardless of order-of-arrival.
-    pub fn ports_for_index(&self, i: usize) -> (u16, u16, u16) {
-        (
-            self.port       + (i as u16) * 2,
-            self.query_port + i as u16,
-            self.rcon_port  + i as u16,
-        )
+    /// **Quad-tuple** `(game, peer, query, rcon)` for the i-th cluster slot.
+    ///
+    /// *Game port* and *Peer port* are sequential (`peer = game + 1`) per the
+    /// official ARK ASA clustering guide — Steam/EOS use Peer for P2P
+    /// announcement, even though ARK infers it implicitly from `Port+1`.
+    ///
+    /// Legacy callers that only need three values can use
+    /// `ports_for_index3(i)` which trims `peer`.
+    pub fn ports_for_index(&self, i: usize) -> (u16, u16, u16, u16) {
+        let game  = self.port       + (i as u16) * 2;
+        let peer  = game + 1;
+        let query = self.query_port + i as u16;
+        let rcon  = self.rcon_port  + i as u16;
+        (game, peer, query, rcon)
     }
 
-    /// Stable, map-name-driven port triplet. **The source of truth** used by
-    /// the launcher so the same map always lands on the same ports (when
-    /// `fixed_port_assignment_per_map = true`).
-    pub fn ports_for_map_id(&self, map_id: &str) -> (u16, u16, u16) {
+    /// Back-compat triplet for callers that only care about (game, query, rcon).
+    pub fn ports_for_index3(&self, i: usize) -> (u16, u16, u16) {
+        let (g, _p, q, r) = self.ports_for_index(i);
+        (g, q, r)
+    }
+
+    /// Stable, map-name-driven **quad-tuple** `(game, peer, query, rcon)`.
+    /// **The source of truth** used by the launcher so the same map always
+    /// lands on the same ports (when `fixed_port_assignment_per_map = true`).
+    pub fn ports_for_map_id(&self, map_id: &str) -> (u16, u16, u16, u16) {
         let slot = Self::port_slot_for(map_id);
-        (
-            self.port       + slot * 2,
-            self.query_port + slot,
-            self.rcon_port  + slot,
-        )
+        let game  = self.port       + slot * 2;
+        let peer  = game + 1;
+        let query = self.query_port + slot;
+        let rcon  = self.rcon_port  + slot;
+        (game, peer, query, rcon)
+    }
+
+    /// Back-compat triplet for (game, query, rcon) when only the map id is known.
+    pub fn ports_for_map_id3(&self, map_id: &str) -> (u16, u16, u16) {
+        let (g, _p, q, r) = self.ports_for_map_id(map_id);
+        (g, q, r)
     }
 
     /// FNV-1a 32-bit hash of the ASCII bytes, modulo 254 to keep all derived
@@ -519,6 +646,7 @@ impl Default for ServerConfig {
             pve: PveConfig::default(),
             pvp: PvpConfig::default(),
             advanced: AdvancedConfig::default(),
+            installed_plugins: BTreeSet::new(),
         }
     }
 }
@@ -544,8 +672,11 @@ impl Default for NetworkConfig {
             rcon_port: 27020,
             server_platform: "ALL".to_string(),
             no_battleye: false,
-            fixed_port_assignment_per_map: true,
+            fixed_port_assignment_per_map: false,
             allow_start_without_internet: false,
+            auto_update_before_start: true,
+            cluster_failover_enabled: false,
+            cluster_failover_timeout_sec: 60,
             connection_entries: vec![entry],
             connection_method: ConnectionMethod::Manual,
             tailscale_ip: String::new(),
@@ -820,6 +951,17 @@ impl Default for AdvancedConfig {
             only_allow_specific_engrams: false,
             auto_unlock_engrams: vec![],
             custom_config: HashMap::new(),
+            // Default matches ARK ASA's hardcoded `AutoSavePeriodMinutes=15`.
+            // Operators who see lag spikes during saveworld can raise this to
+            // 30 or 60 minutes; those wanting crash-safety granularity drop
+            // it to 5. `0.0` is allowed (constant saves) but rarely useful.
+            auto_save_period_minutes: 15.0,
+            // Default `1.0` preserves ARK stock stack sizes. Operators who
+            // want everything 2× can flip to `2.0` from Opciones → Inventario.
+            item_stack_size_multiplier: 1.0,
+            // No per-item overrides by default — operators add them via
+            // Opciones → Inventario → "Apilables custom por recurso" table.
+            item_stack_overrides: HashMap::new(),
         }
     }
 }

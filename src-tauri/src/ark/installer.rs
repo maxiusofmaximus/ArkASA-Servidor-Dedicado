@@ -43,6 +43,16 @@ impl SteamCmdInstaller {
         for arg in args {
             cmd.arg(arg);
         }
+        // Windows: SteamCMD is a console app. Without `CREATE_NO_WINDOW`
+        // (0x08000000) it pops a black CMD box every time we update.
+        // Microsoft Learn — Process Creation Flags:
+        //   https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+        // On Linux there is no equivalent, so we just inherit stdio.
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
 
         let output = cmd
             .output()

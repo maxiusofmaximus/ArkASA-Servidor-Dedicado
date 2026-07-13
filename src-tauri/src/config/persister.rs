@@ -256,6 +256,38 @@ impl ConfigPersister {
             s.push_str(&format!("{}={}\n", k, v));
         }
 
+        // ── ItemStackSizeMultiplier (Game.ini runtime copy) ──────────
+        // This is the global stack-size scalar that the
+        // [/Script/ShooterGame.ShooterGameMode] section consumes at
+        // runtime. We replicate it here so the value the operator sets
+        // in Opciones actually takes effect (without it, ARK ignores any
+        // CustomConfig override of "ItemStackSizeMultiplier").
+        s.push_str(&format!("\n[/Script/ShooterGame.ShooterGameMode]\n"));
+        s.push_str(&format!("ItemStackSizeMultiplier={}\n", adv.item_stack_size_multiplier.max(0.0)));
+
+        // ── Per-item stack overrides ─────────────────────────────────
+        // Each entry in `item_stack_overrides` becomes one
+        // ConfigOverrideItemMaxQuantity line. We emit `bIgnoreMultiplier=True`
+        // so the operator picks the exact stack size they want for that
+        // resource (e.g. 600 for prime meat) regardless of the global
+        // multiplier above. This is exactly the pattern documented in the
+        // ark.wiki.gg Server configuration → Game.ini → Item related
+        // section.
+        if !adv.item_stack_overrides.is_empty() {
+            s.push_str("\n; Per-item stack overrides (operator-controlled)\n");
+            // Keep output deterministically sorted so two operators running
+            // the app at the same time don't generate diff-only churn in
+            // version control.
+            let mut entries: Vec<_> = adv.item_stack_overrides.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            for (class_str, qty) in entries {
+                s.push_str(&format!(
+                    "ConfigOverrideItemMaxQuantity=(ItemClassString=\"{}\",Quantity=(MaxItemQuantity={},bIgnoreMultiplier=True))\n",
+                    class_str, qty
+                ));
+            }
+        }
+
         s
     }
 
@@ -271,6 +303,14 @@ impl ConfigPersister {
         let m   = &config.multipliers;
 
         let mut s = String::new();
+
+        // ── [Internationalization] ──────────────────────────────────────
+        // ASA requires this section for the server to register with the
+        // EOS/Epic in-game browser list. Without it the server advertises
+        // and accepts direct-IP connections but never appears in the
+        // "Unofficial PC" list (silent registration failure).
+        s.push_str("[Internationalization]\n");
+        s.push_str("Culture=en\n\n");
 
         // ── [ServerSettings] ─────────────────────────────────────────
         s.push_str("[ServerSettings]\n");
@@ -325,9 +365,18 @@ impl ConfigPersister {
         s.push_str("AlwaysAllowStructurePickup=True\n");
         s.push_str("StructurePickupHoldDuration=0.5\n");
         s.push_str("StructurePickupTimeAfterPlacement=30\n");
-        s.push_str("AutoSavePeriodMinutes=15\n");
+        // AutoSavePeriodMinutes is operator-controlled in Opciones → Mundo →
+        // Auto-guardado del mundo. Default 15.0 (ARK ASA official). Values
+        // <1 disable saveworld throttling — operators should not blindly
+        // pick 0; instead raise to 30 / 60 for I/O spike avoidance.
+        s.push_str(&format!("AutoSavePeriodMinutes={}\n", adv.auto_save_period_minutes.max(0.0)));
         s.push_str("ShowMapPlayerLocation=True\n");
-        s.push_str("ItemStackSizeMultiplier=1\n");
+        // ItemStackSizeMultiplier is the global stock-size scalar; we apply
+        // it here in [ServerSettings] and ALSO need it (with a possibly
+        // different value) in [/Script/ShooterGame.ShooterGameMode] for
+        // ARK's runtime to consume. Per-item overrides go to Game.ini via
+        // ConfigOverrideItemMaxQuantity below.
+        s.push_str(&format!("ItemStackSizeMultiplier={}\n", adv.item_stack_size_multiplier.max(0.0)));
         s.push_str("AllowAnyoneBabyImprintCuddle=False\n");
         s.push_str("RandomSupplyCratePoints=False\n");
         s.push_str(&format!("TheMaxStructuresInRange={}\n", config.performance.max_structure_in_range));

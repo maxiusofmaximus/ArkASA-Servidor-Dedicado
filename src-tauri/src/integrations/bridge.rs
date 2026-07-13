@@ -51,7 +51,7 @@ async fn start_instance_inner(config: &ServerConfig, map_index: usize) -> Result
         ));
     }
     let args = build_launch_args(config, &map, map_index);
-    let (game_port, _, _) = config.network.ports_for_index(map_index);
+    let (game_port, _peer_port, _query_port, _rcon_port) = config.network.ports_for_index(map_index);
 
     let mut cmd = Command::new(&exe);
     cmd.arg(&args.url_params);
@@ -99,7 +99,7 @@ async fn stop_instance_inner(config: &ServerConfig, map_index: usize) -> Result<
     let map_id = maps[map_index].clone();
     let label = map_display_label(&map_id);
     let password = &config.identification.admin_password;
-    let (_, _, rcon_port) = config.network.ports_for_index(map_index);
+    let (_, _, _, rcon_port) = config.network.ports_for_index(map_index);
     let client = RconClient::new(rcon_port, password.as_str());
 
     match client.graceful_shutdown().await {
@@ -137,7 +137,7 @@ async fn start_full_cluster_inner(
             raw_map.trim().to_string()
         };
         let args = build_launch_args(config, &map, i);
-        let (game_port, _, _) = config.network.ports_for_index(i);
+        let (game_port, _peer_port, _query_port, _rcon_port) = config.network.ports_for_index(i);
 
         let mut cmd = Command::new(&exe);
         cmd.arg(&args.url_params);
@@ -201,7 +201,7 @@ async fn stop_full_cluster_inner(
     let mut failed: Vec<String> = vec![];
 
     for (i, map) in maps.iter().enumerate() {
-        let (_, _, rcon_port) = config.network.ports_for_index(i);
+        let (_, _, _, rcon_port) = config.network.ports_for_index(i);
         let label = map.trim_end_matches("_WP");
         let client = RconClient::new(rcon_port, password.as_str());
 
@@ -239,7 +239,7 @@ async fn status_inner(config: &ServerConfig) -> Result<RouterOutcome, RouterErro
     let mut any_running = false;
 
     for (i, map_id) in maps.iter().enumerate() {
-        let (_, _, rcon_port) = config.network.ports_for_index(i);
+        let (_, _, _, rcon_port) = config.network.ports_for_index(i);
         let label = map_display_label(map_id);
         let running = is_tcp_port_open_quiet(rcon_port);
         if running {

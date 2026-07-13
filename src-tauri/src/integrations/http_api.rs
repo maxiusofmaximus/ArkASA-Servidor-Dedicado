@@ -531,6 +531,38 @@ mod tests {
         // Length mismatch through first guard
         assert!(!constant_time_eq(b"abc", b"abcd"));
     }
+
+    #[test]
+    fn parse_wechat_xml_cdata_removes_wrapper() {
+        let xml = r#"<xml>
+            <ToUserName>corp_xxx</ToUserName>
+            <FromUserName>user_yyy</FromUserName>
+            <CreateTime>1700000000</CreateTime>
+            <MsgType>text</MsgType>
+            <Content><![CDATA[this is 🦊 content]]></Content>
+            <MsgId>msg_zzz</MsgId>
+        </xml>"#;
+        let v = super::parse_wechat_xml_loose(xml);
+        assert_eq!(v["ToUserName"], "corp_xxx");
+        assert_eq!(v["Content"], "this is 🦊 content");
+        assert_eq!(v["MsgType"], "text");
+    }
+
+    #[test]
+    fn parse_wechat_xml_xml_decl_stripped() {
+        let xml = r#"<?xml version="1.0"?>
+            <xml><Content>plain</Content></xml>"#;
+        let v = super::parse_wechat_xml_loose(xml);
+        assert_eq!(v["Content"], "plain");
+    }
+
+    #[test]
+    fn parse_wechat_xml_missing_tag_returns_null() {
+        let xml = "<xml><ToUserName>onlyhere</ToUserName></xml>";
+        let v = super::parse_wechat_xml_loose(xml);
+        assert!(v["Content"].is_null(),
+            "missing tag should be null in JSON, got {:?}", v["Content"]);
+    }
 }
 
 /// Tiny pull-style XML→flat-field extractor for WeChat Work.
@@ -541,15 +573,36 @@ mod tests {
 /// payload uses an outer wrapper that's escaped, this is a no-op
 /// — the operator wires an XML adapter in lib::run() to pre-parse
 /// the body into JSON before forwarding here.
+/// WeChat Work CDATA-aware tag extractor: pulls either
+/// `<tag>text</tag>` or `<tag><![CDATA[text]]></tag>`. Anything
+/// else falls back to `None` so the rest of the handshake can
+/// fall back to the JSON-pre-parsed path.
 fn parse_wechat_xml_loose(xml: &str) -> serde_json::Value {
-    let tag = |t: &str| {
-        let open = format!("<{t}>");
+    // strip OUTER <?xml ...?> declaration if present
+    let xml = if xml.trim_start().starts_with("<?xml") {
+        if let Some(end) = xml.find("?>") {
+            xml[end + 2..].to_string()
+        } else {
+            xml.to_string()
+        }
+    } else {
+        xml.to_string()
+    };
+    let tag = |t: &str| -> Option<String> {
+        let open  = format!("<{t}>");
         let close = format!("</{t}>");
+        // Plain text between tags
         if let Some(i) = xml.find(&open) {
             let j = i + open.len();
             if let Some(k) = xml[j..].find(&close) {
-                let v = &xml[j..j + k];
-                return Some(v.to_string());
+                let inner = &xml[j..j + k];
+                if inner.starts_with("<![CDATA[")
+                    && inner.ends_with("]]>")
+                {
+                    // Strip CDATA wrapper
+                    return Some(inner[9..inner.len() - 3].to_string());
+                }
+                return Some(inner.to_string());
             }
         }
         None

@@ -29,7 +29,8 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
     let is_cluster = maps.len() > 1;
 
     // ── Port assignment ───────────────────────────────────────────────────────
-    let (game_port, query_port, rcon_port) = if config.network.fixed_port_assignment_per_map {
+    // `(game, peer, query, rcon)` — peer is `game+1` per ARK ASA convention.
+    let (game_port, _peer_port, query_port, rcon_port) = if config.network.fixed_port_assignment_per_map {
         config.network.ports_for_map_id(map)
     } else {
         config.network.ports_for_index(instance_idx)
@@ -52,9 +53,16 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
     if !config.identification.server_password.is_empty() {
         url.push_str(&format!("?ServerPassword={}", config.identification.server_password));
     }
+    // ServerPlatform is mandatory in ASA so the server registers in the
+    // EOS/Steam browser. Default to ALL for crossplay if operator hasn't set it.
+    let platform = if config.network.server_platform.trim().is_empty() {
+        "ALL".to_string()
+    } else {
+        config.network.server_platform.trim().to_string()
+    };
     url.push_str(&format!(
-        "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}",
-        config.gameplay.max_players, game_port, query_port, rcon_port,
+        "?MaxPlayers={}?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?ServerPlatform={}",
+        config.gameplay.max_players, game_port, query_port, rcon_port, platform,
     ));
 
     // ── Additional CLI flags ──────────────────────────────────────────────────
@@ -68,6 +76,9 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
         "-servergamelog".to_string(),
         "-NoTransferFromFiltering".to_string(),
         format!("-WinLiveMaxPlayers={}", config.gameplay.max_players),
+        // ARK ASA needs the platform flag at the CLI level too — some Steam
+        // handshake paths ignore the INI value during early boot.
+        format!("-ServerPlatform={}", platform),
     ];
     if config.network.no_battleye {
         flags.push("-NoBattlEye".to_string());

@@ -26,6 +26,7 @@ pub mod http_api;
 pub mod http_commands;
 pub mod identity;
 pub mod local_provision;
+pub mod plugin_gateway;
 pub mod receipt_emit;
 pub mod signal;
 pub mod slack;
