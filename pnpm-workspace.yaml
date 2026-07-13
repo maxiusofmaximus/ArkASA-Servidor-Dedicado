@@ -3,5 +3,9 @@ packages:
   - 'web'
   - 'convex'
   - 'packages/*'
+
+# Packages explicitly approved to run postinstall/build scripts.
+# Schema: map of <package-name>: true|false
+# See https://pnpm.io/settings#allowbuilds
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true
