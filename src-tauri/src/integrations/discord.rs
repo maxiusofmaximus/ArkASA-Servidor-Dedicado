@@ -76,6 +76,15 @@ impl DiscordConfig {
 /// Gateway. Matched numerically (1, 7, 9, etc.) so the docs/cargo don't
 /// warn on every constant. See Discord spec:
 /// https://discord.com/developers/docs/topics/opcodes-and-status-codes
+///
+/// The Deserialize structs below carry `#[allow(dead_code)]` on fields that
+/// Discord includes in the gateway frame but we don't act on (we only need
+/// `MESSAGE_CREATE` for the bridging logic and `READY` to confirm session
+/// start). Keeping the fields parsed (rather than skipping them at the
+/// serde layer) makes it trivial to wire a future "log raw frames for
+/// debug" feature or to start consuming `guild_id` for filtering without
+/// a binding refactor. P3.2 audit (IMPLEMENTATION_PLAN.md §7.2.2): kept
+/// with rationale.
 
 /// Minimal dispatch payload — we only care about MESSAGE_CREATE and READY.
 #[derive(Debug, Deserialize)]

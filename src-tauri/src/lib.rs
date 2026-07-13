@@ -263,6 +263,10 @@ struct CfMod {
     categories:     Option<Vec<CfCategory>>,
     logo:           Option<CfLogo>,
     slug:           Option<String>,
+    /// Field part of the CurseForge API envelope; unused today but kept so a
+    /// future feature (e.g. listing available update files) can read it via
+    /// the existing serde::Deserialize pass without a follow-up audit.
+    /// P3.2 audit (IMPLEMENTATION_PLAN.md §7.2.1): kept with rationale.
     #[allow(dead_code)]
     latest_files:   Option<Vec<CfLatestFile>>,
 }
@@ -277,6 +281,9 @@ struct CfLogo { thumbnail_url: Option<String> }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CfLatestFile {
+    /// Field part of the CurseForge API envelope; unused today but kept for
+    /// forward-compat with a "show compatible game versions" UI.
+    /// P3.2 audit (IMPLEMENTATION_PLAN.md §7.2.1): kept with rationale.
     #[allow(dead_code)]
     game_versions: Option<Vec<String>>,
 }

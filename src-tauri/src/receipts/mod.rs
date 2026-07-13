@@ -34,6 +34,10 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// Stringify this stage for log lines, ADR documentation or future
+    /// receipt-renderers that walk the pipeline in textual form. Unused
+    /// today because the receipt serializer uses the `Stage` enum directly.
+    /// P3.2 audit (IMPLEMENTATION_PLAN.md §7.2.2): kept with rationale.
     #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
