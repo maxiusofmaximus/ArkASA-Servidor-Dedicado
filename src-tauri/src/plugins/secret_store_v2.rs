@@ -215,7 +215,22 @@ pub fn delete(plugin_id: &str) -> Result<(), String> {
 /// Migrate every TOML file under `plugin_storage_dir()` into the keyring.
 /// Returns the number of plugins migrated. Idempotent: running twice returns
 /// 0 the second time because the TOML files are deleted on the first pass.
+///
+/// `plugin_storage_dir()` is shared with `registry.rs`'s `registry.toml`
+/// (which serializes `RegistryFile { enabled, disabled }`, not a
+/// `StoredSecret`). When the deserializer encounters `registry.toml` as
+/// `StoredSecret`, serde silently accepts the unknown fields and returns
+/// `StoredSecret::default()` because both of its fields are
+/// #[serde(flatten)]-free optional defaults. **Without explicit
+/// filtering, every successful app launch lifts `registry.toml` into the
+/// keyring and deletes it, resetting the operator's enabled/disabled set.**
+/// The deny-list below is the minimum set needed for today; future plugins
+/// that share `plugin_storage_dir()` with their own metadata files MUST be
+/// added here or refactor `plugin_storage_dir()` to a non-shared location.
 pub fn migrate_secrets() -> Result<usize, String> {
+    /// Filenames that live in `plugin_storage_dir()` but are NOT per-plugin
+    /// secrets and must survive `migrate_secrets()` untouched.
+    const NON_SECRET_FILES: &[&str] = &["registry.toml"];
     let dir = super::plugin_storage_dir();
     if !dir.exists() {
         return Ok(0);
@@ -225,6 +240,15 @@ pub fn migrate_secrets() -> Result<usize, String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+            continue;
+        }
+        // Skip files that legitimately live in plugin_storage_dir() but are
+        // not per-plugin secrets (see the function-level docstring).
+        let stem_or_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if NON_SECRET_FILES.contains(&stem_or_name) {
             continue;
         }
         let plugin_id = match path.file_stem().and_then(|s| s.to_str()) {
