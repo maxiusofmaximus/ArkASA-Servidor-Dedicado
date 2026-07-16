@@ -42,6 +42,7 @@ def configure_render() -> None:
     # Blender 5.2 renders an image sequence. FFmpeg encodes it afterwards;
     # retaining frames makes the long render recoverable and inspectable.
     scene.render.image_settings.file_format = "PNG"
+    scene.render.film_transparent = False
     scene.render.filepath = str(FRAME_PREFIX)
     bpy.ops.wm.save_as_mainfile(filepath=str(SCENE_PATH))
 
@@ -69,7 +70,7 @@ def main() -> None:
                 "-i",
                 str(FRAME_DIR / "ark_orbital_%04d.png"),
                 "-filter_complex",
-                "[0:v]split=2[base][blur];[blur]gblur=sigma=10[glow];[base][glow]blend=all_mode=screen:all_opacity=0.42[video]",
+                "[0:v]format=rgba,premultiply=inplace=1,format=rgb24,split=2[base][source];[source]curves=all='0/0 0.35/0 0.62/0.04 0.82/0.8 1/1',gblur=sigma=7[glow];[base][glow]blend=all_mode=screen:all_opacity=0.45,format=rgb24[video]",
                 "-map",
                 "[video]",
                 "-c:v",

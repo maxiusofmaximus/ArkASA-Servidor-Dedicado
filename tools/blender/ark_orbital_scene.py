@@ -66,12 +66,30 @@ def muted_emission_material(
 
 
 def planet_material() -> bpy.types.Material:
+    """A low-contrast procedural surface that can visibly rotate in shadow."""
     material = bpy.data.materials.new("Planet obsidian")
     material.use_nodes = True
-    principled = material.node_tree.nodes.get("Principled BSDF")
-    principled.inputs["Base Color"].default_value = (0.001, 0.006, 0.014, 1)
-    principled.inputs["Metallic"].default_value = 0.48
-    principled.inputs["Roughness"].default_value = 0.7
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    principled = nodes.get("Principled BSDF")
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 2.35
+    noise.inputs["Detail"].default_value = 6.0
+    noise.inputs["Roughness"].default_value = 0.72
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].position = 0.28
+    ramp.color_ramp.elements[0].color = (0.00015, 0.00055, 0.0012, 1)
+    ramp.color_ramp.elements[1].position = 0.76
+    ramp.color_ramp.elements[1].color = (0.011, 0.028, 0.06, 1)
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.28
+    bump.inputs["Distance"].default_value = 0.13
+    links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], principled.inputs["Base Color"])
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], principled.inputs["Normal"])
+    principled.inputs["Metallic"].default_value = 0.22
+    principled.inputs["Roughness"].default_value = 0.78
     return material
 
 
@@ -165,7 +183,7 @@ def add_matrix_cloud(
         # Nodes occupy a thick, imperfect shell. The depth variation makes
         # parts of the matrix disappear behind the planet and each other.
         angle = center_angle + random.triangular(-angular_width, angular_width, 0.0)
-        radial = random.triangular(3.25, 5.05, 4.25)
+        radial = random.triangular(3.72, 4.92, 4.34)
         point = ring_point(
             angle,
             radial,
@@ -177,7 +195,7 @@ def add_matrix_cloud(
             f"{name}_node_{index:03d}",
             point,
             palette[index % len(palette)],
-            random.uniform(0.017, 0.048),
+            random.uniform(0.012, 0.036),
             parent,
         )
 
@@ -193,12 +211,12 @@ def add_matrix_cloud(
             key=lambda item: item[0],
         )
         for distance, other_index, other in neighbours[:2]:
-            if distance < 0.75 and random.random() > 0.26:
+            if distance < 0.64 and random.random() > 0.2:
                 add_curve(
                     f"{name}_link_{index:03d}_{other_index:03d}",
                     [point, other],
                     palette[(index + other_index) % len(palette)],
-                    0.0028,
+                    0.0015,
                     parent,
                 )
 
@@ -226,9 +244,9 @@ def add_energy_cluster(
 
     # Dense, uneven crystals emulate the active portions of the reference
     # matrix. Their local depth makes the field feel layered in motion.
-    for index in range(72):
+    for index in range(116):
         theta = random.uniform(0, math.tau)
-        distance = random.triangular(0.012, 0.58, 0.11)
+        distance = random.triangular(0.012, 0.78, 0.15)
         local_position = Vector(
             (
                 math.cos(theta) * distance,
@@ -250,6 +268,11 @@ def add_energy_cluster(
         shard.rotation_euler = (random.random() * math.tau, random.random() * math.tau, random.random() * math.tau)
         shard.data.materials.append(palette[index % len(palette)])
         shard.parent = swarm
+        if index % 4 == 0:
+            base_scale = shard.scale.copy()
+            for frame, multiplier in ((1, 1.0), (121, random.uniform(0.25, 1.8)), (241, random.uniform(0.3, 1.65)), (360, 1.0)):
+                shard.scale = base_scale * multiplier
+                shard.keyframe_insert("scale", frame=frame)
 
     # Bright connectors make the swarm read as an electrically active matrix.
     for index in range(10):
@@ -275,6 +298,9 @@ def add_energy_cluster(
         swarm.scale = (1.0, 1.0, 1.0) if frame in (1, 360) else (1.18, 1.18, 1.18)
         swarm.keyframe_insert("location", frame=frame)
         swarm.keyframe_insert("scale", frame=frame)
+    for frame, rotation in ((1, (0.0, 0.0, 0.0)), (121, (0.14, -0.18, 0.34)), (241, (-0.16, 0.13, -0.27)), (360, (0.0, 0.0, 0.0))):
+        swarm.rotation_euler = rotation
+        swarm.keyframe_insert("rotation_euler", frame=frame)
 
 
 def point_camera(camera: bpy.types.Object, target: Vector) -> None:
@@ -289,6 +315,9 @@ def configure_scene() -> None:
     scene.render.resolution_y = 1080
     scene.render.resolution_percentage = 50
     scene.render.image_settings.file_format = "PNG"
+    # The background must be baked into RGB. Leaving alpha enabled made the
+    # post-process glow contaminate otherwise black space during H.264 export.
+    scene.render.film_transparent = False
     scene.render.filepath = str(OUTPUT_DIR / "ark_orbital_preview.png")
     scene.render.fps = FPS
     scene.frame_start = 1
@@ -324,6 +353,12 @@ def build_scene() -> None:
     planet = bpy.context.object
     planet.name = "Obsidian planet"
     planet.data.materials.append(planet_material())
+    # A full revolution makes the procedural relief move beneath the fixed
+    # rim lighting and closes exactly when the video loops.
+    planet.rotation_euler = (0.0, math.radians(9), 0.0)
+    planet.keyframe_insert("rotation_euler", frame=1)
+    planet.rotation_euler = (0.0, math.radians(369), 0.0)
+    planet.keyframe_insert("rotation_euler", frame=360)
 
     # Broken lateral crescents rather than a complete luminous outline.
     for name, start, end in (
@@ -351,10 +386,12 @@ def build_scene() -> None:
 
     # Four imperfect clouds leave large empty areas. This reads as a layered
     # planetary network rather than a thin ring around a logo.
-    add_matrix_cloud("upper left matrix", math.radians(142), math.radians(48), 88, [muted_violet, muted_magenta, muted_cyan], 1)
-    add_matrix_cloud("upper right matrix", math.radians(43), math.radians(38), 68, [muted_cyan, muted_violet, muted_magenta], 2)
-    add_matrix_cloud("lower left matrix", math.radians(232), math.radians(44), 76, [muted_magenta, muted_violet, muted_cyan], 3)
-    add_matrix_cloud("lower right matrix", math.radians(317), math.radians(34), 58, [muted_violet, muted_magenta, muted_cyan], 4)
+    add_matrix_cloud("upper left matrix", math.radians(142), math.radians(48), 108, [muted_violet, muted_magenta, muted_cyan], 1)
+    add_matrix_cloud("upper right matrix", math.radians(43), math.radians(38), 82, [muted_cyan, muted_violet, muted_magenta], 2)
+    add_matrix_cloud("lower left matrix", math.radians(232), math.radians(44), 96, [muted_magenta, muted_violet, muted_cyan], 3)
+    add_matrix_cloud("lower right matrix", math.radians(317), math.radians(34), 74, [muted_violet, muted_magenta, muted_cyan], 4)
+    add_matrix_cloud("western matrix veil", math.radians(185), math.radians(37), 74, [muted_violet, muted_magenta, muted_cyan], 5)
+    add_matrix_cloud("eastern matrix veil", math.radians(-4), math.radians(30), 60, [muted_cyan, muted_violet, muted_magenta], 6)
     add_energy_cluster("upper left energy field", math.radians(133), math.radians(22), [magenta, violet, cyan], 1)
     add_energy_cluster("right energy field", math.radians(-2), math.radians(25), [cyan, violet, magenta], 2)
     add_energy_cluster("lower left energy field", math.radians(237), math.radians(20), [violet, magenta, cyan], 3)
