@@ -106,12 +106,15 @@ def add_curve(
     curve.resolution_u = 2
     curve.bevel_depth = bevel
     curve.bevel_resolution = 2
-    spline = curve.splines.new("NURBS")
+    # Closed lattice cells need exact planar sides. Motion paths retain NURBS
+    # interpolation, while a cyclic cell is rendered as a true polygon.
+    spline = curve.splines.new("POLY" if cyclic else "NURBS")
     spline.points.add(len(points) - 1)
     for point, coordinate in zip(spline.points, points):
         point.co = (*coordinate, 1.0)
-    spline.order_u = min(3, len(points))
-    spline.use_endpoint_u = not cyclic
+    if not cyclic:
+        spline.order_u = min(3, len(points))
+        spline.use_endpoint_u = True
     spline.use_cyclic_u = cyclic
     curve.materials.append(material)
     obj = bpy.data.objects.new(name, curve)
@@ -230,6 +233,81 @@ def add_matrix_cloud(
     parent.keyframe_insert("rotation_euler", frame=360)
 
 
+def add_dual_geodesic_lattice(
+    radius: float,
+    palette: list[bpy.types.Material],
+    muted_material: bpy.types.Material,
+) -> bpy.types.Object:
+    """Create the pentagon/hexagon dual of an icosphere as a single shell.
+
+    An icosphere at subdivision three has 162 vertices. Its dual therefore
+    has 12 pentagons and 150 hexagons: a dense closed-cell topology that
+    matches the static reference without becoming a random triangular graph.
+    """
+    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=3, radius=1.0)
+    source = bpy.context.object
+    mesh = source.data
+    parent = bpy.data.objects.new("Dual geodesic matrix", None)
+    bpy.context.collection.objects.link(parent)
+    parent.location = (0.0, 2.4, -0.42)
+
+    face_centers: list[Vector] = []
+    faces_by_vertex: list[list[int]] = [[] for _ in mesh.vertices]
+    for face_index, face in enumerate(mesh.polygons):
+        center = sum((mesh.vertices[index].co for index in face.vertices), Vector()) / len(face.vertices)
+        face_centers.append(center.normalized())
+        for vertex_index in face.vertices:
+            faces_by_vertex[vertex_index].append(face_index)
+
+    random.seed(902)
+    active_angles = (math.radians(136), math.radians(3), math.radians(230), math.radians(303))
+    for vertex_index, vertex in enumerate(mesh.vertices):
+        normal = vertex.co.normalized()
+        tangent_seed = Vector((0, 0, 1)) if abs(normal.z) < 0.88 else Vector((1, 0, 0))
+        tangent = normal.cross(tangent_seed).normalized()
+        bitangent = normal.cross(tangent).normalized()
+
+        ordered_centers = sorted(
+            (face_centers[index] for index in faces_by_vertex[vertex_index]),
+            key=lambda point: math.atan2(point.dot(bitangent), point.dot(tangent)),
+        )
+        # Project polygon corners slightly outward to avoid z-fighting and
+        # preserve a clean, illuminated honeycomb outline.
+        points = [point * radius for point in ordered_centers]
+        angle = math.atan2(normal.z, normal.x) % math.tau
+        distance_to_active = min(abs((angle - sector + math.pi) % math.tau - math.pi) for sector in active_angles)
+        active = distance_to_active < math.radians(25) and random.random() > 0.34
+        material = palette[vertex_index % len(palette)] if active else muted_material
+        bevel = 0.008 if active else 0.0032
+        cell = add_curve(
+            f"dual_cell_{vertex_index:03d}_{'pentagon' if len(points) == 5 else 'hexagon'}",
+            points,
+            material,
+            bevel,
+            parent,
+            cyclic=True,
+        )
+        # A subtle phase shift prevents all active cells from pulsing together.
+        if active:
+            cell.scale = (0.985, 0.985, 0.985)
+            cell.keyframe_insert("scale", frame=1)
+            cell.scale = (1.025, 1.025, 1.025)
+            cell.keyframe_insert("scale", frame=121 + (vertex_index % 36))
+            cell.scale = (0.99, 0.99, 0.99)
+            cell.keyframe_insert("scale", frame=241 + (vertex_index % 28))
+            cell.scale = (0.985, 0.985, 0.985)
+            cell.keyframe_insert("scale", frame=360)
+
+    bpy.data.objects.remove(source, do_unlink=True)
+    # A single, full rotation gives the structure spherical coherence and
+    # returns to the identical image at the loop boundary.
+    parent.rotation_euler = (0.0, math.radians(-12), 0.0)
+    parent.keyframe_insert("rotation_euler", frame=1)
+    parent.rotation_euler = (0.0, math.radians(348), 0.0)
+    parent.keyframe_insert("rotation_euler", frame=360)
+    return parent
+
+
 def add_energy_cluster(
     name: str,
     center_angle: float,
@@ -294,7 +372,9 @@ def add_energy_cluster(
         (360, center_angle),
     )
     for frame, angle in keyframes:
-        swarm.location = ring_point(angle, 4.27, 3.63, 0.32)
+        # Active fragments inhabit the same depth as the geodesic shell rather
+        # than floating in front of it as independent decorative clusters.
+        swarm.location = ring_point(angle, 4.27, 3.63, 2.12)
         swarm.scale = (1.0, 1.0, 1.0) if frame in (1, 360) else (1.18, 1.18, 1.18)
         swarm.keyframe_insert("location", frame=frame)
         swarm.keyframe_insert("scale", frame=frame)
@@ -384,14 +464,7 @@ def build_scene() -> None:
     atmosphere.display_type = "WIRE"
     atmosphere.hide_render = True
 
-    # Four imperfect clouds leave large empty areas. This reads as a layered
-    # planetary network rather than a thin ring around a logo.
-    add_matrix_cloud("upper left matrix", math.radians(142), math.radians(48), 108, [muted_violet, muted_magenta, muted_cyan], 1)
-    add_matrix_cloud("upper right matrix", math.radians(43), math.radians(38), 82, [muted_cyan, muted_violet, muted_magenta], 2)
-    add_matrix_cloud("lower left matrix", math.radians(232), math.radians(44), 96, [muted_magenta, muted_violet, muted_cyan], 3)
-    add_matrix_cloud("lower right matrix", math.radians(317), math.radians(34), 74, [muted_violet, muted_magenta, muted_cyan], 4)
-    add_matrix_cloud("western matrix veil", math.radians(185), math.radians(37), 74, [muted_violet, muted_magenta, muted_cyan], 5)
-    add_matrix_cloud("eastern matrix veil", math.radians(-4), math.radians(30), 60, [muted_cyan, muted_violet, muted_magenta], 6)
+    add_dual_geodesic_lattice(4.35, [magenta, violet, cyan], muted_violet)
     add_energy_cluster("upper left energy field", math.radians(133), math.radians(22), [magenta, violet, cyan], 1)
     add_energy_cluster("right energy field", math.radians(-2), math.radians(25), [cyan, violet, magenta], 2)
     add_energy_cluster("lower left energy field", math.radians(237), math.radians(20), [violet, magenta, cyan], 3)
