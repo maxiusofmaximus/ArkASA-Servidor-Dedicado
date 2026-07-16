@@ -348,12 +348,9 @@ def add_dual_geodesic_lattice(
             cell.keyframe_insert("scale", frame=360)
 
     bpy.data.objects.remove(source, do_unlink=True)
-    # A single, full rotation gives the structure spherical coherence and
-    # returns to the identical image at the loop boundary.
-    parent.rotation_euler = (0.0, math.radians(-12), 0.0)
-    parent.keyframe_insert("rotation_euler", frame=1)
-    parent.rotation_euler = (0.0, math.radians(348), 0.0)
-    parent.keyframe_insert("rotation_euler", frame=360)
+    # ARK's matrix is a stable holographic shell. Its perceived motion comes
+    # from lighting and active nodes, not from a conspicuous globe rotation.
+    parent.rotation_euler = (0.0, 0.0, 0.0)
     return parent
 
 
@@ -410,6 +407,22 @@ def point_camera(camera: bpy.types.Object, target: Vector) -> None:
     camera.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
 
+def set_linear_keyframes(obj: bpy.types.Object, data_path: str) -> None:
+    """Keep cyclic rotations at a calm, constant speed instead of easing."""
+    if not obj.animation_data or not obj.animation_data.action:
+        return
+    action = obj.animation_data.action
+    # Blender 5.2 stores curves in layered action channel bags rather than in
+    # Action.fcurves (the pre-5.0 API). Iterate all bags to stay portable.
+    for layer in action.layers:
+        for strip in layer.strips:
+            for channelbag in strip.channelbags:
+                for fcurve in channelbag.fcurves:
+                    if fcurve.data_path == data_path:
+                        for keyframe in fcurve.keyframe_points:
+                            keyframe.interpolation = "LINEAR"
+
+
 def configure_scene() -> None:
     scene = bpy.context.scene
     scene.render.engine = "BLENDER_EEVEE"
@@ -455,12 +468,14 @@ def build_scene() -> None:
     planet = bpy.context.object
     planet.name = "Obsidian planet"
     planet.data.materials.append(planet_material())
-    # A full revolution makes the procedural relief move beneath the fixed
-    # rim lighting and closes exactly when the video loops.
-    planet.rotation_euler = (0.0, math.radians(9), 0.0)
+    # Rotate around the vertical screen axis, like a globe turning toward the
+    # right. This is intentionally independent from the stationary matrix.
+    # A full cycle preserves a perfectly seamless 12-second video loop.
+    planet.rotation_euler = (0.0, 0.0, math.radians(9))
     planet.keyframe_insert("rotation_euler", frame=1)
-    planet.rotation_euler = (0.0, math.radians(369), 0.0)
+    planet.rotation_euler = (0.0, 0.0, math.radians(369))
     planet.keyframe_insert("rotation_euler", frame=360)
+    set_linear_keyframes(planet, "rotation_euler")
 
     # A separate veil moves with the world but has a small phase offset. It
     # supplies slow atmospheric detail without making the shadowed globe read
@@ -474,10 +489,11 @@ def build_scene() -> None:
     cloud_veil = bpy.context.object
     cloud_veil.name = "Rotating planetary cloud veil"
     cloud_veil.data.materials.append(cloud_veil_material())
-    cloud_veil.rotation_euler = (0.0, math.radians(27), 0.0)
+    cloud_veil.rotation_euler = (0.0, 0.0, math.radians(27))
     cloud_veil.keyframe_insert("rotation_euler", frame=1)
-    cloud_veil.rotation_euler = (0.0, math.radians(747), 0.0)
+    cloud_veil.rotation_euler = (0.0, 0.0, math.radians(387))
     cloud_veil.keyframe_insert("rotation_euler", frame=360)
+    set_linear_keyframes(cloud_veil, "rotation_euler")
 
     # Broken lateral crescents rather than a complete luminous outline.
     for name, start, end in (
