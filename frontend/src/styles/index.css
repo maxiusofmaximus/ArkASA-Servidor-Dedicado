@@ -30,52 +30,385 @@ body {
   height: 100%;
 }
 
-/* ARK SPACE BACKGROUND - WITH BACKGROUND IMAGES */
+/* ARK MENU ATMOSPHERE — clean master artwork with deterministic light layers */
 .ark-bg {
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: #010203;
-  background-image: url('/assets/ark-background.png');
-  background-size: cover;
-  background-position: 60% center;
-  background-repeat: no-repeat;
+  background:
+    radial-gradient(ellipse at 50% 48%, rgba(14, 25, 83, 0.38), transparent 42%),
+    radial-gradient(circle at 12% 28%, rgba(98, 22, 151, 0.16), transparent 38%),
+    #01020a;
   overflow: hidden;
   z-index: 0;
 }
 
-/* Subtle dark overlay so text remains readable over the planet */
-.ark-bg::after {
-  content: '';
+.ark-scene,
+.ark-bg-vignette,
+.ark-bg-grain {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
-  background: rgba(1, 2, 3, 0.45);
+  pointer-events: none;
+}
+
+.ark-scene {
+  overflow: hidden;
+  background: #01020a var(--ark-scene-fallback) 60% center / cover no-repeat;
+}
+
+.ark-scene-master,
+.ark-scene-planet-rotation,
+.ark-scene-matrix,
+.ark-scene-nebula,
+.ark-scene-stars,
+.ark-scene-grain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ark-scene-master {
+  background: url('/assets/ark-menu-master.png') 50% 56% / cover no-repeat;
+  transform: scale(1.025);
+  animation: ark-menu-drift 26s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+/* The planet stays mostly in silhouette, as in the source menu. The moving
+   surface is deliberately subtle: it reads as an axial turn, not a texture. */
+.ark-scene-planet-rotation {
+  top: 55%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  width: min(39vw, 530px);
+  height: min(48vh, 425px);
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  border-radius: 50%;
+  opacity: 0.25;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(ellipse at center, #000 44%, rgba(0, 0, 0, 0.7) 61%, transparent 73%);
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 44%, rgba(0, 0, 0, 0.7) 61%, transparent 73%);
+}
+
+.ark-scene-planet-rotation::before {
+  content: '';
+  position: absolute;
+  inset: -12% -30%;
+  background:
+    radial-gradient(ellipse at 18% 44%, rgba(70, 155, 217, 0.18), transparent 18%),
+    radial-gradient(ellipse at 53% 63%, rgba(120, 93, 164, 0.13), transparent 16%),
+    radial-gradient(ellipse at 83% 35%, rgba(72, 175, 216, 0.14), transparent 18%),
+    repeating-linear-gradient(7deg, transparent 0 28px, rgba(142, 198, 228, 0.045) 29px 30px, transparent 31px 62px);
+  animation: ark-planet-rotation 74s linear infinite alternate;
+  will-change: transform;
+}
+
+.ark-scene-planet-rotation::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 50% 15%, rgba(154, 230, 249, 0.24), transparent 31%);
+  animation: ark-horizon-breathe 13s ease-in-out infinite alternate;
+}
+
+/* A purpose-built orbital network replaces the uniform spinning grid. */
+.ark-scene-matrix {
+  top: 54%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  width: min(83vw, 1135px);
+  height: auto;
+  aspect-ratio: 1.315 / 1;
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  opacity: 0.88;
+  mix-blend-mode: screen;
+}
+
+.ark-orbital-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ark-orbit-route,
+.ark-constellation-link,
+.ark-energy-stream {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ark-orbit-route {
+  stroke-width: 1.1;
+  stroke-dasharray: 3 12;
+  opacity: 0.3;
+}
+
+.ark-orbit-route--violet,
+.ark-orbit-route--lower {
+  stroke: rgba(215, 72, 255, 0.82);
+}
+
+.ark-orbit-route--cyan {
+  stroke: rgba(55, 220, 255, 0.78);
+}
+
+.ark-orbit-route--upper {
+  stroke: rgba(134, 109, 255, 0.54);
+}
+
+.ark-constellation {
+  transform-box: view-box;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
+.ark-constellation--left {
+  animation: ark-left-sector-orbit 31s ease-in-out infinite alternate;
+}
+
+.ark-constellation--right {
+  animation: ark-right-sector-orbit 37s ease-in-out -12s infinite alternate;
+}
+
+.ark-constellation-link {
+  stroke: rgba(151, 87, 255, 0.6);
+  stroke-width: 1.35;
+  stroke-dasharray: 2 3;
+  opacity: 0.73;
+}
+
+.ark-constellation-link--dim {
+  stroke: rgba(27, 203, 255, 0.45);
+  opacity: 0.35;
+}
+
+.ark-constellation-node {
+  color: #a873ff;
+}
+
+.ark-constellation-node--cyan,
+.ark-orbit-traveller--cyan {
+  color: #55e7ff;
+}
+
+.ark-constellation-node--pink,
+.ark-orbit-traveller--pink {
+  color: #ff63e8;
+}
+
+.ark-constellation-node--violet,
+.ark-orbit-traveller--violet {
+  color: #ab7dff;
+}
+
+.ark-orbit-glyph-core {
+  fill: currentColor;
+}
+
+.ark-orbit-glyph-hex {
+  fill: rgba(5, 12, 29, 0.68);
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+
+.ark-constellation-glyph {
+  animation: ark-constellation-node-pulse 5.8s ease-in-out var(--constellation-delay) infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
+.ark-energy-stream {
+  stroke-width: 2.8;
+  stroke-dasharray: 9 185;
+  opacity: 0;
+  will-change: stroke-dashoffset, opacity;
+}
+
+.ark-energy-stream--left {
+  stroke: #ff6ce5;
+  animation: ark-energy-left 12s linear infinite;
+}
+
+.ark-energy-stream--right {
+  stroke: #57e8ff;
+  animation: ark-energy-right 15s linear -6s infinite;
+}
+
+.ark-energy-stream--lower {
+  stroke: #bf77ff;
+  animation: ark-energy-lower 18s linear -11s infinite;
+}
+
+.ark-orbit-traveller {
+  opacity: 0.88;
+}
+
+.ark-scene-nebula {
+  background:
+    radial-gradient(ellipse at 48% 38%, rgba(55, 160, 255, 0.17), transparent 29%),
+    radial-gradient(ellipse at 17% 56%, rgba(224, 41, 255, 0.1), transparent 25%),
+    radial-gradient(ellipse at 84% 64%, rgba(108, 53, 255, 0.13), transparent 28%);
+  mix-blend-mode: screen;
+  animation: ark-nebula-breathe 8s ease-in-out infinite alternate;
+}
+
+.ark-scene-stars {
+  opacity: 0.28;
+  background-image:
+    radial-gradient(circle at 12% 38%, #c7f6ff 0 0.6px, transparent 1.2px),
+    radial-gradient(circle at 71% 18%, #8deeff 0 0.7px, transparent 1.4px),
+    radial-gradient(circle at 89% 72%, #ffffff 0 0.5px, transparent 1.1px),
+    radial-gradient(circle at 36% 86%, #b898ff 0 0.65px, transparent 1.2px);
+  background-size: 177px 193px, 241px 233px, 149px 167px, 283px 257px;
+  mix-blend-mode: screen;
+  animation: ark-star-parallax 45s linear infinite;
+}
+
+.ark-scene-grain {
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
+  mix-blend-mode: screen;
+}
+
+@keyframes ark-menu-drift {
+  0% { transform: scale(1.025) translate3d(-0.35%, -0.2%, 0); }
+  100% { transform: scale(1.055) translate3d(0.35%, 0.25%, 0); }
+}
+
+@keyframes ark-planet-rotation {
+  from { transform: translate3d(-3.5%, 0.4%, 0) scale(1.02); }
+  to { transform: translate3d(3.5%, -0.4%, 0) scale(1.02); }
+}
+
+@keyframes ark-horizon-breathe {
+  from { opacity: 0.28; transform: scale(0.985); }
+  to { opacity: 0.58; transform: scale(1.015); }
+}
+
+@keyframes ark-left-sector-orbit {
+  0% { opacity: 0.55; transform: translate3d(-7px, 16px, 0) rotate(-1.3deg); }
+  54% { opacity: 0.9; transform: translate3d(11px, -10px, 0) rotate(1.1deg); }
+  100% { opacity: 0.64; transform: translate3d(20px, -28px, 0) rotate(2.6deg); }
+}
+
+@keyframes ark-right-sector-orbit {
+  0% { opacity: 0.52; transform: translate3d(12px, -18px, 0) rotate(1.5deg); }
+  47% { opacity: 0.92; transform: translate3d(-8px, 10px, 0) rotate(-0.8deg); }
+  100% { opacity: 0.62; transform: translate3d(-22px, 27px, 0) rotate(-2.4deg); }
+}
+
+@keyframes ark-constellation-node-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(0.74); }
+  38% { opacity: 0.34; transform: scale(0.86); }
+  49% { opacity: 1; transform: scale(1.55); }
+  60% { opacity: 0.42; transform: scale(0.9); }
+}
+
+@keyframes ark-energy-left {
+  0% { opacity: 0; stroke-dashoffset: 340; }
+  10%, 48% { opacity: 0.9; }
+  58%, 100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@keyframes ark-energy-right {
+  0% { opacity: 0; stroke-dashoffset: -380; }
+  12%, 51% { opacity: 0.86; }
+  62%, 100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@keyframes ark-energy-lower {
+  0% { opacity: 0; stroke-dashoffset: 410; }
+  14%, 56% { opacity: 0.82; }
+  67%, 100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@keyframes ark-nebula-breathe {
+  0% { opacity: 0.55; filter: brightness(0.8) saturate(0.85); }
+  100% { opacity: 1; filter: brightness(1.25) saturate(1.2); }
+}
+
+@keyframes ark-star-parallax {
+  from { background-position: 0 0, 0 0, 0 0, 0 0; }
+  to { background-position: 42px -28px, -31px 24px, 22px -36px, -28px 18px; }
+}
+
+/* The generated master covers this only when it is available. */
+.ark-scene-master {
+  background-position: 50% 56%;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.ark-bg-vignette {
+  background:
+    linear-gradient(180deg, rgba(1, 4, 12, 0.42) 0%, rgba(1, 2, 5, 0.08) 32%, rgba(1, 2, 5, 0.54) 100%),
+    radial-gradient(ellipse at 50% 44%, transparent 12%, rgba(1, 2, 5, 0.38) 100%),
+    radial-gradient(circle at 11% 26%, rgba(157, 78, 221, 0.18), transparent 42%),
+    radial-gradient(circle at 89% 72%, rgba(0, 212, 255, 0.14), transparent 44%);
   pointer-events: none;
   z-index: 1;
 }
 
-/* Glow colour tints on top of the image */
-.ark-bg::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-image:
-    /* Purple nebula top-left */
-    radial-gradient(circle at 12% 28%, rgba(157, 78, 221, 0.3) 0%, rgba(157, 78, 221, 0.1) 20%, transparent 45%),
-    /* Cyan nebula bottom-right */
-    radial-gradient(circle at 88% 72%, rgba(0, 212, 255, 0.25) 0%, rgba(0, 212, 255, 0.08) 20%, transparent 50%),
-    /* Cyan glow top-center */
-    radial-gradient(circle at 50% 10%, rgba(0, 212, 255, 0.2) 0%, transparent 30%);
+.ark-bg-grain {
+  opacity: 0.045;
   pointer-events: none;
   z-index: 2;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
+  mix-blend-mode: screen;
+}
+
+/* Audio is intentionally a small operator control: the menu sound is off
+   until the user chooses to enable it and the choice is remembered locally. */
+.ark-audio-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid rgba(0, 212, 255, 0.28);
+  border-radius: 0.2rem;
+  color: rgba(0, 212, 255, 0.62);
+  background: rgba(3, 10, 24, 0.52);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.24);
+}
+
+.ark-audio-toggle:hover,
+.ark-audio-toggle:focus-visible {
+  color: #00d4ff;
+  border-color: rgba(0, 212, 255, 0.72);
+  background: rgba(0, 30, 54, 0.72);
+  box-shadow: 0 0 14px rgba(0, 212, 255, 0.16);
+  outline: none;
+}
+
+.ark-audio-toggle.is-enabled {
+  color: #b9f6ff;
+  border-color: rgba(0, 212, 255, 0.7);
+  background: rgba(0, 79, 101, 0.38);
+  box-shadow: 0 0 14px rgba(0, 212, 255, 0.2);
+}
+
+.ark-audio-toggle-icon {
+  font-size: 0.8rem;
+  line-height: 0.7;
 }
 
 @keyframes arkGlowPulse {
@@ -88,6 +421,23 @@ body {
   background:
     radial-gradient(ellipse 80% 60% at 50% 40%, rgba(0, 212, 255, 0.08) 0%, transparent 70%),
     #05070f;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ark-scene-master,
+  .ark-scene-planet-rotation::before,
+  .ark-scene-planet-rotation::after,
+  .ark-constellation,
+  .ark-constellation-glyph,
+  .ark-energy-stream,
+  .ark-scene-nebula,
+  .ark-scene-stars {
+    animation: none;
+  }
+
+  .ark-orbit-travellers {
+    display: none;
+  }
 }
 
 /* FROSTED GLASS PANEL - subtle border matching reference */
@@ -331,12 +681,7 @@ button {
   color: inherit;
 }
 
-button[class*="text-ark-cyan"],
-button:has-text("ARKS"),
-button:has-text("MOD SETTINGS"),
-button:has-text("GAME RULES"),
-button:has-text("ADVANCED"),
-button:has-text("ENGRAMS") {
+button[class*="text-ark-cyan"] {
   text-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
 }
 
