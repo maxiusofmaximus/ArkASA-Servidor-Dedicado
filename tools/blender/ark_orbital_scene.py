@@ -66,30 +66,79 @@ def muted_emission_material(
 
 
 def planet_material() -> bpy.types.Material:
-    """A low-contrast procedural surface that can visibly rotate in shadow."""
+    """A shadowed, layered planet with relief visible below the rim lights."""
     material = bpy.data.materials.new("Planet obsidian")
     material.use_nodes = True
     nodes = material.node_tree.nodes
     links = material.node_tree.links
     principled = nodes.get("Principled BSDF")
-    noise = nodes.new("ShaderNodeTexNoise")
-    noise.inputs["Scale"].default_value = 2.35
-    noise.inputs["Detail"].default_value = 6.0
-    noise.inputs["Roughness"].default_value = 0.72
-    ramp = nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].position = 0.28
-    ramp.color_ramp.elements[0].color = (0.00015, 0.00055, 0.0012, 1)
-    ramp.color_ramp.elements[1].position = 0.76
-    ramp.color_ramp.elements[1].color = (0.011, 0.028, 0.06, 1)
+    continents = nodes.new("ShaderNodeTexNoise")
+    continents.inputs["Scale"].default_value = 0.92
+    continents.inputs["Detail"].default_value = 5.5
+    continents.inputs["Roughness"].default_value = 0.7
+    continents.inputs["Distortion"].default_value = 0.35
+    continental_ramp = nodes.new("ShaderNodeValToRGB")
+    continental_ramp.color_ramp.elements[0].position = 0.32
+    continental_ramp.color_ramp.elements[0].color = (0.00008, 0.00022, 0.0005, 1)
+    continental_ramp.color_ramp.elements[1].position = 0.68
+    continental_ramp.color_ramp.elements[1].color = (0.024, 0.053, 0.085, 1)
+
+    relief = nodes.new("ShaderNodeTexNoise")
+    relief.inputs["Scale"].default_value = 6.4
+    relief.inputs["Detail"].default_value = 8.0
+    relief.inputs["Roughness"].default_value = 0.74
+    relief.inputs["Distortion"].default_value = 0.18
+    relief_ramp = nodes.new("ShaderNodeValToRGB")
+    relief_ramp.color_ramp.elements[0].position = 0.38
+    relief_ramp.color_ramp.elements[0].color = (0.18, 0.22, 0.3, 1)
+    relief_ramp.color_ramp.elements[1].position = 0.69
+    relief_ramp.color_ramp.elements[1].color = (0.88, 0.95, 1.0, 1)
+    surface_mix = nodes.new("ShaderNodeMixRGB")
+    surface_mix.blend_type = "MULTIPLY"
+    surface_mix.inputs["Fac"].default_value = 0.62
+    surface_mix.inputs[1].default_value = (0.014, 0.029, 0.055, 1)
     bump = nodes.new("ShaderNodeBump")
-    bump.inputs["Strength"].default_value = 0.28
-    bump.inputs["Distance"].default_value = 0.13
-    links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
-    links.new(ramp.outputs["Color"], principled.inputs["Base Color"])
-    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    bump.inputs["Strength"].default_value = 0.42
+    bump.inputs["Distance"].default_value = 0.1
+    links.new(continents.outputs["Fac"], continental_ramp.inputs["Fac"])
+    links.new(relief.outputs["Fac"], relief_ramp.inputs["Fac"])
+    links.new(continental_ramp.outputs["Color"], surface_mix.inputs[1])
+    links.new(relief_ramp.outputs["Color"], surface_mix.inputs[2])
+    links.new(surface_mix.outputs["Color"], principled.inputs["Base Color"])
+    links.new(relief.outputs["Fac"], bump.inputs["Height"])
     links.new(bump.outputs["Normal"], principled.inputs["Normal"])
     principled.inputs["Metallic"].default_value = 0.22
-    principled.inputs["Roughness"].default_value = 0.78
+    principled.inputs["Roughness"].default_value = 0.7
+    return material
+
+
+def cloud_veil_material() -> bpy.types.Material:
+    """Dim broken cloud bands that only appear over the planet's lit edge."""
+    material = bpy.data.materials.new("Planet cloud veil")
+    material.use_nodes = True
+    material.surface_render_method = "DITHERED"
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    mix = nodes.new("ShaderNodeMixShader")
+    transparent = nodes.new("ShaderNodeBsdfTransparent")
+    cloud = nodes.new("ShaderNodeEmission")
+    cloud.inputs["Color"].default_value = (0.16, 0.34, 0.54, 1)
+    cloud.inputs["Strength"].default_value = 0.18
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 3.9
+    noise.inputs["Detail"].default_value = 6.0
+    noise.inputs["Roughness"].default_value = 0.7
+    noise.inputs["Distortion"].default_value = 0.45
+    mask = nodes.new("ShaderNodeValToRGB")
+    mask.color_ramp.elements[0].position = 0.55
+    mask.color_ramp.elements[1].position = 0.71
+    links.new(noise.outputs["Fac"], mask.inputs["Fac"])
+    links.new(mask.outputs["Color"], mix.inputs[0])
+    links.new(transparent.outputs[0], mix.inputs[1])
+    links.new(cloud.outputs[0], mix.inputs[2])
+    links.new(mix.outputs[0], output.inputs["Surface"])
     return material
 
 
@@ -308,79 +357,52 @@ def add_dual_geodesic_lattice(
     return parent
 
 
-def add_energy_cluster(
+def add_shell_energy_sector(
     name: str,
     center_angle: float,
-    travel_angle: float,
     palette: list[bpy.types.Material],
     phase: int,
+    matrix: bpy.types.Object,
 ) -> None:
-    """Add a moving swarm, the visual unit that sells the orbital motion."""
+    """Grow a local field of illuminated veins directly on the dual shell."""
     random.seed(480 + phase)
-    swarm = bpy.data.objects.new(name, None)
-    bpy.context.collection.objects.link(swarm)
+    sector = bpy.data.objects.new(name, None)
+    bpy.context.collection.objects.link(sector)
+    sector.parent = matrix
 
-    # Dense, uneven crystals emulate the active portions of the reference
-    # matrix. Their local depth makes the field feel layered in motion.
-    for index in range(116):
-        theta = random.uniform(0, math.tau)
-        distance = random.triangular(0.012, 0.78, 0.15)
-        local_position = Vector(
-            (
-                math.cos(theta) * distance,
-                random.uniform(-0.16, 0.08),
-                math.sin(theta) * distance * random.uniform(0.55, 1.15),
-            )
-        )
+    # The field lives on the front hemisphere of the exact same sphere as the
+    # pentagon/hexagon lattice. It is intentionally made of local indicators
+    # rather than free lines: the reference energises cells and their nodes.
+    def shell_point(x: float, z: float) -> Vector:
+        shell_radius = 4.37
+        y = -math.sqrt(max(0.2, shell_radius * shell_radius - x * x - z * z))
+        return Vector((x, y, z))
+
+    center_x = math.cos(center_angle) * 3.05
+    center_z = math.sin(center_angle) * 2.7
+    for index in range(22):
+        x = center_x + random.triangular(-1.0, 1.0, 0.0)
+        z = center_z + random.triangular(-0.78, 0.78, 0.0)
+        material = palette[(index + phase) % len(palette)]
         if index % 3:
-            bpy.ops.mesh.primitive_ico_sphere_add(
-                subdivisions=1,
-                radius=random.uniform(0.006, 0.032),
-                location=local_position,
+            spark = add_hex_node(
+                f"{name}_active_node_{index:02d}",
+                shell_point(x, z),
+                material,
+                random.uniform(0.018, 0.052),
+                sector,
             )
         else:
-            bpy.ops.mesh.primitive_cube_add(size=1, location=local_position)
-        shard = bpy.context.object
-        shard.name = f"{name}_shard_{index:02d}"
-        shard.scale = (random.uniform(0.008, 0.048), random.uniform(0.004, 0.016), random.uniform(0.008, 0.07))
-        shard.rotation_euler = (random.random() * math.tau, random.random() * math.tau, random.random() * math.tau)
-        shard.data.materials.append(palette[index % len(palette)])
-        shard.parent = swarm
-        if index % 4 == 0:
-            base_scale = shard.scale.copy()
-            for frame, multiplier in ((1, 1.0), (121, random.uniform(0.25, 1.8)), (241, random.uniform(0.3, 1.65)), (360, 1.0)):
-                shard.scale = base_scale * multiplier
-                shard.keyframe_insert("scale", frame=frame)
-
-    # Bright connectors make the swarm read as an electrically active matrix.
-    for index in range(10):
-        angle = index * math.tau / 5 + random.uniform(-0.15, 0.15)
-        length = random.uniform(0.07, 0.34)
-        add_curve(
-            f"{name}_spark_{index:02d}",
-            [Vector((0, 0, 0)), Vector((math.cos(angle) * length, 0, math.sin(angle) * length * 0.74))],
-            palette[index % len(palette)],
-            0.004,
-            swarm,
-        )
-
-    # The start/end pose is identical so the rendered loop closes cleanly.
-    keyframes = (
-        (1, center_angle),
-        (121, center_angle + travel_angle),
-        (241, center_angle - travel_angle * 0.72),
-        (360, center_angle),
-    )
-    for frame, angle in keyframes:
-        # Active fragments inhabit the same depth as the geodesic shell rather
-        # than floating in front of it as independent decorative clusters.
-        swarm.location = ring_point(angle, 4.27, 3.63, 2.12)
-        swarm.scale = (1.0, 1.0, 1.0) if frame in (1, 360) else (1.18, 1.18, 1.18)
-        swarm.keyframe_insert("location", frame=frame)
-        swarm.keyframe_insert("scale", frame=frame)
-    for frame, rotation in ((1, (0.0, 0.0, 0.0)), (121, (0.14, -0.18, 0.34)), (241, (-0.16, 0.13, -0.27)), (360, (0.0, 0.0, 0.0))):
-        swarm.rotation_euler = rotation
-        swarm.keyframe_insert("rotation_euler", frame=frame)
+            bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=random.uniform(0.008, 0.021), location=shell_point(x, z))
+            spark = bpy.context.object
+            spark.name = f"{name}_spark_{index:02d}"
+            spark.data.materials.append(material)
+            spark.parent = sector
+        if index % 2 == 0:
+            base_scale = spark.scale.copy()
+            for frame, multiplier in ((1, 0.8), (132 + index % 30, 1.75), (246 + index % 24, 0.55), (360, 0.8)):
+                spark.scale = base_scale * multiplier
+                spark.keyframe_insert("scale", frame=frame)
 
 
 def point_camera(camera: bpy.types.Object, target: Vector) -> None:
@@ -440,6 +462,23 @@ def build_scene() -> None:
     planet.rotation_euler = (0.0, math.radians(369), 0.0)
     planet.keyframe_insert("rotation_euler", frame=360)
 
+    # A separate veil moves with the world but has a small phase offset. It
+    # supplies slow atmospheric detail without making the shadowed globe read
+    # as a bright generic blue sphere.
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        segments=128,
+        ring_count=64,
+        radius=PLANET_RADIUS * 1.008,
+        location=(0, -0.01, PLANET_CENTER_Z),
+    )
+    cloud_veil = bpy.context.object
+    cloud_veil.name = "Rotating planetary cloud veil"
+    cloud_veil.data.materials.append(cloud_veil_material())
+    cloud_veil.rotation_euler = (0.0, math.radians(27), 0.0)
+    cloud_veil.keyframe_insert("rotation_euler", frame=1)
+    cloud_veil.rotation_euler = (0.0, math.radians(747), 0.0)
+    cloud_veil.keyframe_insert("rotation_euler", frame=360)
+
     # Broken lateral crescents rather than a complete luminous outline.
     for name, start, end in (
         ("left_rim", math.radians(144), math.radians(212)),
@@ -464,11 +503,11 @@ def build_scene() -> None:
     atmosphere.display_type = "WIRE"
     atmosphere.hide_render = True
 
-    add_dual_geodesic_lattice(4.35, [magenta, violet, cyan], muted_violet)
-    add_energy_cluster("upper left energy field", math.radians(133), math.radians(22), [magenta, violet, cyan], 1)
-    add_energy_cluster("right energy field", math.radians(-2), math.radians(25), [cyan, violet, magenta], 2)
-    add_energy_cluster("lower left energy field", math.radians(237), math.radians(20), [violet, magenta, cyan], 3)
-    add_energy_cluster("lower right energy field", math.radians(294), math.radians(15), [magenta, violet, cyan], 4)
+    matrix = add_dual_geodesic_lattice(4.35, [magenta, violet, cyan], muted_violet)
+    add_shell_energy_sector("upper left energy field", math.radians(133), [magenta, violet, cyan], 1, matrix)
+    add_shell_energy_sector("right energy field", math.radians(-2), [cyan, violet, magenta], 2, matrix)
+    add_shell_energy_sector("lower left energy field", math.radians(237), [violet, magenta, cyan], 3, matrix)
+    add_shell_energy_sector("lower right energy field", math.radians(294), [magenta, violet, cyan], 4, matrix)
 
     # Camera looks down the negative Y axis: X/Z map directly to the UI background.
     bpy.ops.object.camera_add(location=(0, -17.5, 0.15))
