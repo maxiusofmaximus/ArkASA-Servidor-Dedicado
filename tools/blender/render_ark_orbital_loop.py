@@ -33,6 +33,10 @@ def configure_render() -> None:
     scene.render.resolution_y = 720
     scene.render.resolution_percentage = 100
     scene.render.fps = 30
+    # The loop is a dark background underneath application UI. Sixteen EEVEE
+    # samples preserve the small emissive details while keeping regeneration
+    # practical on a workstation.
+    scene.eevee.taa_render_samples = 16
     scene.frame_start = 1
     scene.frame_end = 360
     # Blender 5.2 renders an image sequence. FFmpeg encodes it afterwards;
@@ -64,6 +68,10 @@ def main() -> None:
                 "1",
                 "-i",
                 str(FRAME_DIR / "ark_orbital_%04d.png"),
+                "-filter_complex",
+                "[0:v]split=2[base][blur];[blur]gblur=sigma=10[glow];[base][glow]blend=all_mode=screen:all_opacity=0.42[video]",
+                "-map",
+                "[video]",
                 "-c:v",
                 "libx264",
                 "-pix_fmt",

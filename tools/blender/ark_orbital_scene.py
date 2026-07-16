@@ -25,8 +25,10 @@ BLEND_PATH = OUTPUT_DIR / "ark_orbital_scene.blend"
 
 FPS = 30
 FRAME_END = 720
-PLANET_RADIUS = 2.25
-PLANET_CENTER_Z = -0.78
+# The reference keeps the world mostly in shadow: the planet is an occluding
+# silhouette, not a brightly lit object at the centre of the artwork.
+PLANET_RADIUS = 1.92
+PLANET_CENTER_Z = -0.66
 
 CYAN = (0.02, 0.72, 1.0, 1.0)
 VIOLET = (0.32, 0.06, 0.92, 1.0)
@@ -54,6 +56,13 @@ def emission_material(name: str, color: tuple[float, float, float, float], stren
     emission.inputs["Strength"].default_value = strength
     material.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
     return material
+
+
+def muted_emission_material(
+    name: str, color: tuple[float, float, float, float], strength: float
+) -> bpy.types.Material:
+    """Emission for the distant, deliberately understated matrix."""
+    return emission_material(name, (color[0] * 0.52, color[1] * 0.52, color[2] * 0.62, 1), strength)
 
 
 def planet_material() -> bpy.types.Material:
@@ -117,8 +126,8 @@ def add_hex_node(
 
 def add_starfield(material: bpy.types.Material) -> None:
     random.seed(71)
-    for index in range(480):
-        radius = random.uniform(8.0, 18.0)
+    for index in range(620):
+        radius = random.uniform(8.0, 20.0)
         theta = random.uniform(0.0, math.tau)
         phi = random.uniform(0.17, math.pi - 0.17)
         location = Vector(
@@ -128,7 +137,7 @@ def add_starfield(material: bpy.types.Material) -> None:
                 radius * math.cos(phi),
             )
         )
-        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=random.uniform(0.006, 0.021), location=location)
+        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=random.uniform(0.004, 0.018), location=location)
         star = bpy.context.object
         star.name = f"star_{index:03d}"
         star.data.materials.append(material)
@@ -138,83 +147,69 @@ def ring_point(angle: float, radius_x: float = 4.62, radius_z: float = 3.95, dep
     return Vector((math.cos(angle) * radius_x, depth, math.sin(angle) * radius_z))
 
 
-def add_sector(
+def add_matrix_cloud(
     name: str,
-    start: float,
-    end: float,
+    center_angle: float,
+    angular_width: float,
+    count: int,
     palette: list[bpy.types.Material],
-    stream_material: bpy.types.Material,
     phase: int,
 ) -> None:
+    """Create a broken 3D node field, never a readable circular wireframe."""
     random.seed(100 + phase)
     parent = bpy.data.objects.new(name, None)
     bpy.context.collection.objects.link(parent)
+    points: list[Vector] = []
 
-    # Sparse outer filaments frame the denser, irregular node band below.
-    for filament in range(2):
-        points = []
-        for step in range(9):
-            t = step / 8
-            angle = start + (end - start) * t + random.uniform(-0.038, 0.038)
-            radius_x = 4.62 + random.uniform(-0.2, 0.2)
-            radius_z = 3.95 + random.uniform(-0.18, 0.18)
-            points.append(ring_point(angle, radius_x, radius_z, 0.72 + filament * 0.055))
-        add_curve(f"{name}_filament_{filament}", points, palette[filament % len(palette)], 0.009, parent)
-
-    # Local mesh of nodes and short connecting links.
-    outer_nodes: list[Vector] = []
-    inner_nodes: list[Vector] = []
-    for index in range(25):
-        t = index / 24
-        angle = start + (end - start) * t + random.uniform(-0.065, 0.065)
-        outer_node = ring_point(
+    for index in range(count):
+        # Nodes occupy a thick, imperfect shell. The depth variation makes
+        # parts of the matrix disappear behind the planet and each other.
+        angle = center_angle + random.triangular(-angular_width, angular_width, 0.0)
+        radial = random.triangular(3.25, 5.05, 4.25)
+        point = ring_point(
             angle,
-            4.58 + random.uniform(-0.3, 0.3),
-            3.93 + random.uniform(-0.28, 0.28),
-            0.6 + random.uniform(-0.13, 0.13),
+            radial,
+            radial * random.uniform(0.76, 0.92),
+            random.uniform(0.55, 1.85),
         )
-        inner_node = ring_point(
-            angle + random.uniform(-0.042, 0.042),
-            4.08 + random.uniform(-0.22, 0.22),
-            3.48 + random.uniform(-0.2, 0.2),
-            0.64 + random.uniform(-0.12, 0.12),
+        points.append(point)
+        add_hex_node(
+            f"{name}_node_{index:03d}",
+            point,
+            palette[index % len(palette)],
+            random.uniform(0.017, 0.048),
+            parent,
         )
-        outer_nodes.append(outer_node)
-        inner_nodes.append(inner_node)
-        add_hex_node(f"{name}_outer_node_{index:02d}", outer_node, palette[index % len(palette)], random.uniform(0.033, 0.07), parent)
-        add_hex_node(f"{name}_inner_node_{index:02d}", inner_node, palette[(index + 1) % len(palette)], random.uniform(0.028, 0.06), parent)
 
-    for index in range(len(outer_nodes) - 1):
-        if index % 2 == 0:
-            add_curve(f"{name}_outer_link_{index:02d}", [outer_nodes[index], outer_nodes[index + 1]], stream_material, 0.005, parent)
-        if index % 3 != 1:
-            add_curve(f"{name}_inner_link_{index:02d}", [inner_nodes[index], inner_nodes[index + 1]], palette[index % len(palette)], 0.004, parent)
-        if index % 2 == 1:
-            add_curve(f"{name}_radial_link_{index:02d}", [outer_nodes[index], inner_nodes[index]], palette[(index + 2) % len(palette)], 0.004, parent)
+    # Each node links only to one or two close neighbours. That makes local
+    # cells and gaps instead of a decorative, uninterrupted orbit.
+    for index, point in enumerate(points):
+        neighbours = sorted(
+            (
+                ((point - other).length, other_index, other)
+                for other_index, other in enumerate(points)
+                if other_index > index
+            ),
+            key=lambda item: item[0],
+        )
+        for distance, other_index, other in neighbours[:2]:
+            if distance < 0.75 and random.random() > 0.26:
+                add_curve(
+                    f"{name}_link_{index:03d}_{other_index:03d}",
+                    [point, other],
+                    palette[(index + other_index) % len(palette)],
+                    0.0028,
+                    parent,
+                )
 
-    # A travelling emissive node follows the sector arc.
-    path_points = [ring_point(start + (end - start) * step / 20, 4.72, 4.02, 0.48) for step in range(21)]
-    path = add_curve(f"{name}_traveller_path", path_points, stream_material, 0.0, cyclic=False)
-    path.data.path_duration = FRAME_END
-    path.hide_render = True
-    traveller = add_hex_node(f"{name}_traveller", path_points[0], palette[-1], 0.105)
-    follow = traveller.constraints.new("FOLLOW_PATH")
-    follow.target = path
-    follow.use_curve_follow = False
-    follow.forward_axis = "FORWARD_X"
-    follow.offset_factor = 0.0
-    follow.keyframe_insert("offset_factor", frame=1)
-    follow.offset_factor = 1.0
-    follow.keyframe_insert("offset_factor", frame=FRAME_END)
-
-    # The entire cloud drifts independently, giving orbital parallax.
-    parent.rotation_euler = (0, 0, -0.025)
     parent.location = (0, 0, 0)
+    parent.rotation_euler = (0, 0, -0.026)
+    parent.keyframe_insert("location", frame=1)
     parent.keyframe_insert("rotation_euler", frame=1)
-    parent.location = (0.22 if phase % 2 else -0.22, 0, -0.14)
-    parent.rotation_euler = (0, 0, 0.035)
-    parent.keyframe_insert("location", frame=FRAME_END)
-    parent.keyframe_insert("rotation_euler", frame=FRAME_END)
+    parent.location = (0.17 if phase % 2 else -0.15, 0.0, -0.09)
+    parent.rotation_euler = (0, 0, 0.028)
+    parent.keyframe_insert("location", frame=360)
+    parent.keyframe_insert("rotation_euler", frame=360)
 
 
 def add_energy_cluster(
@@ -229,37 +224,42 @@ def add_energy_cluster(
     swarm = bpy.data.objects.new(name, None)
     bpy.context.collection.objects.link(swarm)
 
-    # A dense irregular cluster is closer to a moving energy field than a
-    # single icon. White cores punctuate the cyan, violet and magenta shards.
-    for index in range(20):
+    # Dense, uneven crystals emulate the active portions of the reference
+    # matrix. Their local depth makes the field feel layered in motion.
+    for index in range(72):
         theta = random.uniform(0, math.tau)
-        distance = random.triangular(0.018, 0.28, 0.065)
+        distance = random.triangular(0.012, 0.58, 0.11)
         local_position = Vector(
             (
                 math.cos(theta) * distance,
-                random.uniform(-0.08, 0.08),
-                math.sin(theta) * distance * 0.74,
+                random.uniform(-0.16, 0.08),
+                math.sin(theta) * distance * random.uniform(0.55, 1.15),
             )
         )
-        bpy.ops.mesh.primitive_ico_sphere_add(
-            subdivisions=1,
-            radius=random.uniform(0.011, 0.038),
-            location=local_position,
-        )
+        if index % 3:
+            bpy.ops.mesh.primitive_ico_sphere_add(
+                subdivisions=1,
+                radius=random.uniform(0.006, 0.032),
+                location=local_position,
+            )
+        else:
+            bpy.ops.mesh.primitive_cube_add(size=1, location=local_position)
         shard = bpy.context.object
         shard.name = f"{name}_shard_{index:02d}"
+        shard.scale = (random.uniform(0.008, 0.048), random.uniform(0.004, 0.016), random.uniform(0.008, 0.07))
+        shard.rotation_euler = (random.random() * math.tau, random.random() * math.tau, random.random() * math.tau)
         shard.data.materials.append(palette[index % len(palette)])
         shard.parent = swarm
 
     # Bright connectors make the swarm read as an electrically active matrix.
-    for index in range(5):
+    for index in range(10):
         angle = index * math.tau / 5 + random.uniform(-0.15, 0.15)
-        length = random.uniform(0.09, 0.24)
+        length = random.uniform(0.07, 0.34)
         add_curve(
             f"{name}_spark_{index:02d}",
             [Vector((0, 0, 0)), Vector((math.cos(angle) * length, 0, math.sin(angle) * length * 0.74))],
             palette[index % len(palette)],
-            0.006,
+            0.004,
             swarm,
         )
 
@@ -272,7 +272,7 @@ def add_energy_cluster(
     )
     for frame, angle in keyframes:
         swarm.location = ring_point(angle, 4.27, 3.63, 0.32)
-        swarm.scale = (1.0, 1.0, 1.0) if frame in (1, 360) else (1.22, 1.22, 1.22)
+        swarm.scale = (1.0, 1.0, 1.0) if frame in (1, 360) else (1.18, 1.18, 1.18)
         swarm.keyframe_insert("location", frame=frame)
         swarm.keyframe_insert("scale", frame=frame)
 
@@ -304,11 +304,14 @@ def build_scene() -> None:
     clear_scene()
     configure_scene()
 
-    cyan = emission_material("Cyan energy", CYAN, 2.8)
-    violet = emission_material("Violet energy", VIOLET, 2.5)
-    magenta = emission_material("Magenta energy", MAGENTA, 2.7)
-    white_blue = emission_material("Cold rim", WHITE_BLUE, 3.6)
-    star = emission_material("Stars", (0.3, 0.55, 0.95, 1), 2.0)
+    cyan = emission_material("Cyan energy", CYAN, 2.6)
+    violet = emission_material("Violet energy", VIOLET, 2.25)
+    magenta = emission_material("Magenta energy", MAGENTA, 2.4)
+    white_blue = emission_material("Cold rim", WHITE_BLUE, 3.25)
+    muted_cyan = muted_emission_material("Distant cyan matrix", CYAN, 0.95)
+    muted_violet = muted_emission_material("Distant violet matrix", VIOLET, 0.82)
+    muted_magenta = muted_emission_material("Distant magenta matrix", MAGENTA, 0.82)
+    star = emission_material("Stars", (0.28, 0.5, 0.9, 1), 1.75)
 
     add_starfield(star)
 
@@ -322,13 +325,16 @@ def build_scene() -> None:
     planet.name = "Obsidian planet"
     planet.data.materials.append(planet_material())
 
-    # Thin emissive arcs create the crisp, bright lateral rim from the reference.
-    for name, start, end in (("left_rim", math.radians(122), math.radians(238)), ("right_rim", math.radians(-58), math.radians(58))):
+    # Broken lateral crescents rather than a complete luminous outline.
+    for name, start, end in (
+        ("left_rim", math.radians(144), math.radians(212)),
+        ("right_rim", math.radians(-34), math.radians(35)),
+    ):
         points = [
             Vector((PLANET_RADIUS * math.cos(angle), -0.08, PLANET_RADIUS * math.sin(angle) + PLANET_CENTER_Z))
             for angle in [start + (end - start) * i / 32 for i in range(33)]
         ]
-        add_curve(name, points, white_blue, 0.018)
+        add_curve(name, points, white_blue, 0.014)
 
     # A faint atmospheric shell gives the planet its upper cyan halo.
     bpy.ops.mesh.primitive_uv_sphere_add(
@@ -343,26 +349,30 @@ def build_scene() -> None:
     atmosphere.display_type = "WIRE"
     atmosphere.hide_render = True
 
-    add_sector("left_orbit", math.radians(112), math.radians(250), [violet, magenta, cyan], violet, 1)
-    add_sector("right_orbit", math.radians(-65), math.radians(70), [cyan, violet, magenta], cyan, 2)
-    add_sector("lower_orbit", math.radians(220), math.radians(326), [magenta, violet, cyan], magenta, 3)
-    add_energy_cluster("left energy swarm", math.radians(172), math.radians(29), [magenta, violet, cyan], 1)
-    add_energy_cluster("right energy swarm", math.radians(10), math.radians(32), [cyan, violet, magenta], 2)
-    add_energy_cluster("lower energy swarm", math.radians(275), math.radians(24), [violet, magenta, cyan], 3)
+    # Four imperfect clouds leave large empty areas. This reads as a layered
+    # planetary network rather than a thin ring around a logo.
+    add_matrix_cloud("upper left matrix", math.radians(142), math.radians(48), 88, [muted_violet, muted_magenta, muted_cyan], 1)
+    add_matrix_cloud("upper right matrix", math.radians(43), math.radians(38), 68, [muted_cyan, muted_violet, muted_magenta], 2)
+    add_matrix_cloud("lower left matrix", math.radians(232), math.radians(44), 76, [muted_magenta, muted_violet, muted_cyan], 3)
+    add_matrix_cloud("lower right matrix", math.radians(317), math.radians(34), 58, [muted_violet, muted_magenta, muted_cyan], 4)
+    add_energy_cluster("upper left energy field", math.radians(133), math.radians(22), [magenta, violet, cyan], 1)
+    add_energy_cluster("right energy field", math.radians(-2), math.radians(25), [cyan, violet, magenta], 2)
+    add_energy_cluster("lower left energy field", math.radians(237), math.radians(20), [violet, magenta, cyan], 3)
+    add_energy_cluster("lower right energy field", math.radians(294), math.radians(15), [magenta, violet, cyan], 4)
 
     # Camera looks down the negative Y axis: X/Z map directly to the UI background.
     bpy.ops.object.camera_add(location=(0, -17.5, 0.15))
     camera = bpy.context.object
-    camera.data.lens = 52
+    camera.data.lens = 55
     camera.data.sensor_width = 36
     point_camera(camera, Vector((0, 0.6, -0.25)))
     bpy.context.scene.camera = camera
 
     # Rim lights only: the planet stays matte and predominantly black.
     for name, location, color, energy in (
-        ("Left rim light", (-5.4, 2.6, 1.0), (0.25, 0.65, 1.0), 760),
-        ("Right rim light", (5.4, 2.8, 0.7), (0.3, 0.8, 1.0), 820),
-        ("Top haze", (0, 2.2, 5.8), (0.15, 0.32, 0.75), 240),
+        ("Left rim light", (-5.4, 2.6, 1.0), (0.24, 0.62, 1.0), 540),
+        ("Right rim light", (5.4, 2.8, 0.7), (0.3, 0.76, 1.0), 590),
+        ("Top haze", (0, 2.2, 5.8), (0.15, 0.32, 0.75), 120),
     ):
         bpy.ops.object.light_add(type="AREA", location=location)
         light = bpy.context.object
