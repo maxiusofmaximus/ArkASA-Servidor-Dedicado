@@ -60,6 +60,16 @@ body {
   background: #01020a var(--ark-scene-fallback) 60% center / cover no-repeat;
 }
 
+.ark-scene-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+}
+
 .ark-scene-master,
 .ark-scene-planet-rotation,
 .ark-scene-matrix,
@@ -424,6 +434,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .ark-scene-video {
+    display: none;
+  }
+
   .ark-scene-master,
   .ark-scene-planet-rotation::before,
   .ark-scene-planet-rotation::after,
