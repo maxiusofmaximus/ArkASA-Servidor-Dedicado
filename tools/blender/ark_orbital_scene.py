@@ -22,9 +22,14 @@ from mathutils import Vector
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = ROOT / ".temp" / "blender"
 BLEND_PATH = OUTPUT_DIR / "ark_orbital_scene.blend"
+SPACE_TEXTURE_PATH = ROOT / "frontend" / "public" / "assets" / "ark-space-atmosphere-v1.png"
 
 FPS = 30
-FRAME_END = 720
+# The reference's planet takes tens of seconds to turn perceptibly. A 48 s
+# loop lets it make one calm full revolution without a visible jump.
+LOOP_END = 1440
+LOOP_SCALE = LOOP_END / 360
+FRAME_END = LOOP_END
 # The reference keeps the world mostly in shadow: the planet is an occluding
 # silhouette, not a brightly lit object at the centre of the artwork.
 PLANET_RADIUS = 1.92
@@ -34,6 +39,13 @@ CYAN = (0.02, 0.72, 1.0, 1.0)
 VIOLET = (0.32, 0.06, 0.92, 1.0)
 MAGENTA = (1.0, 0.03, 0.56, 1.0)
 WHITE_BLUE = (0.45, 0.9, 1.0, 1.0)
+LIME = (0.28, 1.0, 0.19, 1.0)
+AMBER = (1.0, 0.48, 0.06, 1.0)
+
+
+def loop_frame(reference_frame: int) -> int:
+    """Scale the original 12-second timing marks into the longer loop."""
+    return round(reference_frame * LOOP_SCALE)
 
 
 def clear_scene() -> None:
@@ -142,6 +154,82 @@ def cloud_veil_material() -> bpy.types.Material:
     return material
 
 
+def nebula_material(
+    name: str,
+    color: tuple[float, float, float, float],
+    strength: float,
+) -> bpy.types.Material:
+    """A sparse emissive dust cloud for the distant, non-rotating space."""
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    material.surface_render_method = "DITHERED"
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    mix = nodes.new("ShaderNodeMixShader")
+    transparent = nodes.new("ShaderNodeBsdfTransparent")
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Color"].default_value = color
+    emission.inputs["Strength"].default_value = strength
+    texcoords = nodes.new("ShaderNodeTexCoord")
+    mapping = nodes.new("ShaderNodeMapping")
+    clouds = nodes.new("ShaderNodeTexNoise")
+    clouds.inputs["Scale"].default_value = 1.15
+    clouds.inputs["Detail"].default_value = 5.0
+    clouds.inputs["Roughness"].default_value = 0.72
+    wisps = nodes.new("ShaderNodeTexNoise")
+    wisps.inputs["Scale"].default_value = 5.4
+    wisps.inputs["Detail"].default_value = 3.0
+    blend = nodes.new("ShaderNodeMixRGB")
+    blend.blend_type = "MULTIPLY"
+    blend.inputs["Fac"].default_value = 0.78
+    mask = nodes.new("ShaderNodeValToRGB")
+    # Two noise layers multiply to values around 0.2–0.4. Keeping the
+    # threshold in that range creates wisps, not a rectangular solid card.
+    mask.color_ramp.elements[0].position = 0.16
+    mask.color_ramp.elements[1].position = 0.46
+    links.new(texcoords.outputs["Generated"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], clouds.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], wisps.inputs["Vector"])
+    links.new(clouds.outputs["Fac"], blend.inputs[1])
+    links.new(wisps.outputs["Fac"], blend.inputs[2])
+    links.new(blend.outputs["Color"], mask.inputs["Fac"])
+    links.new(mask.outputs["Color"], mix.inputs[0])
+    links.new(transparent.outputs[0], mix.inputs[1])
+    links.new(emission.outputs[0], mix.inputs[2])
+    links.new(mix.outputs[0], output.inputs["Surface"])
+    return material
+
+
+def space_background_material() -> bpy.types.Material:
+    """Use the original generated deep-space plate as a full-frame backdrop."""
+    if not SPACE_TEXTURE_PATH.exists():
+        raise FileNotFoundError(f"Missing generated space texture: {SPACE_TEXTURE_PATH}")
+    material = bpy.data.materials.new("Generated deep space backdrop")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Strength"].default_value = 0.72
+    texture = nodes.new("ShaderNodeTexImage")
+    texture.image = bpy.data.images.load(str(SPACE_TEXTURE_PATH), check_existing=True)
+    links.new(texture.outputs["Color"], emission.inputs["Color"])
+    links.new(emission.outputs["Emission"], output.inputs["Surface"])
+    return material
+
+
+def add_space_backdrop() -> None:
+    """Place the 16:9 space plate beyond every 3D foreground layer."""
+    bpy.ops.mesh.primitive_plane_add(size=2.0, location=(0.0, 13.0, 0.15), rotation=(math.pi / 2, 0, 0))
+    backdrop = bpy.context.object
+    backdrop.name = "Generated deep-space backdrop"
+    backdrop.scale = (12.7, 7.2, 1.0)
+    backdrop.data.materials.append(space_background_material())
+
+
 def add_curve(
     name: str,
     points: list[Vector],
@@ -194,23 +282,67 @@ def add_hex_node(
     return node
 
 
-def add_starfield(material: bpy.types.Material) -> None:
-    random.seed(71)
-    for index in range(620):
-        radius = random.uniform(8.0, 20.0)
-        theta = random.uniform(0.0, math.tau)
-        phi = random.uniform(0.17, math.pi - 0.17)
-        location = Vector(
+def add_distant_points(
+    name: str,
+    material: bpy.types.Material,
+    positions: list[tuple[float, float, float, float]],
+) -> None:
+    """Render thousands of tiny camera-facing stars as one lightweight mesh."""
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int, int]] = []
+    for x, y, z, size in positions:
+        start = len(vertices)
+        vertices.extend(
             (
-                radius * math.sin(phi) * math.cos(theta),
-                radius * math.sin(phi) * math.sin(theta) + 2.0,
-                radius * math.cos(phi),
+                (x - size, y, z - size),
+                (x + size, y, z - size),
+                (x + size, y, z + size),
+                (x - size, y, z + size),
             )
         )
-        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=random.uniform(0.004, 0.018), location=location)
-        star = bpy.context.object
-        star.name = f"star_{index:03d}"
-        star.data.materials.append(material)
+        faces.append((start, start + 1, start + 2, start + 3))
+    mesh = bpy.data.meshes.new(f"{name} mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.materials.append(material)
+    dust = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(dust)
+
+
+def add_starfield(material: bpy.types.Material) -> None:
+    random.seed(71)
+    positions = [
+        (
+            random.uniform(-10.5, 10.5),
+            random.uniform(8.0, 15.0),
+            random.uniform(-6.8, 7.2),
+            random.uniform(0.0025, 0.0105),
+        )
+        for _ in range(1550)
+    ]
+    add_distant_points("Deep fixed starfield", material, positions)
+
+
+def add_colored_stardust(materials: list[bpy.types.Material]) -> None:
+    """Build irregular violet/cyan dust patches without opaque cards."""
+    cluster_specs = (
+        ((-4.7, 1.2), 1.8, 1.95, 135, 163),
+        ((4.9, -0.4), 1.35, 2.25, 120, 271),
+        ((-2.4, -4.5), 1.8, 0.9, 90, 419),
+        ((1.8, 4.55), 2.6, 0.6, 80, 597),
+    )
+    for cluster_index, ((center_x, center_z), width, height, count, seed) in enumerate(cluster_specs):
+        random.seed(seed)
+        positions = []
+        for _ in range(count):
+            positions.append(
+                (
+                    random.gauss(center_x, width),
+                    random.uniform(9.4, 14.5),
+                    random.gauss(center_z, height),
+                    random.uniform(0.003, 0.012),
+                )
+            )
+        add_distant_points(f"Colored star dust {cluster_index + 1}", materials[cluster_index % len(materials)], positions)
 
 
 def ring_point(angle: float, radius_x: float = 4.62, radius_z: float = 3.95, depth: float = 0.85) -> Vector:
@@ -341,11 +473,11 @@ def add_dual_geodesic_lattice(
             cell.scale = (0.985, 0.985, 0.985)
             cell.keyframe_insert("scale", frame=1)
             cell.scale = (1.025, 1.025, 1.025)
-            cell.keyframe_insert("scale", frame=121 + (vertex_index % 36))
+            cell.keyframe_insert("scale", frame=loop_frame(121 + (vertex_index % 36)))
             cell.scale = (0.99, 0.99, 0.99)
-            cell.keyframe_insert("scale", frame=241 + (vertex_index % 28))
+            cell.keyframe_insert("scale", frame=loop_frame(241 + (vertex_index % 28)))
             cell.scale = (0.985, 0.985, 0.985)
-            cell.keyframe_insert("scale", frame=360)
+            cell.keyframe_insert("scale", frame=LOOP_END)
 
     bpy.data.objects.remove(source, do_unlink=True)
     # ARK's matrix is a stable holographic shell. Its perceived motion comes
@@ -397,7 +529,12 @@ def add_shell_energy_sector(
             spark.parent = sector
         if index % 2 == 0:
             base_scale = spark.scale.copy()
-            for frame, multiplier in ((1, 0.8), (132 + index % 30, 1.75), (246 + index % 24, 0.55), (360, 0.8)):
+            for frame, multiplier in (
+                (1, 0.8),
+                (loop_frame(132 + index % 30), 1.75),
+                (loop_frame(246 + index % 24), 0.55),
+                (LOOP_END, 0.8),
+            ):
                 spark.scale = base_scale * multiplier
                 spark.keyframe_insert("scale", frame=frame)
 
@@ -449,15 +586,17 @@ def build_scene() -> None:
     configure_scene()
 
     cyan = emission_material("Cyan energy", CYAN, 2.6)
-    violet = emission_material("Violet energy", VIOLET, 2.25)
-    magenta = emission_material("Magenta energy", MAGENTA, 2.4)
+    violet = emission_material("Violet energy", VIOLET, 2.05)
+    magenta = emission_material("Magenta energy", MAGENTA, 2.25)
     white_blue = emission_material("Cold rim", WHITE_BLUE, 3.25)
+    lime = emission_material("Lime charge", LIME, 3.35)
+    amber = emission_material("Amber charge", AMBER, 3.05)
     muted_cyan = muted_emission_material("Distant cyan matrix", CYAN, 0.95)
     muted_violet = muted_emission_material("Distant violet matrix", VIOLET, 0.82)
     muted_magenta = muted_emission_material("Distant magenta matrix", MAGENTA, 0.82)
     star = emission_material("Stars", (0.28, 0.5, 0.9, 1), 1.75)
 
-    add_starfield(star)
+    add_space_backdrop()
 
     bpy.ops.mesh.primitive_uv_sphere_add(
         segments=128,
@@ -474,7 +613,7 @@ def build_scene() -> None:
     planet.rotation_euler = (0.0, 0.0, math.radians(9))
     planet.keyframe_insert("rotation_euler", frame=1)
     planet.rotation_euler = (0.0, 0.0, math.radians(369))
-    planet.keyframe_insert("rotation_euler", frame=360)
+    planet.keyframe_insert("rotation_euler", frame=LOOP_END)
     set_linear_keyframes(planet, "rotation_euler")
 
     # A separate veil moves with the world but has a small phase offset. It
@@ -492,7 +631,7 @@ def build_scene() -> None:
     cloud_veil.rotation_euler = (0.0, 0.0, math.radians(27))
     cloud_veil.keyframe_insert("rotation_euler", frame=1)
     cloud_veil.rotation_euler = (0.0, 0.0, math.radians(387))
-    cloud_veil.keyframe_insert("rotation_euler", frame=360)
+    cloud_veil.keyframe_insert("rotation_euler", frame=LOOP_END)
     set_linear_keyframes(cloud_veil, "rotation_euler")
 
     # Broken lateral crescents rather than a complete luminous outline.
@@ -520,10 +659,12 @@ def build_scene() -> None:
     atmosphere.hide_render = True
 
     matrix = add_dual_geodesic_lattice(4.35, [magenta, violet, cyan], muted_violet)
-    add_shell_energy_sector("upper left energy field", math.radians(133), [magenta, violet, cyan], 1, matrix)
-    add_shell_energy_sector("right energy field", math.radians(-2), [cyan, violet, magenta], 2, matrix)
-    add_shell_energy_sector("lower left energy field", math.radians(237), [violet, magenta, cyan], 3, matrix)
-    add_shell_energy_sector("lower right energy field", math.radians(294), [magenta, violet, cyan], 4, matrix)
+    # ARK's active fields use a cyan/white core with brief lime and amber
+    # overloads, while the surrounding lattice remains predominantly violet.
+    add_shell_energy_sector("upper left energy field", math.radians(133), [white_blue, cyan, lime, magenta], 1, matrix)
+    add_shell_energy_sector("right energy field", math.radians(-2), [cyan, white_blue, amber, lime, magenta], 2, matrix)
+    add_shell_energy_sector("lower left energy field", math.radians(237), [violet, magenta, cyan, amber], 3, matrix)
+    add_shell_energy_sector("lower right energy field", math.radians(294), [magenta, violet, cyan, lime], 4, matrix)
 
     # Camera looks down the negative Y axis: X/Z map directly to the UI background.
     bpy.ops.object.camera_add(location=(0, -17.5, 0.15))

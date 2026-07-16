@@ -4,7 +4,7 @@ Configure only (updates the .blend file):
     blender --background .temp/blender/ark_orbital_scene.blend \
       --python tools/blender/render_ark_orbital_loop.py
 
-Render the 12-second loop:
+Render the 48-second loop:
     blender --background .temp/blender/ark_orbital_scene.blend \
       --python tools/blender/render_ark_orbital_loop.py -- --render
 """
@@ -24,6 +24,7 @@ SCENE_PATH = ROOT / ".temp" / "blender" / "ark_orbital_scene.blend"
 VIDEO_PATH = ROOT / "frontend" / "public" / "assets" / "ark-orbital-loop.mp4"
 FRAME_DIR = ROOT / ".temp" / "blender" / "frames"
 FRAME_PREFIX = FRAME_DIR / "ark_orbital_"
+LOOP_END = 1440
 
 
 def configure_render() -> None:
@@ -38,7 +39,7 @@ def configure_render() -> None:
     # practical on a workstation.
     scene.eevee.taa_render_samples = 16
     scene.frame_start = 1
-    scene.frame_end = 360
+    scene.frame_end = LOOP_END
     # Blender 5.2 renders an image sequence. FFmpeg encodes it afterwards;
     # retaining frames makes the long render recoverable and inspectable.
     scene.render.image_settings.file_format = "PNG"
