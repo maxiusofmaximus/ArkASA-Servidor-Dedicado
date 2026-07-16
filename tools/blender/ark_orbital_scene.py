@@ -538,6 +538,21 @@ def add_shell_energy_sector(
                 spark.scale = base_scale * multiplier
                 spark.keyframe_insert("scale", frame=frame)
 
+    # The dual lattice itself stays fixed, but ARK's charged indicators drift
+    # a few cells around it. This very small orbital slide is what makes the
+    # energy read as an animated system rather than four blinking stickers.
+    drift = math.radians(5.5 + phase * 0.8) * (-1 if phase % 2 else 1)
+    for frame, angle in (
+        (1, 0.0),
+        (loop_frame(88), drift),
+        (loop_frame(184), -drift * 0.55),
+        (loop_frame(276), drift * 0.34),
+        (LOOP_END, 0.0),
+    ):
+        sector.rotation_euler = (0.0, angle, 0.0)
+        sector.keyframe_insert("rotation_euler", frame=frame)
+    set_linear_keyframes(sector, "rotation_euler")
+
 
 def point_camera(camera: bpy.types.Object, target: Vector) -> None:
     direction = target - camera.location
