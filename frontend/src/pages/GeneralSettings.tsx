@@ -1,4 +1,6 @@
 import type { ServerConfig } from '../types'
+import VersionBadge from '../components/VersionBadge'
+import { useServerVersion } from '../hooks/useServerVersion'
 
 interface GeneralSettingsProps {
   config: ServerConfig
@@ -77,9 +79,20 @@ export default function GeneralSettings({
     })
   }
 
+  const version = useServerVersion(config)
+
   return (
     <div className="space-y-6">
-      <h3 className="text-2xl font-bold text-ark-cyan">Server Identification</h3>
+      <div className="flex items-center justify-between gap-4">
+        <h3 className="text-2xl font-bold text-ark-cyan">Server Identification</h3>
+        <VersionBadge
+          info={version.info}
+          loading={version.loading}
+          updating={version.updating}
+          onRefresh={version.refresh}
+          onUpdate={version.runUpdate}
+        />
+      </div>
 
       <div className="grid grid-cols-2 gap-6">
         <div>

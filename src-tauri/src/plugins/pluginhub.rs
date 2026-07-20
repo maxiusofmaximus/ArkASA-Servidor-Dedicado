@@ -227,6 +227,7 @@ mod tests {
 
     #[test]
     fn enable_then_disable_roundtrips() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         // Install id into a tmp file
         let id = "convex";
         // Make sure we start clean

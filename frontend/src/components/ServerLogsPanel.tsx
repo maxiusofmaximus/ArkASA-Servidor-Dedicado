@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { invoke } from '../services/tauri'
+import type { LogAppendEvent } from '../types'
 
 interface ServerLogsPanelProps {
   serverDir: string
@@ -36,9 +38,37 @@ export default function ServerLogsPanel({ serverDir, maps, onClose }: ServerLogs
   }, [serverDir, selectedMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!autoRefresh) return
-    const interval = setInterval(() => loadLogs(), 3000)
-    return () => clearInterval(interval)
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+    const lastEventAt = { current: 0 }
+    const onAppend = (event: { payload: LogAppendEvent }) => {
+      const payload = event.payload
+      if (payload.server_dir !== serverDir || payload.map !== selectedMap) return
+      lastEventAt.current = Date.now()
+      if (autoRefresh) {
+        setLines(payload.tail.length > 0 ? payload.tail : payload.lines)
+        setError(null)
+      }
+    }
+    const armFallback = () => {
+      if (disposed) return
+      fallbackTimer = setTimeout(async () => {
+        if (autoRefresh && Date.now() - lastEventAt.current >= 35_000) await loadLogs()
+        armFallback()
+      }, 30_000)
+    }
+
+    void listen<LogAppendEvent>('logs://append', onAppend).then((fn) => {
+      if (disposed) fn()
+      else unlisten = fn
+    }).catch(() => {})
+    armFallback()
+    return () => {
+      disposed = true
+      if (fallbackTimer) clearTimeout(fallbackTimer)
+      unlisten?.()
+    }
   }, [autoRefresh, serverDir, selectedMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

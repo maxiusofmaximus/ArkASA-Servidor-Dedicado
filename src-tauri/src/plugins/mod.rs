@@ -530,3 +530,18 @@ pub fn plugin_storage_dir() -> std::path::PathBuf {
     p
 }
 
+// Unit tests share the same on-disk plugin directory and the in-memory
+// keyring fallback. Keep those tests in one process-wide critical section so
+// migration sweeps cannot observe another test's fixture halfway through.
+#[cfg(test)]
+static PLUGIN_STORAGE_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn lock_plugin_storage_for_test() -> std::sync::MutexGuard<'static, ()> {
+    PLUGIN_STORAGE_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("plugin storage test lock poisoned")
+}
+

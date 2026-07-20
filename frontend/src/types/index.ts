@@ -96,6 +96,18 @@ export interface NetworkConfig {
   fixed_port_assignment_per_map: boolean
   /** When true, the frontend internet-gate is bypassed at start time. */
   allow_start_without_internet: boolean
+  /** When true, the start flow triggers `update_server` if the local
+   *  buildid is behind Steam's before actually launching ARK. */
+  auto_update_before_start: boolean
+  /** **Cluster port-failover** — runtime-only. When true, the launcher
+   *  waits up to `cluster_failover_timeout_sec` for the primary map
+   *  (idx 0) to bind its UDP game port. If it never does, the next
+   *  pending map reclaims slot 0 instead of slot i. Prevents Ragnarok
+   *  from stealing TheIsland's 7777 slot if TheIsland crashed silently. */
+  cluster_failover_enabled: boolean
+  /** How long (seconds) the launcher waits for the primary map's
+   *  UDP port to bind before allowing failover. Clamped 5-600 s. */
+  cluster_failover_timeout_sec: number
   // Connection Manager (v2 dynamic list)
   connection_entries: ConnectionEntry[]
   // Legacy — read from old TOML; effective_ip() falls back to them
@@ -287,6 +299,17 @@ export interface AdvancedConfig {
   only_allow_specific_engrams: boolean
   auto_unlock_engrams: number[]
   custom_config: Record<string, string>
+  /** Auto-save interval (minutes) for the world save. `15` matches ARK's
+   * default; the operator raises to reduce I/O spikes or lowers for
+   * crash-recovery granularity. UI bound to Opciones → Mundo. */
+  auto_save_period_minutes: number
+  /** Global item stack size multiplier. `1.0` = stock stacks. `2.0` = double
+   * stacks across all items that have stack_size > 1 in the ARK item db. */
+  item_stack_size_multiplier: number
+  /** Per-item stack overrides. Key = ARK item-class string (e.g.
+   * `PrimalItemConsumable_RawPrimeMeat_C`), value = desired stack size.
+   * Empty by default. UI bound to Opciones → Inventario → "Apilables custom". */
+  item_stack_overrides: Record<string, number>
 }
 
 export interface MapInstanceStatus {
@@ -294,6 +317,27 @@ export interface MapInstanceStatus {
   map_id: string
   map_label: string
   running: boolean
+}
+
+export interface ServerStatusEvent {
+  running: boolean
+  pid: number | null
+  uptime_secs: number | null
+  maps: MapInstanceStatus[]
+  observed_at_ms: number
+}
+
+export interface InternetStatusEvent {
+  online: boolean
+  observed_at_ms: number
+}
+
+export interface LogAppendEvent {
+  server_dir: string
+  map: string
+  lines: string[]
+  tail: string[]
+  observed_at_ms: number
 }
 
 // Main server configuration
@@ -314,6 +358,10 @@ export interface ServerConfig {
   pve: PveConfig
   pvp: PvpConfig
   advanced: AdvancedConfig
+  /** Operator-chosen set of marketplace plugins that are part of this
+   * server setup. Persisted in TOML alongside the rest of
+   * `server-config.toml`. Sorted alphabetically when serialized. */
+  installed_plugins: string[]
 }
 
 // Validation types (unchanged)
@@ -328,8 +376,11 @@ export interface ValidationResult {
   errors: ValidationError[]
 }
 
-export interface ServerStatus {
-  running: boolean
-  lastUpdate: number
-  configValid: boolean
+// Steam buildid of the ARK Survival Ascended dedicated server
+// (app id 2430930).  Compared to detect stale servers.
+export interface ServerVersionInfo {
+  local_buildid:  number | null
+  latest_buildid: number | null
+  needs_update:   boolean
+  server_dir:     string
 }

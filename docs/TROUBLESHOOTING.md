@@ -605,5 +605,66 @@ Si tu problema no está aquí:
 
 ---
 
+## El servidor no aparece en la lista in-game tras una actualización de ARK
+
+### Síntomas
+- Servidor funciona, jugadores pueden entrar por IP directa (Tailscale/playit.gg)
+- El log indica `Server has completed startup and is now advertising for join`
+- Pero NO aparece en la lista oficial "Unofficial PC" del juego
+- Empezó a ocurrir después de un update de ARK ASA (p.ej. v89.41 / Genesis 1 + Tides of Fortune)
+
+### Causa #1 (más común): Falta `[Internationalization] Culture=en` en `GameUserSettings.ini`
+
+ASA usa la sección `[Internationalization]` del `GameUserSettings.ini` para cierto proceso de registro de sesión con EOS/Epic. Sin ella, **el servidor nunca se pública en la lista, aunque funcione por conexión directa**. Esto es un fallo silencioso — no arroja error.
+
+**Fix:**
+1. Abre `ShooterGame\Saved\Config\WindowsServer\GameUserSettings.ini`
+2. **Añade al principio del archivo** (antes de `[ServerSettings]`):
+   ```ini
+   [Internationalization]
+   Culture=en
+   ```
+3. Reinicia el servidor
+
+> Nota: La versión actual de esta app (Config Manager) ya escribe este bloque automáticamente al regenerar el INI (`persister.rs::write_gamesettings_ini`). Si tienes un INI viejo sin el bloque, agrégalo manualmente.
+
+### Causa #2: Certificado EOS / Epic expirado o no instalado
+
+ASA registra el servidor en la lista in-game vía **Epic Online Services** sobre TLS 1.2 (puertos 80/443). En Windows, esto requiere el **certificado CRL `Amazon RSA 2048 M02`** instalado en el Trusted Root store. Tras updates mayores, Epic rotó certificados y el viejo puede inválidar el registro.
+
+**Fix:**
+1. Descargar el CRL desde: `http://crl.r2m02.amazontrust.com/r2m02.crl`
+2. Abrir `certlm.msc` (Local Machine) → **Trusted Root Certification Authorities → Certificates**
+3. Click derecho → **All Tasks → Import** → seleccionar `r2m02.crl` → **Place all certificates in: Trusted Root Certification Authorities**
+4. (Opcional) Repetir en `certmgr.msc` (Current User)
+5. **Quitar cualquier certificado viejo** llamado `Amazon RSA 2048 M02` si fue instalado antes del 18 nov 2023 (si instalaste uno previo)
+6. Reiniciar el PC
+
+### Causa #3: Build del servidor no coincide con el cliente
+
+Tras cada update mayor, si el SteamCMD solo hizo `app_update 2430930` (sin `validate`), pueden quedar binarios viejos. El servidor arranca y reporta "advertising", pero la lista in-game filtra por `buildid` y lo oculta.
+
+**Fix:**
+```bat
+steamcmd +force_install_dir "C:\ASA\server" +login anonymous +app_update 2430930 validate +quit
+```
+
+> El flag `validate` es obligatorio — re-descarga archivos corruptos/incompletos que un `app_update` normal salta.
+
+### Test rápido de localización (cliente)
+
+En la consola del juego (tecla `~`):
+```
+Ark.UseServerList 0
+```
+
+Esto fuerza al cliente a usar el path Steam Master Server en lugar de EOS. **Si tu servidor aparece con `UseServerList 0` pero NO aparece normalmente → el problema es del path EOS** (causa #1 o #2). Si tampoco aparece con `UseServerList 0` → el problema es de Steam A2S (puertos/firewall).
+
+### Logs relevantes a revisar
+- `<server_dir>\ShooterGame\Saved\Logs\ShooterGame.log` → mirar `ARK Version`, `Server has completed startup and is now advertising for join`, `EOS`, `OnlineService`
+- `app.log` del Config Manager → confirmar que `start_server` invoca `build_launch_args` con `-clusterid=` correcto
+
+---
+
 ¿Aún necesitas ayuda? Abre un issue en GitHub con toda la información que puedas proporcionar.
 

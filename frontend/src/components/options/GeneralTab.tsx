@@ -1,42 +1,12 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState } from 'react'
 import { useBackupStore, type BackupScope } from '../../stores/backupStore'
 import { useConfigStore, type ConfigStore } from '../../stores/configStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useI18n } from '../../i18n/useI18n'
 import { Section, Toggle } from '../ui/OptionsUI'
+import { useServerVersion } from '../../hooks/useServerVersion'
+import { versionStatus } from '../../utils/versionStatus'
 import { invoke } from '@tauri-apps/api/core'
-import { open as openExternal } from '@tauri-apps/plugin-shell'
-
-async function pushConvex(): Promise<string> {
-  return await invoke<string>('convex_push_schema')
-}
-
-async function deployVercel(): Promise<{ url: string; status: string }> {
-  const r = await invoke<{
-    connected: boolean
-    last_deploy_url: string | null
-    last_deploy_status: string | null
-    last_deploy_at_unix: number | null
-    project_name: string | null
-  }>('vercel_deploy_web')
-  return { url: r.last_deploy_url ?? '', status: r.last_deploy_status ?? '' }
-}
-
-async function getConvexStatus() {
-  return await invoke<{
-    connected: boolean
-    deployment_url: string | null
-    schema_pushed_at_unix: number | null
-  }>('convex_status')
-}
-
-async function getVercelStatus() {
-  return await invoke<{
-    connected: boolean
-    last_deploy_url: string | null
-    last_deploy_status: string | null
-  }>('vercel_status')
-}
 
 const SCOPE_VALUES: BackupScope[] = ['map', 'map_players_tribes', 'full']
 
@@ -57,10 +27,16 @@ export default function GeneralTab() {
   const store = useBackupStore()
   const cfg = useConfigStore(
     useShallow((s: ConfigStore) => ({
-      network: s.config?.network,
+      network:  s.config?.network,
+      advanced: s.config?.advanced,
+      config:   s.config,
       updateNetwork: (patch: Partial<NonNullable<typeof s.config>['network']>) => {
         if (!s.config) return
         s.setConfig({ ...s.config, network: { ...s.config.network, ...patch } })
+      },
+      updateAdvanced: (patch: Partial<NonNullable<typeof s.config>['advanced']>) => {
+        if (!s.config) return
+        s.setConfig({ ...s.config, advanced: { ...s.config.advanced, ...patch } })
       },
     })),
   )
@@ -128,13 +104,43 @@ export default function GeneralTab() {
               </div>
             </div>
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-ark-cyan/80 text-sm">{tk('fixed_ports_title', 'Fixed port assignment per map (Recommended)')}</p>
-                <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('fixed_ports_desc', 'Each cluster map always lands on the same ports.')}</p>
+              <div className="flex-1 pr-3">
+                <p className="text-ark-cyan/80 text-sm">{tk('fixed_ports_title', 'Consecutive cluster ports (per ARK ASA guide)')}</p>
+                <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('fixed_ports_desc', 'When ON, each cluster map advances by 2 ports on Game (7777/7779/7781), +1 on Peer (always Game+1), +1 on Query (27015/27016/27017), +1 on RCON (27020/27021/27022). Recommended for the official ARK ASA cluster guide.')}</p>
+                <p className="text-ark-cyan/30 text-[10px] mt-0.5 italic">{tk('fixed_ports_when_off', 'When OFF, ports are pinned to each map by FNV-1a hash of its name — each map gets the same port on every boot, but ports are NOT consecutive (e.g. Ragnarok may land on 8221/8219).')}</p>
               </div>
               <Toggle
-                value={cfg.network?.fixed_port_assignment_per_map ?? true}
+                value={cfg.network?.fixed_port_assignment_per_map ?? false}
                 onChange={(v) => cfg.updateNetwork({ fixed_port_assignment_per_map: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-ark-cyan/80 text-sm">{tk('cluster_failover_title', 'Allow secondary map to reclaim primary slot')}</p>
+                <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('cluster_failover_desc', 'If the primary map fails to bind its UDP port in time, the next map launches on slot 0 instead. Runtime-only.')}</p>
+              </div>
+              <Toggle
+                value={cfg.network?.cluster_failover_enabled ?? false}
+                onChange={(v) => cfg.updateNetwork({ cluster_failover_enabled: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between pl-4">
+              <div>
+                <p className="text-ark-cyan/70 text-xs">{tk('cluster_failover_timeout_label', 'Primary-bind timeout (seconds)')}</p>
+              </div>
+              <input
+                type="number"
+                min={5}
+                max={600}
+                step={5}
+                className="w-24 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
+                value={cfg.network?.cluster_failover_timeout_sec ?? 60}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (!Number.isFinite(v)) return;
+                  cfg.updateNetwork({ cluster_failover_timeout_sec: Math.max(5, Math.min(600, Math.round(v))) });
+                }}
+                disabled={!cfg.network?.cluster_failover_enabled}
               />
             </div>
             <div className="flex items-center justify-between">
@@ -167,9 +173,80 @@ export default function GeneralTab() {
         </div>
       </Section>
 
-      {/* ── Public network & Tailscale (v2.1) ──────────────────────────── */}
-      <Section title={tk('section_tailscale', 'Public network & Tailscale')}>
-        <TailscaleWizard />
+      {/* ── Mundo / Inventario (v2.1) ───────────────────────────────── */}
+      <Section title={tk('section_world', 'Mundo & Inventario')}>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex-1 pr-3">
+              <p className="text-ark-cyan/80 text-sm">{tk('auto_save_title', 'Auto-guardado del mundo (minutos)')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5">
+                {tk('auto_save_desc',
+                  'Frecuencia con que el server hace save al mundo entero. ARK ASA por defecto 15 min. Sube a 30–60 si tienes cluster grande y ves bajones tras cada saveworld; baja a 5 si quieres recuperación más granular tras caídas. 0 = guarda constantemente (no recomendable, mucho I/O).')
+                }
+              </p>
+              <p className="text-ark-cyan/30 text-[10px] mt-0.5 italic">
+                {tk('auto_save_hint',
+                  'También se guarda al pulsar Stop (saveworld → doexit). Razón principal de los FPS drops durante juego es el GC del cluster + el coste del save — ajustar este valor es lo que más afecta la fluidez general.')
+                }
+              </p>
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={120}
+              step={1}
+              value={cfg.advanced?.auto_save_period_minutes ?? 15}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (!Number.isFinite(v)) return;
+                cfg.updateAdvanced({ auto_save_period_minutes: Math.max(0, Math.min(120, Math.round(v))) });
+              }}
+              className="w-24 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1 pr-3">
+              <p className="text-ark-cyan/80 text-sm">{tk('global_stack_title', 'Apilable global (multiplicador de stacks)')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5">
+                {tk('global_stack_desc',
+                  'Multiplica el stack base de cada ítem apilable. 1 = oficial ARK (carne 100, primemeat 40, stone 100, etc.). 2 duplica todo. Para tocar un recurso concreto usa la tabla de abajo.')}
+              </p>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step={1}
+              value={cfg.advanced?.item_stack_size_multiplier ?? 1}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (!Number.isFinite(v)) return;
+                cfg.updateAdvanced({ item_stack_size_multiplier: Math.max(1, Math.min(10, Math.round(v))) });
+              }}
+              className="w-20 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
+            />
+          </div>
+
+          <StackOverridesRow />
+        </div>
+      </Section>
+
+      {/* ── Version sync (v2.1) ───────────────────────────────────────── */}
+      <Section title={tk('section_version_sync', 'Version Sync (Steam buildid)')}>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-ark-cyan/80 text-sm">{tk('auto_update_title', 'Auto Update before Start')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('auto_update_desc', 'When the local buildid is behind Steam\u2019s, update automatically before the server boots.')}</p>
+            </div>
+            <Toggle
+              value={cfg.network?.auto_update_before_start ?? true}
+              onChange={(v) => cfg.updateNetwork({ auto_update_before_start: v })}
+            />
+          </div>
+          <UpdateNowCard />
+        </div>
       </Section>
 
       <Section title={tk('section_close_behavior', 'Close Behavior')}>
@@ -199,14 +276,6 @@ export default function GeneralTab() {
             <p className="text-ark-cyan/40 text-xs mt-0.5">{tk('logs_btn_desc', 'Shows the LOGS button in the bottom bar to view ShooterGame.log in real time')}</p>
           </div>
           <Toggle value={store.logsEnabled} onChange={store.setLogsEnabled} />
-        </div>
-      </Section>
-
-      {/* ── Cloud Services (v2.1) ──────────────────────────────────────── */}
-      <Section title={tk('section_cloud_services', 'Cloud Services')}>
-        <div className="space-y-4 text-sm">
-          <ConvexCard />
-          <VercelCard />
         </div>
       </Section>
 
@@ -257,437 +326,392 @@ export default function GeneralTab() {
           </span>
         </div>
       </Section>
+
+      <Section title={tk('section_diag_repair', 'Diagnostics & repair — in-game server list')}>
+        <DiagRepairCard />
+      </Section>
     </>
   )
 }
 
 /**
- * Convex plugin card — single button to connect via OAuth + push schema.
- *
- * The `invoke<string>(...)` calls Tauri commands registered by name in
- * `src-tauri/src/plugins/convex/mod.rs`. On success, the Tauri API
- * returns the OAuth URL the desktop should open in the default browser.
- * The browser redirects back to `http://127.0.0.1:8768/oauth/callback`
- * which the `http_api.rs` loopback (extended in Hito 12) intercepts.
+ * Version Sync card — surfaces the same `useServerVersion` data the
+ * top-bar badge uses, but here we expose an explicit `[ Update Now ]`
+ * button so the operator can force a SteamCMD update even when auto
+ * update is off.
  */
-function ConvexCard() {
-  const [status, setStatus] = useState<any>(null)
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
-  const refresh = useCallback(async () => {
-    try { setStatus(await getConvexStatus()) } catch (e: any) { setMsg(String(e)) }
-  }, [])
-  useEffect(() => { void refresh() }, [refresh])
-
-  const connect = async () => {
-    setBusy(true); setMsg(null)
-    try {
-      const msg = await invoke<string>('begin_convex_link')
-      setMsg(msg.includes('connected') ? msg : `${msg} — check the CLI window for the GitHub login screen.`)
-    } catch (e: any) { setMsg(String(e)) }
-    finally { setBusy(false) }
-  }
-  const push = async () => {
-    setBusy(true); setMsg(null)
-    try { const out = await pushConvex(); setMsg(out); refresh() }
-    catch (e: any) { setMsg(String(e)) }
-    finally { setBusy(false) }
-  }
-
-  return (
-    <div className="rounded-md p-3 border border-ark-cyan/15">
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <p className="text-ark-cyan/85 font-semibold">Convex BaaS</p>
-          <p className="text-ark-cyan/40 text-xs">
-            Backend that brokers our web admin and pushes every-server-state to the cloud.
-          </p>
-        </div>
-        <PluginStatusBadge connected={status?.connected} />
-      </div>
-      <div className="flex gap-2">
-        <button
-          disabled={busy}
-          onClick={connect}
-          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
-        >
-          {status?.connected ? 'Reconnect' : 'Connect Convex'}
-        </button>
-        <button
-          disabled={!status?.connected || busy}
-          onClick={push}
-          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
-        >
-          Push schema
-        </button>
-        {status?.deployment_url && (
-          <span className="text-ark-cyan/40 text-xs font-mono truncate">
-            {status.deployment_url}
-          </span>
-        )}
-      </div>
-      {msg && <p className="mt-2 text-ark-cyan/50 text-xs italic">{msg}</p>}
-    </div>
-  )
-}
-
-function VercelCard() {
-  const [status, setStatus] = useState<any>(null)
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
-  const [token, setToken] = useState('')
-  const [projectId, setProjectId] = useState('')
-  const [oneClickBusy, setOneClickBusy] = useState(false)
-  const [oneClickOutput, setOneClickOutput] = useState('')
-  const refresh = useCallback(async () => {
-    try { setStatus(await getVercelStatus()) } catch (e: any) { setMsg(String(e)) }
-  }, [])
-  useEffect(() => { void refresh() }, [refresh])
-  const connect = async () => {
-    setBusy(true); setMsg(null)
-    try {
-      const msg = await invoke<string>('begin_vercel_link')
-      setMsg(msg.includes('connected') ? msg : `${msg} — check the CLI window for the vercel login browser.`)
-    } catch (e: any) { setMsg(String(e)) }
-    finally { setBusy(false) }
-  }
-  const deploy = async () => {
-    setBusy(true); setMsg(null)
-    try {
-      const r = await deployVercel()
-      setMsg(`deployed ${r.status}: ${r.url || '<see dashboard>'}`)
-      refresh()
-    } catch (e: any) { setMsg(String(e)) }
-    finally { setBusy(false) }
-  }
-  const oneClickDeploy = async () => {
-    if (!token.trim()) {
-      setMsg('paste a Vercel token first — get one at https://vercel.com/account/tokens')
-      return
-    }
-    setOneClickBusy(true)
-    setMsg(null)
-    setOneClickOutput('')
-    try {
-      const out = await invoke<string>('vercel_deploy_one_click', {
-        token: token.trim(),
-        projectId: projectId.trim() || null,
-      })
-      setOneClickOutput(out)
-      // Try to extract the .vercel.app URL for the status badge link
-      const url = out.split(/\s+/).find(t => t.startsWith('https://') && t.includes('.vercel.app')) ?? null
-      if (url) {
-        setStatus((s: any) => ({ ...s, last_deploy_url: url, connected: true }))
-      }
-      setMsg('One-click deploy complete. See output below.')
-    } catch (e: any) {
-      setOneClickOutput(String(e))
-      setMsg(`One-click deploy failed: ${e}`)
-    } finally {
-      setOneClickBusy(false)
-      refresh()
-    }
-  }
-  return (
-    <div className="rounded-md p-3 border border-ark-cyan/15">
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <p className="text-ark-cyan/85 font-semibold">Vercel (web admin)</p>
-          <p className="text-ark-cyan/40 text-xs">
-            Hosts the public admin UI at <code className="text-ark-accent">ark-asa-admin.vercel.app</code>.
-            Push schema first.
-          </p>
-        </div>
-        <PluginStatusBadge connected={status?.connected} />
-      </div>
-      {/* Legacy CLI-based flow (kept as fallback) */}
-      <div className="flex gap-2 mb-2">
-        <button
-          disabled={busy}
-          onClick={connect}
-          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
-        >
-          {status?.connected ? 'Reconnect' : 'Connect Vercel'}
-        </button>
-        <button
-          disabled={!status?.connected || busy}
-          onClick={deploy}
-          className="ark-action-btn px-4 py-1 text-xs disabled:opacity-40"
-        >
-          Deploy web
-        </button>
-        {status?.last_deploy_url && (
-          <a
-            href={status.last_deploy_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-ark-cyan/60 text-xs font-mono truncate hover:text-ark-cyan"
-          >
-            {status.last_deploy_url}
-          </a>
-        )}
-      </div>
-
-      {/* ── One-click flow with pasted token (no CLI shell-out) ────────────── */}
-      <details className="mt-2">
-        <summary className="cursor-pointer text-ark-cyan/70 text-[11px] uppercase tracking-widest">
-          ⚡ One-Click Deploy (paste a token)
-        </summary>
-        <div className="mt-3 space-y-2">
-          <p className="text-ark-cyan/40 text-[10px]">
-            Paste a Vercel token from <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener" className="underline">vercel.com/account/tokens</a> and click DEPLOY. The app will save the token, run <code>vercel deploy --prod --yes</code>, and capture the production URL.
-          </p>
-          <input
-            type="password"
-            value={token}
-            onChange={e => setToken(e.target.value)}
-            placeholder="Vercel token (paste from dashboard)"
-            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
-          />
-          <input
-            type="text"
-            value={projectId}
-            onChange={e => setProjectId(e.target.value)}
-            placeholder="Optional: Vercel project id (pr_…) or project name"
-            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
-          />
-          <button
-            disabled={oneClickBusy || !token.trim()}
-            onClick={oneClickDeploy}
-            className="ark-action-btn px-4 py-1.5 text-xs disabled:opacity-40"
-            style={{ borderColor: 'rgba(0, 200, 255, 0.4)' }}
-          >
-            {oneClickBusy ? 'Deploying…' : 'DEPLOY'}
-          </button>
-          {oneClickOutput && (
-            <pre className="text-[10px] bg-black/40 text-ark-cyan/60 p-3 rounded font-mono max-h-40 overflow-y-auto whitespace-pre-wrap leading-tight border border-ark-cyan/5">
-              {oneClickOutput}
-            </pre>
-          )}
-        </div>
-      </details>
-
-      {msg && <p className="mt-2 text-ark-cyan/50 text-xs italic">{msg}</p>}
-    </div>
-  )
-}
-
-function PluginStatusBadge({ connected }: { connected: boolean | undefined }) {
-  return (
-    <span
-      className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded"
-      style={{
-        color:      connected ? 'rgba(74,222,128,0.9)' : 'rgba(239,68,68,0.9)',
-        background: connected ? 'rgba(74,222,128,0.1)' : 'rgba(239,68,68,0.1)',
-        border:     connected ? '1px solid rgba(74,222,128,0.4)' : 'rgba(239,68,68,0.4)',
-      }}
-    >
-      {connected ? '● connected' : '○ not connected'}
-    </span>
-  )
-}
-
-/**
- * Tailscale wizard (v2.1, Network blocker #4) — surfaces the local
- * public-IP detection + CGNAT heuristic. When CGNAT is *suspected*
- * (no public IPv4 visible), the wizard offers a one-shot button to
- * run `tailscale up` against an auth key the operator pastes from
- * the Tailscale admin panel. The resulting `100.x.x.x` IP is
- * surfaced so the operator can plug it into the Web Admin player
- * connection entry.
- */
-function TailscaleWizard() {
+function UpdateNowCard() {
   const { tk } = useI18n()
-  const [status, setStatus] = useState<{
-    installed: boolean
-    up: boolean
-    ip: string | null
-    hostname: string | null
-    cgnat_suspect: boolean
-    public_ip: string | null
-    hint: string
-  } | null>(null)
-  const [downloadUrl, setDownloadUrl] = useState('')
-  const [authKey, setAuthKey] = useState('')
-  const [hostname, setHostname] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
+  const cfg = useConfigStore(
+    useShallow((s: ConfigStore) => ({
+      config: s.config,
+    })),
+  )
+  const version = useServerVersion(cfg.config)
+  const status = versionStatus(version.info)
+  const local  = version.info?.local_buildid  ?? null
+  const latest = version.info?.latest_buildid ?? null
 
-  const refresh = useCallback(async () => {
+  const [busy, setBusy]   = useState(false)
+  const [msg,  setMsg]    = useState<string | null>(null)
+
+  const runUpdate = async () => {
+    setBusy(true); setMsg(null)
     try {
-      const s = await invoke<any>('tailscale_status_combined')
-      setStatus(s)
-      const url = await invoke<string>('tailscale_download_url')
-      setDownloadUrl(url)
-    } catch (e: any) {
-      setMsg(String(e))
-    }
-  }, [])
-
-  useEffect(() => { void refresh() }, [refresh])
-
-  const setup = async () => {
-    if (!authKey.trim()) {
-      setMsg(tk('tailscale_missing_auth_key',
-        'Paste an auth key — get one at https://login.tailscale.com/admin/settings/keys'))
-      return
-    }
-    if (!hostname.trim()) {
-      setMsg(tk('tailscale_missing_hostname',
-        'Pick a hostname (e.g. arkasa-pi5) — this is the MagicDNS name your friends will use.'))
-      return
-    }
-    setBusy(true)
-    setMsg(null)
-    try {
-      const out = await invoke<any>('tailscale_setup', {
-        authKey: authKey.trim(),
-        hostname: hostname.trim(),
-        publiclyDnsLabel: null,
-      })
-      setStatus(out)
-      setMsg(out.hint ?? '')
+      const out = await invoke<string>('update_server', { config: cfg.config })
+      setMsg(out)
+      await version.refresh()
     } catch (e: any) {
       setMsg(String(e))
     } finally {
       setBusy(false)
-      refresh()
     }
   }
 
-  const installTailscale = async () => {
-    if (!downloadUrl) { await refresh(); return }
-    try { await openExternal(downloadUrl) } catch { /* ignore */ }
-  }
-
-  const cgnat  = status?.cgnat_suspect ?? false
-  const ip     = status?.ip ?? null
-  const pub    = status?.public_ip ?? null
-  const installed = status?.installed ?? false
-  const up    = status?.up ?? false
+  const { color, label, dot } = ((): { color: string; label: string; dot: string } => {
+    switch (status) {
+      case 'current':  return { color: 'rgb(74,222,128)',  label: 'Up to date',  dot: '🟢' }
+      case 'outdated': return { color: 'rgb(248,113,113)', label: 'Outdated',    dot: '🔴' }
+      default:         return { color: 'rgb(148,163,184)', label: 'No manifest', dot: '⚪' }
+    }
+  })()
 
   return (
-    <div className="rounded-md p-3 border border-ark-cyan/15 space-y-3">
+    <div className="rounded-md p-3 border border-ark-cyan/15 space-y-2">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-ark-cyan/85 font-semibold">{tk('tailscale_title', 'Public network & Tailscale')}</p>
-          <p className="text-ark-cyan/40 text-xs">
-            {tk('tailscale_intro',
-              'Detects if your ISP gives you a public IPv4 (port-forwarding works) or CGNAT-only (use Tailscale).')}
+          <p className="text-ark-cyan/85 font-semibold">
+            <span className="mr-1">{dot}</span>
+            {tk('version_status', label)}
+          </p>
+          <p className="text-ark-cyan/40 text-xs font-mono">
+            {local  && <>local <span style={{ color }}>v{local}</span>&nbsp;·&nbsp;</>}
+            {latest && <>latest <span style={{ color }}>v{latest}</span></>}
+            {!local && !latest && (tk('version_unknown_desc', 'SteamCMD did not report a buildid. Is SteamCMD installed at the configured path?'))}
           </p>
         </div>
-        <PluginStatusBadge connected={up} />
-      </div>
-
-      {/* 1. Status table */}
-      <ul className="text-[11px] space-y-1 font-mono">
-        <li className="flex justify-between text-ark-cyan/70">
-          <span>Public IPv4</span>
-          <span className={pub ? 'text-emerald-400' : 'text-amber-400'}>
-            {pub ?? tk('tailscale_none', '(none)') }
-          </span>
-        </li>
-        <li className="flex justify-between text-ark-cyan/70">
-          <span>Tailscale CLI</span>
-          <span className={installed ? 'text-emerald-400' : 'text-amber-400'}>
-            {installed ? tk('tailscale_installed_yes', 'installed')
-                       : tk('tailscale_installed_no',  'not installed')}
-          </span>
-        </li>
-        <li className="flex justify-between text-ark-cyan/70">
-          <span>Tailscale IP</span>
-          <span className={ip ? 'text-emerald-400' : 'text-amber-400'}>
-            {ip ?? tk('tailscale_none', '(none)')}
-          </span>
-        </li>
-        <li className="flex justify-between text-ark-cyan/70">
-          <span>CGNAT</span>
-          <span className={cgnat ? 'text-amber-400' : 'text-emerald-400'}>
-            {cgnat ? tk('tailscale_cgnat_yes', 'suspected')
-                   : tk('tailscale_cgnat_no',  'no')}
-          </span>
-        </li>
-      </ul>
-
-      {/* 2. Hint box — when CGNAT or Tailscale missing */}
-      {(cgnat || !installed) && (
-        <div className="rounded border border-amber-400/30 bg-amber-400/5 p-2 text-[11px] space-y-1">
-          <p className="text-amber-300">{status?.hint ?? tk('tailscale_probing', 'Probing status…')}</p>
-          {!installed && downloadUrl && (
-            <button
-              onClick={installTailscale}
-              className="text-ark-cyan/80 underline text-[11px] tracking-widest"
-            >
-              ↓ {tk('tailscale_install_btn', 'INSTALL TAILSCALE')}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* 3. Setup form (only when installed but not up) */}
-      {installed && !up && (
-        <div className="space-y-2">
-          <p className="text-ark-cyan/40 text-[10px]">
-            {tk('tailscale_setup_intro',
-              'Paste a one-off Auth Key and pick a Tailscale hostname. Click SET UP — the desktop app runs `tailscale up` via the official CLI.')}
-          </p>
-          <input
-            type="password"
-            value={authKey}
-            onChange={e => setAuthKey(e.target.value)}
-            placeholder="tskey-auth-…  (paste from Tailscale admin panel)"
-            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
-          />
-          <input
-            type="text"
-            value={hostname}
-            onChange={e => setHostname(e.target.value)}
-            placeholder="arkasa-pi5  (MagicDNS name)"
-            className="w-full bg-black/40 border border-ark-cyan/15 rounded px-2 py-1.5 text-xs font-mono text-ark-cyan/90 placeholder:text-ark-cyan/30"
-          />
+        <div className="flex items-center gap-2">
           <button
-            disabled={busy}
-            onClick={setup}
-            className="ark-action-btn px-4 py-1.5 text-xs disabled:opacity-40"
-            style={{ borderColor: 'rgba(0, 200, 255, 0.4)' }}
+            disabled={busy || version.loading}
+            onClick={() => void version.refresh()}
+            className="text-ark-cyan/70 hover:text-ark-cyan text-[10px] tracking-widest uppercase disabled:opacity-40"
           >
-            {busy ? tk('tailscale_setting_up', 'Setting up…')
-                  : tk('tailscale_setup_btn',   'SET UP TAILSCALE')}
+            ↻ {tk('btn_refresh', 'REFRESH')}
+          </button>
+          <button
+            disabled={busy || !cfg.config}
+            onClick={runUpdate}
+            className="ark-action-btn px-4 py-1.5 text-xs disabled:opacity-40"
+            style={{ borderColor: color + '60' }}
+          >
+            {busy ? tk('updating', 'Updating…')
+                  : tk('btn_update_now', 'UPDATE NOW')}
           </button>
         </div>
-      )}
-
-      {/* 4. When up: show the IP, ready to use */}
-      {up && ip && (
-        <div className="rounded border border-emerald-400/30 bg-emerald-400/5 p-2 text-[11px] text-emerald-300 space-y-1">
-          <p>{tk('tailscale_ready', '🟢 Tailscale is up. Share this IP with your friends:')}</p>
-          <code className="font-mono text-emerald-200 text-sm select-all">{ip}</code>
-          <p className="text-ark-cyan/45">
-            {tk('tailscale_ready_friend',
-              'Friends install Tailscale, you add them on your tailnet, they connect to <100.x.x.x> on UDP 7777.')}
-          </p>
-        </div>
-      )}
-
-      {/* 5. Manual refresh + last note */}
-      <div className="flex items-center gap-2 pt-1">
-        <button
-          onClick={refresh}
-          className="text-ark-cyan/60 hover:text-ark-cyan text-[10px] tracking-widest uppercase"
-        >
-          ↻ {tk('btn_refresh', 'REFRESH')}
-        </button>
-        <button
-          onClick={() => openExternal('https://login.tailscale.com/admin/settings/keys')}
-          className="text-ark-cyan/60 hover:text-ark-cyan text-[10px] tracking-widest uppercase"
-        >
-          → {tk('tailscale_get_key', 'GET AUTH KEY')}
-        </button>
       </div>
       {msg && (
         <p className="text-ark-cyan/55 text-[10px] mt-1 font-mono whitespace-pre-wrap leading-tight">
           {msg}
         </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Stack overrides - operator add/remove per-item stack sizes.
+ * Each row maps an ARK item class string (`PrimalItemConsumable_…`)
+ * to an absolute stack size. Persister emits
+ * `ConfigOverrideItemMaxQuantity=(ItemClassString="…",Quantity=(MaxItemQuantity=N,bIgnoreMultiplier=True))`
+ * into Game.ini via the format documented on ark.wiki.gg Server
+ * configuration → Game.ini → Item related.
+ */
+function StackOverridesRow() {
+  const { tk } = useI18n()
+  const cfg = useConfigStore(
+    useShallow((s: ConfigStore) => ({
+      overrides: s.config?.advanced?.item_stack_overrides ?? {},
+      updateAdvanced: (patch: Partial<NonNullable<typeof s.config>['advanced']>) => {
+        if (!s.config) return
+        s.setConfig({ ...s.config, advanced: { ...s.config.advanced, ...patch } })
+      },
+    })),
+  )
+
+  const PRESETS: { key: string; label: string; default_qty: number }[] = [
+    { key: 'PrimalItemConsumable_RawMeat_C',        label: 'Raw Meat',          default_qty: 200 },
+    { key: 'PrimalItemConsumable_RawPrimeMeat_C',   label: 'Raw Prime Meat',    default_qty: 600 },
+    { key: 'PrimalItemConsumable_CookedMeat_C',     label: 'Cooked Meat',       default_qty: 200 },
+    { key: 'PrimalItemConsumable_CookedPrimeMeat_C',label: 'Cooked Prime Meat', default_qty: 600 },
+    { key: 'PrimalItemConsumable_Hide_C',           label: 'Hide',              default_qty: 500 },
+    { key: 'PrimalItemResource_Stone_C',            label: 'Stone',             default_qty: 500 },
+    { key: 'PrimalItemResource_Wood_C',             label: 'Wood',              default_qty: 500 },
+    { key: 'PrimalItemResource_Thatch_C',           label: 'Thatch',            default_qty: 500 },
+    { key: 'PrimalItemResource_Metal_C',            label: 'Metal',             default_qty: 500 },
+    { key: 'PrimalItemResource_Obsidian_C',         label: 'Obsidian',          default_qty: 300 },
+    { key: 'PrimalItemResource_Crystal_C',          label: 'Crystal',           default_qty: 300 },
+    { key: 'PrimalItemResource_Flint_C',            label: 'Flint',             default_qty: 500 },
+    { key: 'PrimalItemConsumable_Berry_Base_C',     label: 'Berries',           default_qty: 500 },
+    { key: 'PrimalItemConsumable_Veggie_Base_C',    label: 'Vegetables',        default_qty: 500 },
+    { key: 'PrimalItemConsumable_Meat_Base_C',      label: 'Meat (any)',        default_qty: 200 },
+  ]
+
+  const updateQty = (key: string, value: number) => {
+    const next = { ...cfg.overrides }
+    if (!Number.isFinite(value) || value <= 0) {
+      delete next[key]
+    } else {
+      next[key] = Math.max(1, Math.min(9999, Math.round(value)))
+    }
+    cfg.updateAdvanced({ item_stack_overrides: next })
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-ark-cyan/80 text-sm">{tk('stack_overrides_title', 'Apilables custom por recurso')}</p>
+          <p className="text-ark-cyan/40 text-xs mt-0.5">
+            {tk('stack_overrides_desc',
+              'Override absoluto (no multiplicador) para un ítem concreto. Útil para evitar que carne, primemeat, piel o piedra te llenen el inventario a media recolección.')}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5">
+        {PRESETS.map((preset) => {
+          const qty = cfg.overrides[preset.key]
+          const enabled = typeof qty === 'number'
+          return (
+            <button
+              key={preset.key}
+              onClick={() => updateQty(preset.key, enabled ? 0 : preset.default_qty)}
+              className="rounded px-2 py-1 text-left transition-colors"
+              style={{
+                background: enabled ? 'rgba(0,200,255,0.12)' : 'rgba(255,255,255,0.03)',
+                border: `1px solid ${enabled ? 'rgba(0,200,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+              }}
+              title={preset.key}
+            >
+              <span className="text-ark-cyan/85 text-[11px] font-semibold">{preset.label}</span>
+              {enabled && (
+                <span className="text-[9px] font-mono ml-1" style={{ color: 'rgba(0,200,255,0.9)' }}>
+                  ×{qty}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {Object.keys(cfg.overrides).length > 0 && (
+        <div className="mt-2 rounded-md p-2" style={{ border: '1px solid rgba(0,200,255,0.15)' }}>
+          <p className="text-ark-cyan/55 text-[10px] font-bold tracking-widest uppercase mb-1">
+            {Object.keys(cfg.overrides).length} override{Object.keys(cfg.overrides).length === 1 ? '' : 's'} activas
+          </p>
+          <div className="space-y-1">
+            {Object.entries(cfg.overrides)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([cls, qty]) => {
+                const label = PRESETS.find((p) => p.key === cls)?.label ?? cls
+                return (
+                  <div key={cls} className="flex items-center gap-2 text-[11px] font-mono">
+                    <span className="flex-1 truncate text-ark-cyan/70">
+                      {label}
+                      {label !== cls && <span className="text-ark-cyan/30"> · {cls}</span>}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={9999}
+                      step={50}
+                      value={qty}
+                      onChange={(e) => updateQty(cls, Number(e.target.value))}
+                      className="w-20 bg-black/40 border border-ark-cyan/30 text-ark-cyan text-[11px] px-2 py-0.5 rounded font-mono"
+                    />
+                    <button
+                      onClick={() => updateQty(cls, 0)}
+                      className="text-ark-cyan/45 hover:text-rose-400 text-[11px]"
+                      title="Quitar override"
+                    >×</button>
+                  </div>
+                )
+              })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Diagnóstico y reparación de la lista in-game — cubre las tres causas
+ * documentadas en `docs/TROUBLESHOOTING.md` "El servidor no aparece en la
+ * lista in-game tras una actualización de ARK":
+ *   1. Falta `[Internationalization] Culture=en` en GameUserSettings.ini
+ *   2. Certificado EOS `Amazon RSA 2048 M02` no instalado en Trusted Root
+ *   3. Steam build-id desactualizado (sólo informativo, no se auto-ejecuta)
+ *
+ * Bound to the Tauri command `diagnose_server_list` in
+ * `src-tauri/src/ark/diagnostics.rs`. When `repair=true`, the command
+ * fixes what it can (#1 and #2). Build-mismatch is always informational
+ * — running SteamCMD `validate` mid-session would risk wiping running
+ * saves, so we surface the command for the operator to run manually.
+ */
+interface DiagCheck {
+  key: string
+  label: string
+  status: 'ok' | 'missing' | 'stale' | 'fixed' | 'error' | 'skipped'
+  detail: string
+  repaired: boolean
+}
+interface DiagReport {
+  checks: DiagCheck[]
+  summary: string
+  overall_ok: boolean
+}
+
+const STATUS_ICON: Record<DiagCheck['status'], string> = {
+  ok: '✓',
+  missing: '⚠',
+  stale: '⚠',
+  fixed: '✓',
+  error: '✗',
+  skipped: '–',
+}
+
+/**
+ * Build the actionable summary line in the project's runtime UI language,
+ * using the canonical English fallback + dictionary override per the
+ * i18n convention (`tk(key, English)`).
+ *
+ * The Rust `diagnose_server_list` returns an English `summary`; we don't
+ * display that string directly because it bypasses the operator's UI
+ * language. Instead we count the fixable vs. OK markers ourselves and
+ * surface a localized summary via dictionary keys with {{n}} interpolation.
+ */
+function DiagRepairCard() {
+  const { tk } = useI18n()
+  const cfg = useConfigStore(
+    useShallow((s: ConfigStore) => ({ config: s.config })),
+  )
+  const [busyDiag, setBusyDiag] = useState(false)
+  const [busyRepair, setBusyRepair] = useState(false)
+  const [report, setReport] = useState<DiagReport | null>(null)
+  const [errMsg, setErrMsg] = useState<string>('')
+
+  const run = async (repair: boolean) => {
+    const c = cfg.config
+    if (!c) return
+    setErrMsg('')
+    if (repair) setBusyRepair(true); else setBusyDiag(true)
+    try {
+      const r = await invoke<DiagReport>('diagnose_server_list', {
+        serverDir:    c.paths.server_dir,
+        steamCmdDir:  c.paths.steam_cmd_dir,
+        repair,
+      })
+      setReport(r)
+    } catch (e: any) {
+      setErrMsg(typeof e === 'string' ? e : (e?.message ?? String(e)))
+    } finally {
+      setBusyDiag(false); setBusyRepair(false)
+    }
+  }
+
+  // Show a brief inline hint next to the buttons when a known-blocking
+  // issue is detected on the read-only diagnostic pass.
+  const hasCultureIssue = report?.checks.some(c => c.key === 'culture_en' && c.status !== 'ok')
+  const hasCertIssue    = report?.checks.some(c => c.key === 'eos_cert'    && c.status !== 'ok' && c.status !== 'fixed')
+
+  return (
+    <div className="rounded-md p-3 border border-ark-cyan/15 space-y-3">
+      <div className="text-ark-cyan/55 text-[11px] leading-snug">
+        {tk('diag_help',
+          'If your server works by direct IP but does not show up in the in-game browser after an ARK update, this detects and auto-fixes the most common causes: missing [Internationalization] Culture=en block, expired EOS trust-root certificate, and out-of-date Steam build-id.')}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          disabled={busyDiag || busyRepair || !cfg.config}
+          onClick={() => void run(false)}
+          className="ark-action-btn px-3 py-1.5 text-[10px] tracking-widest disabled:opacity-40"
+        >
+          {busyDiag ? tk('diag_running', 'Diagnosing…') : tk('btn_diag', 'DIAGNOSE')}
+        </button>
+        <button
+          disabled={busyDiag || busyRepair || !cfg.config}
+          onClick={() => void run(true)}
+          className="ark-action-btn px-3 py-1.5 text-[10px] tracking-widest disabled:opacity-40"
+          style={{ borderColor: 'rgba(0,212,255,0.6)' }}
+        >
+          {busyRepair ? tk('repair_running', 'Repairing…') : tk('btn_repair', 'REPAIR ALL')}
+        </button>
+        {report && report.overall_ok && !busyRepair && (
+          <span className="text-emerald-400 text-[10px] tracking-widest">
+            ✓ {tk('diag_all_ok', 'All OK')}
+          </span>
+        )}
+      </div>
+
+      {(hasCultureIssue || hasCertIssue) && !busyRepair && (
+        <div className="text-amber-400/90 text-[11px] leading-snug">
+          {tk('diag_advice_repair',
+            'A known issue preventing the server from appearing in the in-game list was detected. Click "REPAIR ALL", then restart the server.')}
+        </div>
+      )}
+
+      {errMsg && (
+        <p className="text-red-400/80 text-[11px] flex items-center gap-1">
+          <span>⚠</span> {errMsg}
+        </p>
+      )}
+
+      {report && (
+        <>
+          <p className="text-ark-cyan/85 text-[11px] font-semibold tracking-wide">
+            {(() => {
+              const okCount  = report.checks.filter(c => c.status === 'ok').length
+              const badCount  = report.checks.length - okCount
+              const fixed     = report.checks.filter(c => c.repaired).length
+              if (report.overall_ok) {
+                return tk('diag_summary_ok', '{{n}} check(s) OK.')
+                        .replace('{{n}}', String(okCount))
+              }
+              if (fixed > 0) {
+                return tk('diag_summary_partial',
+                          '{{fixed}} fix(es) applied, {{bad}} still need attention. Restart the server and re-run diagnostics.')
+                        .replace('{{fixed}}', String(fixed))
+                        .replace('{{bad}}', String(badCount))
+              }
+              return tk('diag_summary_bad', '{{ok}} check(s) OK, {{bad}} need repair.')
+                      .replace('{{ok}}', String(okCount))
+                      .replace('{{bad}}', String(badCount))
+            })()}
+          </p>
+          <pre className="text-[10px] bg-black/40 text-ark-cyan/70 p-3 rounded font-mono max-h-72 overflow-y-auto whitespace-pre-wrap leading-tight border border-ark-cyan/5">
+{report.checks.map(c => {
+  const icon = STATUS_ICON[c.status] ?? '?'
+  const repairedLabel = c.repaired ? `     ↳ ${tk('diag_fixed_marker', '(fixed)')}\n` : ''
+  const labelKey = `diag_label_${c.key}`
+  const labelTxt = tk(labelKey, c.label)
+  return `  ${icon}  [${c.status.toUpperCase().padEnd(7)}]  ${labelTxt}\n` +
+         `     ${c.detail}\n` +
+         repairedLabel +
+         `\n`
+}).join('')}
+{report.overall_ok
+  ? `\n✓ ${tk('diag_report_ok', 'Diagnostics OK — the server should appear in the list.')}`
+  : `\n⚠ ${tk('diag_report_pending', 'Pending verification — click "REPAIR ALL" and restart the server.')}`}
+</pre>
+
+          {!report.overall_ok && (
+            <p className="text-ark-cyan/40 text-[10px] leading-snug">
+              {tk('diag_repair_hint',
+                'After "REPAIR ALL": stop the server (START SERVER → STOP SERVER) and start it again so ARK re-reads the INI and re-registers with EOS.')}
+            </p>
+          )}
+        </>
       )}
     </div>
   )

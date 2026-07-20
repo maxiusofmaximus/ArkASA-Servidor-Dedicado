@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { invoke } from '../../services/tauri'
 import { useConfigStore, type ConfigStore } from '../../stores/configStore'
 import { useUiStore } from '../../stores/uiStore'
 import { useShallow } from 'zustand/react/shallow'
 import type { ServerConfig, ConnectionEntry, ConnectionType, DetectedIps } from '../../types'
 import { useI18n } from '../../i18n/useI18n'
+import TailscalePanel from '../../components/connection/TailscalePanel'
 
 interface ConnectionManagerProps {
   config: ServerConfig
@@ -25,8 +26,35 @@ function primaryIp(entries: ConnectionEntry[]): string {
   return primary?.address?.trim() ?? ''
 }
 
+/**
+ * Detects when an `address` field contains a `:port` suffix that would
+ * break ARK's `-ip=` flag. ASA's launcher passes the string verbatim and
+ * the server bind fails silently when `-ip=1.2.3.4:7777` is passed.
+ *
+ * The only `conn_type` where a `:port` is legitimate is `playit_tunnel`
+ * (the playit.gg URL format is `host.gl.at.ply.gg:NNNNN`).
+ *
+ * This mirrors `ConnectionEntry::has_invalid_port_suffix` in
+ * `src-tauri/src/config/schema.rs`. Keep both in sync.
+ */
+function hasInvalidPortSuffix(entry: ConnectionEntry): boolean {
+  if (entry.conn_type === 'playit_tunnel') return false
+  const a = entry.address.trim()
+  if (!a) return false
+  const lastColon = a.lastIndexOf(':')
+  if (lastColon < 0) return false
+  const maybePort = a.slice(lastColon + 1)
+  const n = Number(maybePort)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return false
+  const prefix = a.slice(0, lastColon)
+  return prefix.length > 0
+}
+
 export default function ConnectionManager({ config }: ConnectionManagerProps) {
-  const entries = config.network.connection_entries ?? []
+  const entries = useMemo(
+    () => config.network.connection_entries ?? [],
+    [config.network.connection_entries],
+  )
   const ip = primaryIp(entries)
   const { tk } = useI18n()
   const setConfig = useConfigStore(useShallow((s: ConfigStore) => s.setConfig))
@@ -57,6 +85,23 @@ export default function ConnectionManager({ config }: ConnectionManagerProps) {
     },
     [config, setConfig]
   )
+
+  const upsertTailscaleEntry = useCallback((tailscaleIp: string) => {
+    const existing = entries.find((entry) => entry.conn_type === 'tailscale')
+    if (existing?.address === tailscaleIp) return
+
+    const next = existing
+      ? entries.map((entry) => entry.id === existing.id ? { ...entry, address: tailscaleIp } : entry)
+      : [...entries, {
+          id: crypto.randomUUID(),
+          conn_type: 'tailscale' as const,
+          label: 'Tailscale',
+          address: tailscaleIp,
+          is_primary: !entries.some((entry) => entry.is_primary),
+          tunnel_port: null,
+        }]
+    updateEntries(next)
+  }, [entries, updateEntries])
 
   const addEntry = () => {
     const id = crypto.randomUUID()
@@ -235,6 +280,8 @@ export default function ConnectionManager({ config }: ConnectionManagerProps) {
         </p>
       )}
 
+      <TailscalePanel onIpDetected={upsertTailscaleEntry} />
+
       {/* Connection entries list */}
       {entries.length === 0 ? (
         <p className="text-ark-cyan/25 text-xs py-2 text-center">
@@ -317,26 +364,52 @@ export default function ConnectionManager({ config }: ConnectionManagerProps) {
 
                 {/* Address */}
                 {isEditing && editField === 'address' ? (
-                  <input
-                    autoFocus
-                    className="flex-1 bg-transparent border border-ark-cyan/40 text-ark-cyan/90 text-xs px-1.5 py-0.5 rounded focus:outline-none font-mono"
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onBlur={commitEdit}
-                    onKeyDown={(e) => { if (e.key === 'Enter') commitEdit() }}
-                    placeholder={typeInfo?.placeholder}
-                  />
+                  <div className="flex-1 flex flex-col gap-1">
+                    <input
+                      autoFocus
+                      className={`flex-1 bg-transparent border rounded text-ark-cyan/90 text-xs px-1.5 py-0.5 focus:outline-none font-mono ${
+                        hasInvalidPortSuffix({ ...entry, address: editValue })
+                          ? 'border-red-500/70 focus:border-red-400'
+                          : 'border-ark-cyan/40 focus:border-ark-cyan'
+                      }`}
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onBlur={commitEdit}
+                      onKeyDown={(e) => { if (e.key === 'Enter') commitEdit() }}
+                      placeholder={typeInfo?.placeholder}
+                    />
+                    {hasInvalidPortSuffix({ ...entry, address: editValue }) && (
+                      <p className="text-red-400/90 text-[10px] leading-tight flex items-start gap-1">
+                        <span>⚠</span>
+                        <span>
+                          {tk('err_ip_has_port',
+                            'ARK does not accept "IP:port" in the -ip= flag — remove the ":NNNNN" (game port is automatically assigned by the configured game port). If you want to publish the server via a tunnel, use the "Playit.gg" type.')}
+                        </span>
+                      </p>
+                    )}
+                  </div>
                 ) : (
-                  <span
-                    className="flex-1 text-xs font-mono cursor-pointer truncate select-none"
-                    style={{
-                      color: entry.is_primary ? 'rgba(0,212,255,0.7)' : 'rgba(0,200,255,0.5)',
-                      filter: entry.address && !visibleIds.has(entry.id) ? 'blur(5px)' : 'none',
-                    }}
-                    onClick={() => startEdit(entry.id, 'address', entry.address)}
-                  >
-                    {entry.address || <span style={{ color: 'rgba(255,255,255,0.2)', filter: 'none' }}>{tk('no_ip_short', 'no IP')}</span>}
-                  </span>
+                  <div className="flex-1 min-w-0 flex items-center gap-2">
+                    <span
+                      className="text-xs font-mono cursor-pointer truncate select-none flex-1 min-w-0"
+                      style={{
+                        color: entry.is_primary ? 'rgba(0,212,255,0.7)' : 'rgba(0,200,255,0.5)',
+                        filter: entry.address && !visibleIds.has(entry.id) ? 'blur(5px)' : 'none',
+                      }}
+                      onClick={() => startEdit(entry.id, 'address', entry.address)}
+                    >
+                      {entry.address || <span style={{ color: 'rgba(255,255,255,0.2)', filter: 'none' }}>{tk('no_ip_short', 'no IP')}</span>}
+                    </span>
+                    {hasInvalidPortSuffix(entry) && (
+                      <span
+                        className="flex-shrink-0 text-amber-400 text-[10px] font-bold cursor-help"
+                        title={tk('err_ip_has_port_title',
+                          'This IP includes ":port". ARK does not accept this in -ip= and the server will not appear in the in-game list. Click the IP to edit it.')}
+                      >
+                        ⚠
+                      </span>
+                    )}
+                  </div>
                 )}
 
                 {/* Show/hide toggle */}

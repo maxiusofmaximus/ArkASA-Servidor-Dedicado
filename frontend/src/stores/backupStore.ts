@@ -79,6 +79,10 @@ export interface BackupStore {
   // Extra raw config files in Options → Config INI
   customConfigTabs: CustomConfigTab[]
 
+  // Transient: when set, RawConfigViewer on mount pre-selects this custom-tab id.
+  // Used by ModsTab's "Open in Config INI" button to hand off to the Config INI tab.
+  pendingCustomTabId: string | null
+
   // Actions
   setLanguage: (v: string) => void
   setLogsEnabled: (v: boolean) => void
@@ -109,6 +113,7 @@ export interface BackupStore {
   recordModsActive: (modIds: string[]) => void
   addCustomConfigTab: (tab: CustomConfigTab) => void
   removeCustomConfigTab: (id: string) => void
+  setPendingCustomTabId: (id: string | null) => void
 }
 
 export const useBackupStore = create<BackupStore>()(
@@ -144,6 +149,7 @@ export const useBackupStore = create<BackupStore>()(
       activePingContactId: null,
       modUsageHistory: {},
       customConfigTabs: [],
+      pendingCustomTabId: null,
 
       setLanguage: (v) => set({ language: v }),
       setLogsEnabled: (v) => set({ logsEnabled: v }),
@@ -214,6 +220,8 @@ export const useBackupStore = create<BackupStore>()(
         set((s) => ({
           customConfigTabs: s.customConfigTabs.filter((t) => t.id !== id),
         })),
+
+      setPendingCustomTabId: (id) => set({ pendingCustomTabId: id }),
     }),
     { name: 'ark-backup-config' }
   )

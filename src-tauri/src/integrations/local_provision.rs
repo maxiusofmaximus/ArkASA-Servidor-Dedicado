@@ -389,13 +389,6 @@ const WSL2_TAIL: &str = r#"
 mod tests {
     use super::*;
 
-    fn sample_target(class: LocalTargetClass) -> HostTarget {
-        let mut t = HostTarget::new_self();
-        t.region = class.slug().into();
-        t.disk_gb = 64;
-        t
-    }
-
     #[test]
     fn pi5_plan_uses_systemd_and_apt() {
         let p = build_local_plan(

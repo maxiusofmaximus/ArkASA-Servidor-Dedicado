@@ -232,6 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_vercel_deploy_one_click_persists_token() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         let test_token = "test-vercel-token-aaaaaaaaaa".to_string();
         let test_project = Some("test-proj-1234".to_string());
 

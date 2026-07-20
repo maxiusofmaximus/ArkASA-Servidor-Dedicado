@@ -305,6 +305,7 @@ mod tests {
 
     #[test]
     fn read_miss_returns_none_when_no_toml_and_no_keyring() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         ensure_test_store();
         let id = "test_read_miss_v2";
         cleanup(id);
@@ -315,6 +316,7 @@ mod tests {
 
     #[test]
     fn read_hit_returns_stored_secret_from_keyring() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         ensure_test_store();
         let id = "test_read_hit_v2";
         cleanup(id);
@@ -329,6 +331,7 @@ mod tests {
 
     #[test]
     fn write_then_read_roundtrips_through_keyring() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         ensure_test_store();
         let id = "test_roundtrip_v2";
         cleanup(id);
@@ -345,6 +348,7 @@ mod tests {
 
     #[test]
     fn migrate_lifts_toml_into_keyring_and_deletes_toml() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         ensure_test_store();
         let id = "test_migrate_v2";
         cleanup(id);
@@ -372,29 +376,13 @@ mod tests {
         assert_eq!(got2.fields.get("bot_token"), Some(&"tok-123".to_string()));
     }
 
-    /// NOTE on test isolation (P3.2 follow-up):
-    /// `migrate_secrets()` walks `plugin_storage_dir()` and lifts EVERY
-    /// `<plugin_id>.toml` file it finds. That directory is shared across
-    /// the entire test suite (its path comes from `dirs_home()` via
-    /// `ARK_ASA_HOME` or platform defaults). When this test runs in
-    /// parallel with other tests that also touch `plugin_storage_dir()`
-    /// (the vercel / convex / `migrate_lifts_toml...` tests plus the
-    /// `registry::tests` set which writes `registry.toml`), the walk
-    /// transiently sees those tests' files and the count assertion
-    /// `assert_eq!(n1, 1, ...)` flaps to `2` (or `0` if the sweep runs
-    /// later and nothing is left). There is no thread-local
-    /// `ARK_ASA_HOME` in stable Rust, so a deterministic assert requires
-    /// either (a) serialising the test with `#[serial]` from the
-    /// `serial_test` crate, or (b) refactoring `plugin_storage_dir()`
-    /// behind a per-test injection seam. Both are out of scope for P3.2
-    /// (the lib.rs split, P3.1, is the right place for that seam). In
-    /// the meantime we mark this test `#[ignore]` so the CI suite is
-    /// stable; it can still be invoked ad-hoc with
-    /// `cargo test -- --ignored migrate_is_idempotent` to confirm the
-    /// migration logic in isolation.
+    /// `migrate_secrets()` walks the shared plugin directory. All tests that
+    /// touch that directory take the process-wide plugin-storage lock from
+    /// `plugins::mod`, so this count remains deterministic under the normal
+    /// parallel test runner.
     #[test]
-    #[ignore = "racy with the parallel test suite; see NOTE above; run via --ignored"]
     fn migrate_is_idempotent_when_run_twice() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         ensure_test_store();
         let id = "test_migrate_idempotent_v2";
         cleanup(id);

@@ -46,8 +46,14 @@ function getSaveStrategy(tab: BuiltinTab | undefined, customPath: string | null,
 }
 
 export default function RawConfigViewer({ config, onConfigSaved }: RawConfigViewerProps) {
-  const { customConfigTabs, addCustomConfigTab, removeCustomConfigTab } = useBackupStore(
-    useShallow((s: BackupStore) => ({ customConfigTabs: s.customConfigTabs, addCustomConfigTab: s.addCustomConfigTab, removeCustomConfigTab: s.removeCustomConfigTab }))
+  const { customConfigTabs, addCustomConfigTab, removeCustomConfigTab, pendingCustomTabId, setPendingCustomTabId } = useBackupStore(
+    useShallow((s: BackupStore) => ({
+      customConfigTabs: s.customConfigTabs,
+      addCustomConfigTab: s.addCustomConfigTab,
+      removeCustomConfigTab: s.removeCustomConfigTab,
+      pendingCustomTabId: s.pendingCustomTabId,
+      setPendingCustomTabId: s.setPendingCustomTabId,
+    }))
   )
   const { tk } = useI18n()
 
@@ -112,6 +118,16 @@ export default function RawConfigViewer({ config, onConfigSaved }: RawConfigView
     setEditMode('idle')
     setSearch('')
   }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Consume a pending "open this custom tab" request from the ModsTab "Open in Config INI ↗" button.
+  useEffect(() => {
+    if (!pendingCustomTabId) return
+    const exists = customConfigTabs.find((t) => t.id === pendingCustomTabId)
+    if (exists) {
+      setActiveTab(pendingCustomTabId)
+      setPendingCustomTabId(null)
+    }
+  }, [pendingCustomTabId, customConfigTabs, setPendingCustomTabId])
 
   const handleStartEdit = async (mode: EditMode) => {
     await loadTabContent(activeTab)

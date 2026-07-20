@@ -23,6 +23,8 @@ description: Guía completa para port forwarding, IP fija, DuckDNS, firewall y s
 8. [Checklist de verificación](#checklist)
 9. [Apéndice A: Movistar Colombia (MITRASTAR GPT-2741GNAC)](#movistar)
 10. [Apéndice B: Scripts de utilidad](#scripts)
+11. [Diagnóstico y reparación de lista in-game (botón en Opciones)](#diag)
+12. [No pongas `IP:puerto` en Connection Manager](#ip-no-port)
 
 ---
 
@@ -346,3 +348,102 @@ Después del script, las reglas de ARK quedan:
 - `ARK-RCON-27020-Tailscale` — TCP 27020 solo desde 100.64.0.0/10
 - `ARK-RCON-27020-Localhost` — TCP 27020 solo desde 127.0.0.1
 - `ARK-ASA-Server-Outbound` — Salida de la app sin restricciones
+
+---
+
+## 11. Diagnóstico y reparación de lista in-game {#diag}
+
+**Si tu servidor funciona por IP directa pero NO aparece en la lista in-game
+— especialmente después de una actualización mayor de ARK (p.ej. v89.x Genesis
+1 / Tides of Fortune) — usa el botón de diagnóstico del Config Manager:**
+
+> **Options → General → "Diagnóstico y reparación de lista in-game"**
+
+Hay dos botones:
+
+- **DIAGNOSTICAR** — sólo verifica las 3 causas conocidas sin tocar nada.
+- **REPARAR TODO** — aplica las correcciones automáticas (ver abajo) y
+  re-verifica.
+
+### Causas que detecta y repara automáticamente
+
+1. **Bloque `[Internationalization] Culture=en` faltante** en
+   `ShooterGame\Saved\Config\WindowsServer\GameUserSettings.ini`.
+   ASA lo requiere para registrar la sesión con EOS/Epic; sin él el
+   servidor nunca se pública en la lista (fallo silencioso — funciona por
+   IP directa pero la lista no lo ve). La app lo añade automáticamente al
+   INI en cada START SERVER, pero si el INI existía de antes puede faltar.
+
+2. **Certificado EOS `Amazon RSA 2048 M02`** no instalado en Trusted Root
+   de Windows. ASA registra el servidor en la lista in-game vía Epic
+   Online Services sobre TLS 1.2 (puertos 80/443); tras updates mayores
+   de ARK o rotaciones de cert de Epic, puede faltar. La app lo
+   descarga e instala en `CurrentUser\Root` automáticamente; si querés
+   instalarlo también en `LocalMachine\Root` (todos los usuarios), tenés
+   que ejecutar la app como administrador.
+
+3. **Build de instalación Steam** desactualizado (sólo informativo, NO se
+   auto-ejecuta porque pisaría partidas en curso). Tras updates mayores,
+   un `steamcmd +app_update 2430930` (sin `validate`) puede dejar
+   binarios viejos: la lista in-game filtra servidores cuyo `buildid`
+   no coincide con el cliente. La app muestra el comando exacto a
+   ejecutar a mano:
+
+   ```
+   steamcmd +force_install_dir "C:\ASA\server" +login anonymous +app_update 2430930 validate +quit
+   ```
+
+### Pasos posteriores a "REPARAR TODO"
+
+1. En el Config Manager: **START SERVER → STOP SERVER → START SERVER**
+   (para que ARK relea el INI y reanuncie con EOS usando el nuevo
+   certificado).
+2. Si el caso #3 apareció como "stale": correr el `steamcmd validate` que
+   muestra el reporte.
+3. (Opcional, en el cliente del juego) abrir la consola con `~` y
+   ejecutar `Ark.UseServerList 0` para forzar el path Steam Master —
+   si el servidor aparece con `UseServerList 0` pero NO aparece normal,
+   confirmá que el fix del certificado + Culture=en se aplicó y el
+   servidor reinició.
+
+Más detalle en `docs/TROUBLESHOOTING.md` ("El servidor no aparece en la
+lista in-game tras una actualización de ARK").
+
+---
+
+## 12. No pongas `IP:puerto` en Connection Manager {#ip-no-port}
+
+ARK pasa el valor del campo **Address** de tu ConnectionEntry primaria
+directamente al flag `-ip=` del binario `ArkAscendedServer.exe`. ASA **no
+acepta `IP:puerto`** en ese flag — espera sólo la IP.
+
+Si escribís por ejemplo `147.185.221.29:32181` (una dirección de playit.gg
+o similar) en un campo tipo "Manual" / "Local IP" / "Public IP" / "DuckDNS",
+ARK se rompe silenciosamente: el proceso arranca, los jugadores pueden
+entrar por IP directa vía el túnel, pero **el servidor no aparece en la
+lista in-game** (EOS no acepta la dirección como IP válida para anunciar).
+
+### Señales de que estás en este caso
+
+- El campo Address muestra un chip amarillo ⚠ al lado de la IP.
+- Al editar la IP, el borde del input se pone rojo y aparece el texto:
+  *"ARK does not accept "IP:port" in the -ip= flag — remove the
+  ":NNNNN" ..."*.
+- En el log de ARK (`ShooterGame\Saved\Logs\ShooterGame.log`) la línea
+  `Commandline:` muestra `-ip=147.185.221.29:32181`.
+
+### Cómo solucionarlo
+
+- **La app ya sanea la IP automáticamente desde la v[ultima]**:
+  `ConnectionEntry::ip_without_port()` quita el `:NNNNN` antes de
+  pasarlo al flag `-ip=`, así que aunque dejes el campo mal cargado el
+  bind no se rompe. Aun así, te conviene editarlo y limpiar el campo
+  para no confundirte en el futuro.
+- Si lo que querés es publicar el servidor vía tunnel playit.gg,
+  usa el tipo **"Playit.gg"** en Connection Manager — ese tipo SÍ admite
+  `host.gl.at.ply.gg:NNNNN` como address (es el único que lo admite).
+- Si querés IP + puerto para conexión por IP directa, **no lo pongas
+  acá** — el puerto se asigna automáticamente según el puerto de juego
+  configurado en `Options → General → Network` (7777+1 por cada slot
+  del clúster). Para publicar amables, lo correcto es pasarles a tus
+  jugadores la URL del tunnel playit.gg por separado.

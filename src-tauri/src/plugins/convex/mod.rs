@@ -267,6 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_convex_deploy_persists_credentials() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         // Create a temporary directory or just save to our test environment storage.
         // `secret_store::write` will write to a standard path, so we can clean up afterwards or just assert it writes.
         let test_url = "https://test-animal-999.convex.cloud".to_string();

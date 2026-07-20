@@ -334,6 +334,8 @@ Click en "CHOOSE DIFFICULTY" y ajusta el offset.
 | "Server not responding" | Port forwarding no abierto | Configura router |
 | Aparece en lista pero no entra | Firewall bloquea | Abre puertos en Windows Firewall |
 | No aparece en lista | Ports malos o IP pública | Revisa ifconfig.me y router |
+| No aparece en lista tras update de ARK | Falta `[Internationalization] Culture=en` / cert EOS / build-id desactualizado | **Options → "Diagnóstico y reparación de lista in-game" → REPARAR TODO** (ver [TROUBLESHOOTING.md](TROUBLESHOOTING.md#el-servidor-no-aparece-en-la-lista-in-game-tras-una-actualización-de-ark)) |
+| No aparece en lista y usaste `IP:puerto` en Connection Manager | ARK no admite `:port` en `-ip=` | Quita el `:NNNNN` del campo Address o usa el tipo "Playit.gg" (ver [NETWORK_SETUP.md](NETWORK_SETUP.md#ip-no-port)) |
 
 Ver: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 

@@ -80,6 +80,7 @@ mod tests {
 
     #[test]
     fn enable_and_disable_roundtrip() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         // Use a per-test temp dir to avoid polluting global state.
         let id = "test_plugin_roundtrip";
         // Ensure clean baseline
@@ -103,17 +104,24 @@ mod tests {
 
     #[test]
     fn read_corrupt_returns_default() {
+        let _storage_guard = crate::plugins::lock_plugin_storage_for_test();
         // Force a corrupt file and check we don't panic.
         let p = registry_path();
+        let original = std::fs::read(&p).ok();
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let garbage: Vec<u8> = vec![0xFFu8, 0xFE, 0x00, 0xFF, 0xAB];
         std::fs::write(&p, &garbage).unwrap();
         let f = read();
-        // Either empty or default; either way no panic.
-        assert!(f.enabled.is_empty() || !f.enabled.is_empty());
-        // Cleanup
-        let _ = std::fs::remove_file(&p);
+        assert!(f.enabled.is_empty());
+        assert!(f.disabled.is_empty());
+
+        // Tests share the operator's storage location in desktop builds;
+        // restore the exact pre-test bytes instead of deleting user state.
+        match original {
+            Some(bytes) => std::fs::write(&p, bytes).unwrap(),
+            None => { let _ = std::fs::remove_file(&p); }
+        }
     }
 }

@@ -5,8 +5,10 @@
  * Exposes { online, loading } so callers can disable actions
  * that require connectivity and surface a banner to the user.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { invoke } from '../services/tauri'
+import type { InternetStatusEvent } from '../types'
 
 export interface InternetStatus {
   /** true if at least one probe endpoint returned 2xx/3xx within 3s */
@@ -19,21 +21,32 @@ export interface InternetStatus {
   refresh: () => Promise<void>
 }
 
-const PROBE_INTERVAL_MS = 10_000
+const FAIL_THRESHOLD = 3
 
 export function useInternetStatus(): InternetStatus {
   const [online, setOnline] = useState<boolean>(true) // optimistic until first probe
   const [loading, setLoading] = useState<boolean>(false)
   const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null)
+  const failCountRef = useRef(0)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
       const result = await invoke<boolean>('check_internet')
-      setOnline(result)
+      if (result) {
+        failCountRef.current = 0
+        setOnline(true)
+      } else {
+        failCountRef.current += 1
+        if (failCountRef.current >= FAIL_THRESHOLD) {
+          setOnline(false)
+        }
+      }
     } catch {
-      // Any error counts as offline
-      setOnline(false)
+      failCountRef.current += 1
+      if (failCountRef.current >= FAIL_THRESHOLD) {
+        setOnline(false)
+      }
     } finally {
       setLoading(false)
       setLastCheckedAt(Date.now())
@@ -41,14 +54,40 @@ export function useInternetStatus(): InternetStatus {
   }, [])
 
   useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+    const lastEventAt = { current: 0 }
+
+    const onStatus = (event: { payload: InternetStatusEvent }) => {
+      lastEventAt.current = Date.now()
+      failCountRef.current = 0
+      setOnline(event.payload.online)
+      setLastCheckedAt(event.payload.observed_at_ms)
+      setLoading(false)
+    }
+    const armFallback = () => {
+      if (disposed) return
+      fallbackTimer = setTimeout(async () => {
+        if (Date.now() - lastEventAt.current >= 35_000) await refresh()
+        armFallback()
+      }, 30_000)
+    }
+
     void refresh()
-    const interval = setInterval(refresh, PROBE_INTERVAL_MS)
+    void listen<InternetStatusEvent>('internet://status', onStatus).then((fn) => {
+      if (disposed) fn()
+      else unlisten = fn
+    }).catch(() => {})
+    armFallback()
     const onOnline = () => void refresh()
     const onOffline = () => setOnline(false)
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
     return () => {
-      clearInterval(interval)
+      disposed = true
+      if (fallbackTimer) clearTimeout(fallbackTimer)
+      unlisten?.()
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
     }

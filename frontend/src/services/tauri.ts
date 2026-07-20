@@ -324,9 +324,9 @@ function createMockInvoke() {
           item_stack_overrides: {},
         },
         // Marketplace install set. Operators begin with an empty set;
-        // PluginsTab exposes the catalog with an Install button per
-        // entry, and the PluginsTab → Cloud services section only shows
-        // cards for plugins marked as installed here.
+        // PluginsTab exposes catalog selection per entry. Feature-specific
+        // controls are rendered by the owning screen (for example,
+        // Tailscale lives in ARKS → Connection).
         installed_plugins: [],
       },
       server_status: {

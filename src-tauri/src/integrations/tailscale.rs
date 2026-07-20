@@ -9,9 +9,9 @@
 //!    even as Tailscale ships newer versions of their CLI.
 //!
 //! Operator flow:
-//!   1. Click "Set up Tailscale" in Options → General → Public network.
+//!   1. Select the Tailscale plugin and open ARKS → Connection.
 //!   2. Paste an auth key from <https://login.tailscale.com/admin/settings/keys>.
-//!   3. The app runs `tailscale up --authkey <key> --hostname <host>`.
+//!   3. The app runs `tailscale up --auth-key <key> --hostname <host>`.
 //!   4. Status panel shows the discovered `100.x.x.x` IP. The
 //!      operator can use it as the connection entry in
 //!      `network.connection_entries` instead of relying on a router
@@ -144,30 +144,21 @@ pub async fn tailscale_up(
     if hostname.trim().is_empty() {
         return Err("hostname is empty — pick a Tailscale name like 'arkasa-pi5'".into());
     }
-    let mut cmd = std::process::Command::new("tailscale");
-    cmd.arg("up")
-        .arg("--authkey").arg(auth_key)
-        .arg("--hostname").arg(hostname);
-
-    // Delegate tag normalisation to the dedicated helper so empty /
-    // whitespace-only / uppercase inputs collapse into the same shape.
-    if let Some(tag_arg) = tag_for_label(publicly_dns_label) {
-        cmd.arg("--advertise-tags").arg(tag_arg);
-    }
-    let child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!(
-            "couldn't spawn `tailscale up`: {e}. Install Tailscale first: {}",
-            tailscale_install_hint()
-        ))?;
-    // Bounded wait — `tailscale up` either succeeds in seconds or
-    // hangs server-side. We use a 20 s ceiling.
-    let out = tokio::task::spawn_blocking(move || child.wait_with_output())
-        .await
-        .map_err(|e| format!("join error: {e}"))?
-        .map_err(|e| format!("io error: {e}"))?;
+    // Bounded wait — the official CLI can wait on auth/network state. Tokio
+    // owns the child process here so timeout cancellation does not strand a
+    // blocking worker or leave the setup request hanging forever.
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        tokio::process::Command::new("tailscale")
+            .args(tailscale_up_args(auth_key, hostname, publicly_dns_label))
+            .output(),
+    )
+    .await
+    .map_err(|_| "`tailscale up` timed out after 20 seconds; check Tailscale connectivity and try again".to_string())?
+    .map_err(|e| format!(
+        "couldn't spawn `tailscale up`: {e}. Install Tailscale first: {}",
+        tailscale_install_hint()
+    ))?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
 
@@ -198,6 +189,28 @@ pub async fn tailscale_up(
             hint: format!("tailscale up FAILED. stderr=\n{stderr}\nstdout=\n{stdout}"),
         })
     }
+}
+
+/// Build the complete `tailscale up` argument list in one place. Keeping this
+/// pure makes the CLI contract testable without launching a real daemon and
+/// avoids accidentally reverting to the deprecated `--authkey` spelling.
+fn tailscale_up_args(
+    auth_key: &str,
+    hostname: &str,
+    publicly_dns_label: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "up".to_string(),
+        "--auth-key".to_string(),
+        auth_key.to_string(),
+        "--hostname".to_string(),
+        hostname.to_string(),
+    ];
+    if let Some(tag_arg) = tag_for_label(publicly_dns_label) {
+        args.push("--advertise-tags".to_string());
+        args.push(tag_arg);
+    }
+    args
 }
 
 /// Re-polls `tailscale ip -4` and returns whatever Tailscale reports.
@@ -297,6 +310,14 @@ mod tests {
         assert!(res.is_err());
         let res = rt.block_on(tailscale_up("tskey-fake", "", None));
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn tailscale_up_uses_current_auth_key_flag() {
+        let args = tailscale_up_args("tskey-auth-test", "arkasa", None);
+        assert_eq!(args, vec![
+            "up", "--auth-key", "tskey-auth-test", "--hostname", "arkasa",
+        ]);
     }
 
     #[test]

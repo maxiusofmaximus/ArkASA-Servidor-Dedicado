@@ -103,3 +103,4 @@ _tmp_*
 # Session artifacts (do not commit)
 session-*.md
 .worktree/
+src-tauri/target-next/

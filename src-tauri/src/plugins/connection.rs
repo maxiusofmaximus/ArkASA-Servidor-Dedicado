@@ -1,4 +1,5 @@
-//! Connection plugins — 7 VPS provider wrappers built on top of the
+//! Connection plugins — VPS provider wrappers plus the Tailscale
+//! network connector built on top of the
 //! `hosting` module's existing per-provider render functions.
 //!
 //! Why this wrapper layer? Because the P0/P1 plugin-hub registry
@@ -31,6 +32,7 @@ pub enum ConnectionPluginId {
     AwsEc2,
     AzureVm,
     GcpCompute,
+    Tailscale,
 }
 
 impl ConnectionPluginId {
@@ -54,6 +56,7 @@ impl ConnectionPluginId {
             Self::AwsEc2       => "aws_ec2",
             Self::AzureVm      => "azure_vm",
             Self::GcpCompute   => "gcp_compute",
+            Self::Tailscale    => "tailscale",
         }
     }
     pub fn from_str(s: &str) -> Option<Self> {
@@ -65,6 +68,7 @@ impl ConnectionPluginId {
             "aws_ec2"      => Self::AwsEc2,
             "azure_vm"     => Self::AzureVm,
             "gcp_compute"  => Self::GcpCompute,
+            "tailscale"    => Self::Tailscale,
             _              => return None,
         })
     }
@@ -142,6 +146,14 @@ pub const CATALOG: &[ConnectionPluginView] = &[
         requires_credentials: true,
         docs_url: "https://cloud.google.com/sdk/docs/install",
     },
+    ConnectionPluginView {
+        id: "tailscale", label: "Tailscale network",
+        description: "Private 100.x.x.x connectivity for ARK servers behind CGNAT or without port forwarding.",
+        free_tier: true,
+        requires_cli: &["tailscale"],
+        requires_credentials: true,
+        docs_url: "https://tailscale.com/docs/reference/tailscale-cli/up",
+    },
 ];
 
 /// Lookup the view for a ConnectionPluginId.
@@ -151,7 +163,7 @@ pub fn view(id: ConnectionPluginId) -> ConnectionPluginView {
         .clone()
 }
 
-/// All 7 providers, in canonical order.
+/// All connection plugins, in canonical order.
 pub fn all() -> Vec<ConnectionPluginView> {
     CATALOG.to_vec()
 }
@@ -174,6 +186,10 @@ pub fn host_target_for(plugin: ConnectionPluginId,
         ConnectionPluginId::AwsEc2       => HostProvider::AwsEc2,
         ConnectionPluginId::AzureVm      => HostProvider::AzureVm,
         ConnectionPluginId::GcpCompute   => HostProvider::GcpCompute,
+        // Tailscale is a network connector, not a VPS provider. Preserve
+        // the selected hosting target while the connection manager handles
+        // its 100.x.x.x endpoint separately.
+        ConnectionPluginId::Tailscale    => return t,
     };
     if !region.is_empty() { t.region = region; }
     t
@@ -184,8 +200,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_seven_entries() {
-        assert_eq!(CATALOG.len(), 7, "expected 7 connection plugins");
+    fn catalog_includes_tailscale_connection_plugin() {
+        assert_eq!(CATALOG.len(), 8, "expected 8 connection plugins");
+        assert!(CATALOG.iter().any(|entry| entry.id == "tailscale"));
     }
 
     #[test]
@@ -206,11 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn free_tier_only_oracle_and_gcp() {
+    fn free_tier_includes_tailscale_and_hosting_options() {
         let frees: Vec<_> = CATALOG.iter().filter(|v| v.free_tier).map(|v| v.id).collect();
         assert!(frees.contains(&"oracle"));
         assert!(frees.contains(&"gcp_compute"));
-        assert_eq!(frees.len(), 2, "only Oracle Always-Free and GCP free tier are free");
+        assert!(frees.contains(&"tailscale"));
+        assert_eq!(frees.len(), 3, "Oracle, GCP, and Tailscale are free-tier options");
     }
 
     #[test]

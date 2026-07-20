@@ -313,13 +313,35 @@ export default function ArksTab({ config }: ArksTabProps) {
           {/* Cluster port table */}
           {isCluster && (
             <div className="mt-1 rounded-md overflow-hidden" style={{ border: '1px solid rgba(0,200,255,0.15)' }}>
-              {/* Header */}
+              {/* ── Status line: subtle hint, points operator to Options for the toggle ── */}
               <div
-                className="grid text-[10px] font-bold tracking-widest px-3 py-1.5"
-                style={{ gridTemplateColumns: '1fr 3rem 4rem 4rem 4rem 5.5rem', background: 'rgba(0,200,255,0.08)', color: 'rgba(0,200,255,0.55)' }}
+                className="px-2 py-1 text-[10px] flex items-center gap-2"
+                style={{
+                  background: (config.network?.fixed_port_assignment_per_map ?? false)
+                    ? 'rgba(251,191,36,0.05)'
+                    : 'rgba(74,222,128,0.05)',
+                  borderBottom: '1px solid rgba(255,255,255,0.05)',
+                }}
+              >
+                <span style={{
+                  color: (config.network?.fixed_port_assignment_per_map ?? false)
+                    ? 'rgba(251,191,36,0.8)'
+                    : 'rgba(74,222,128,0.8)',
+                }}>
+                  {(config.network?.fixed_port_assignment_per_map ?? false)
+                    ? `⚠️ ${tk('cluster_mode_hash', 'Hash-slot mode (FNV-1a) — ports NOT consecutive. Toggle in Options → Server Cluster.')}`
+                    : `✅ ${tk('cluster_mode_consecutive', 'Consecutive ports per ARK ASA guide: Game 2× stride (7777/7779/7781), Peer = Game+1, Query +1, RCON +1')}`}
+                </span>
+              </div>
+
+              {/* Header — fully fluid grid (fr units only, no fixed rem) */}
+              <div
+                className="grid text-[10px] font-bold tracking-widest px-2 py-1.5 gap-1"
+                style={{ gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,2.2rem) repeat(4, minmax(0,1fr)) minmax(0,4.5rem)', background: 'rgba(0,200,255,0.08)', color: 'rgba(0,200,255,0.55)' }}
               >
                 <span>{tk('map_col', 'MAP')}</span>
                 <span className="text-center">#</span>
+                <span className="text-right">PEER</span>
                 <span className="text-right">GAME</span>
                 <span className="text-right">QUERY</span>
                 <span className="text-right">RCON</span>
@@ -328,9 +350,27 @@ export default function ArksTab({ config }: ArksTabProps) {
 
               {selectedMaps.map((mapId, i) => {
                 const mapInfo   = ARK_MAPS.find((m) => m.id === mapId)
-                const gamePort  = (config.network?.port       ?? 7777)  + i * 2
-                const queryPort = (config.network?.query_port ?? 27015) + i
-                const rconPort  = (config.network?.rcon_port  ?? 27020) + i
+                // Mirror the Rust `ports_for_index` / `ports_for_map_id`
+                // logic in JS so the operator sees the exact quartet (game,
+                // peer, query, rcon) the launcher will dial. Hash must stay
+                // in lockstep with port_slot_for in schema.rs.
+                const fnv1aSlot = (id: string) => {
+                  let h = 0x811c9dc5;
+                  for (const ch of id) {
+                    h ^= ch.charCodeAt(0);
+                    h = Math.imul(h, 0x01000193) >>> 0;
+                  }
+                  return (h % 254) >>> 0;
+                };
+                const fixed     = config.network?.fixed_port_assignment_per_map ?? false;
+                const baseGame  = config.network?.port       ?? 7777;
+                const baseQuery = config.network?.query_port ?? 27015;
+                const baseRcon  = config.network?.rcon_port  ?? 27020;
+                const slot      = fixed ? fnv1aSlot(mapId) : i;
+                const gamePort  = baseGame  + slot * 2;
+                const peerPort  = gamePort + 1;
+                const queryPort = baseQuery + slot;
+                const rconPort  = baseRcon  + slot;
                 const baseName  = config.identification?.session_name || tk('server_label', 'Server')
                 const mapLabel  = mapId.replace(/_WP$/, '')
                 const sessionName = i === 0 ? baseName : `${baseName} · ${mapLabel}`
@@ -339,19 +379,20 @@ export default function ArksTab({ config }: ArksTabProps) {
                 return (
                   <div key={mapId} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                     {/* Session name shown in browser */}
-                    <div className="px-3 pt-1.5 text-[10px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    <div className="px-2 pt-1 text-[10px] truncate" style={{ color: 'rgba(255,255,255,0.35)' }}>
                       {tk('browser_name', 'Browser name')}:{' '}
                       <span className="font-mono" style={{ color: mapInfo?.color ?? '#aaa' }}>
                         {isDormant ? `${sessionName} [${tk('dormant_label', '💤 DORMANT').replace('💤 ', '')}]` : sessionName}
                       </span>
                     </div>
                     <div
-                      className="grid items-center px-3 pb-1.5 text-[11px]"
-                      style={{ gridTemplateColumns: '1fr 3rem 4rem 4rem 4rem 5.5rem', color: 'rgba(255,255,255,0.7)' }}
+                      className="grid items-center px-2 pb-1 text-[10px] sm:text-[11px] gap-1"
+                      style={{ gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,2.2rem) repeat(4, minmax(0,1fr)) minmax(0,4.5rem)', color: 'rgba(255,255,255,0.7)' }}
                     >
-                      <span style={{ color: mapInfo?.color ?? '#fff' }}>{mapInfo?.name ?? mapId}</span>
+                      <span className="truncate" style={{ color: mapInfo?.color ?? '#fff' }}>{mapInfo?.name ?? mapId}</span>
                       <span className="text-center font-bold" style={{ color: mapInfo?.color ?? '#fff' }}>{i + 1}</span>
-                      <span className="text-right font-mono text-ark-cyan/70">{gamePort}</span>
+                      <span className="text-right font-mono text-ark-cyan/70" title={tk('peer_port_hint', 'ARK ASA: Steam/EOS P2P, always Game+1')}>{peerPort}</span>
+                      <span className="text-right font-mono text-ark-cyan" title={tk('game_port_hint', 'Primary UDP game port — `open IP` lands here')}>{gamePort}</span>
                       <span className="text-right font-mono text-ark-cyan/70">{queryPort}</span>
                       <span className="text-right font-mono text-ark-cyan/70">{rconPort}</span>
                       {/* On-demand toggle — only shown when feature is enabled */}
@@ -360,7 +401,7 @@ export default function ArksTab({ config }: ArksTabProps) {
                           <button
                             onClick={() => toggleOnDemandMap(mapId)}
                             title={isDormant ? tk('dormant_mode_hint', 'Sleep mode: starts on connect') : tk('active_mode_hint', 'Always-on mode')}
-                            className="flex items-center gap-1 text-[9px] font-bold tracking-wider px-2 py-0.5 rounded transition-all"
+                            className="flex items-center gap-1 text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded transition-all whitespace-nowrap"
                             style={isDormant ? {
                               background: 'rgba(99,102,241,0.2)',
                               color: 'rgba(165,180,252,0.9)',
@@ -376,7 +417,7 @@ export default function ArksTab({ config }: ArksTabProps) {
                             {isDormant ? tk('dormant_label', '💤 DORMANT') : tk('active_label', '⚡ ACTIVE')}
                           </button>
                         ) : (
-                          <span className="text-[9px] font-bold tracking-wider px-2 py-0.5" style={{ color: 'rgba(255,255,255,0.15)' }}>
+                          <span className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 whitespace-nowrap" style={{ color: 'rgba(255,255,255,0.15)' }}>
                             {tk('active_label', '⚡ ACTIVE')}
                           </span>
                         )}

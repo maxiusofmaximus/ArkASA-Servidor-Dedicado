@@ -4,11 +4,17 @@
  * Encapsulates all server-running state and the start/stop handlers so
  * App.tsx stays lean (SRP).  Also owns the crash-detection poll.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { invoke } from '../services/tauri'
 import { logger } from '../services/logger'
 import { useBackupStore } from '../stores/backupStore'
-import type { ServerConfig, MapInstanceStatus } from '../types'
+import type { ServerConfig, MapInstanceStatus, ServerStatusEvent } from '../types'
+
+interface LifecycleEvent {
+  phase: 'starting' | 'running' | 'stopping' | 'stopped' | 'crashed' | 'error'
+  observed_at_ms: number
+}
 
 interface Options {
   config:     ServerConfig | null
@@ -39,7 +45,10 @@ export function useServerLifecycle({ config, setSaving, setError, online = true 
 
   const { onDemandEnabled, onDemandMaps, autoShutdownMin, clusterStartDelaySec, recordModsActive } = useBackupStore()
 
-  const maps = config?.cluster_maps?.length ? config.cluster_maps : ['TheIsland_WP']
+  const maps = useMemo(
+    () => config?.cluster_maps?.length ? config.cluster_maps : ['TheIsland_WP'],
+    [config?.cluster_maps]
+  )
   const isCluster = maps.length > 1
 
   // Placeholder statuses until first poll
@@ -75,13 +84,54 @@ export function useServerLifecycle({ config, setSaving, setError, online = true 
 
   const serverRunning = mapStatuses.some((s) => s.running)
 
-  // ── Poll instance status ───────────────────────────────────────────────────
+  // ── Event-driven instance status with a slow safety fallback ───────────────
   useEffect(() => {
     if (!config) return
-    refreshStatuses()
-    const interval = setInterval(refreshStatuses, 5_000)
-    return () => clearInterval(interval)
-  }, [config, refreshStatuses])
+    let disposed = false
+    let unlistenStatus: (() => void) | undefined
+    let unlistenLifecycle: (() => void) | undefined
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+    const lastEventAt = { current: 0 }
+
+    const onStatus = (event: { payload: ServerStatusEvent }) => {
+      lastEventAt.current = Date.now()
+      setMapStatuses(event.payload.maps)
+      if (event.payload.running) setIsServerStopping(false)
+    }
+    const onLifecycle = (event: { payload: LifecycleEvent }) => {
+      lastEventAt.current = Date.now()
+      const phase = event.payload.phase
+      setIsServerStarting(phase === 'starting')
+      setIsServerStopping(phase === 'stopping')
+      if (phase === 'crashed') setError('El proceso del servidor terminó inesperadamente.')
+      if (phase === 'error') setError('El backend reportó un error del servidor.')
+    }
+    const armFallback = () => {
+      if (disposed) return
+      fallbackTimer = setTimeout(async () => {
+        if (Date.now() - lastEventAt.current >= 35_000) await refreshStatuses()
+        armFallback()
+      }, 30_000)
+    }
+
+    void refreshStatuses()
+    void listen<ServerStatusEvent>('server://status', onStatus).then((fn) => {
+      if (disposed) fn()
+      else unlistenStatus = fn
+    }).catch(() => {})
+    void listen<LifecycleEvent>('server://lifecycle', onLifecycle).then((fn) => {
+      if (disposed) fn()
+      else unlistenLifecycle = fn
+    }).catch(() => {})
+    armFallback()
+
+    return () => {
+      disposed = true
+      if (fallbackTimer) clearTimeout(fallbackTimer)
+      unlistenStatus?.()
+      unlistenLifecycle?.()
+    }
+  }, [config, refreshStatuses, setError])
 
   // ── Start ────────────────────────────────────────────────────────────────────
   const handleStartServer = useCallback(async (mapIndex?: number) => {
@@ -112,6 +162,27 @@ export function useServerLifecycle({ config, setSaving, setError, online = true 
     try {
       setIsServerStarting(true)
       setError(null)
+
+      // ── Auto-update before start ────────────────────────────────────────
+      // The Steam buildid must match before ARK can show up in the official
+      // server browser. Compare against Steam once, and if a fresh build is
+      // available, run SteamCMD before `start_server` actually fires.
+      if (config.network?.auto_update_before_start && online) {
+        try {
+          const info = await invoke<import('../types').ServerVersionInfo>('check_server_version', { config })
+          if (info.needs_update) {
+            logger.info(
+              `Auto-update: local buildid=${info.local_buildid} < latest=${info.latest_buildid}. Running SteamCMD update…`
+            )
+            await invoke<string>('update_server', { config })
+            logger.info('Auto-update finished')
+          }
+        } catch (err) {
+          // Auto-update is best-effort — if SteamCMD is missing or can't
+          // reach Steam, just keep going so the user isn't blocked.
+          logger.warn('Auto-update check failed; continuing without update', err)
+        }
+      }
 
       const activeMods = config.mods?.active_mods ?? []
       if (activeMods.length > 0) {

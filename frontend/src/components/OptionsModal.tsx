@@ -4,13 +4,13 @@ import { useShallow } from 'zustand/react/shallow'
 import { useI18n } from '../i18n/useI18n'
 import { useBackupActions } from '../hooks/useBackupActions'
 import { invoke } from '../services/tauri'
-import Tooltip from './Tooltip'
 import GeneralTab from './options/GeneralTab'
 import BackupTab from './options/BackupTab'
 import ConfigTab from './options/ConfigTab'
 import HostingTab from './options/HostingTab'
 import DatabaseTab from './options/DatabaseTab'
 import PluginsTab from './options/PluginsTab'
+import ModsTab from './options/ModsTab'
 import type { ServerConfig } from '../types'
 
 interface OptionsModalProps {
@@ -24,7 +24,7 @@ interface OptionsModalProps {
   isSaving?: boolean
 }
 
-type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'plugins' | 'actions'
+type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'plugins' | 'mods' | 'actions'
 
 export default function OptionsModal({
   onClose,
@@ -38,7 +38,7 @@ export default function OptionsModal({
 }: OptionsModalProps) {
   const [tab, setTab] = useState<OptionsTab>('general')
   const { config, setConfig, setSavedConfig } = useConfigStore(useShallow((s: ConfigStore) => ({ config: s.config, setConfig: s.setConfig, setSavedConfig: s.setSavedConfig })))
-  const { tk, tip } = useI18n()
+  const { tk } = useI18n()
   const backupActions = useBackupActions(config)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -76,7 +76,7 @@ export default function OptionsModal({
     e.target.value = ''
   }
 
-  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'plugins', 'actions']
+  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'plugins', 'mods', 'actions']
 
   return (
     <div
@@ -85,7 +85,7 @@ export default function OptionsModal({
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className={`ark-panel rounded-xl w-full max-h-[90vh] flex flex-col transition-all ${tab === 'config' ? 'max-w-4xl' : 'max-w-2xl'}`}
+        className={`ark-panel rounded-xl w-full max-h-[90vh] flex flex-col transition-all ${(tab === 'config' || tab === 'mods') ? 'max-w-4xl' : 'max-w-2xl'}`}
         style={{ border: '1px solid rgba(0,200,255,0.3)', boxShadow: '0 0 40px rgba(0,200,255,0.1)' }}
       >
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-ark-cyan/20 flex-shrink-0">
@@ -98,12 +98,18 @@ export default function OptionsModal({
           </button>
         </div>
 
-        <div className="flex border-b border-ark-cyan/20 flex-shrink-0">
+        <div
+          className="flex flex-wrap border-b border-ark-cyan/20 flex-shrink-0"
+          role="tablist"
+          aria-label={tk('options_title', 'Options')}
+        >
           {tabs.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className="px-5 py-3 text-xs font-bold tracking-widest uppercase transition-colors"
+              className="shrink-0 whitespace-nowrap px-5 py-3 text-xs font-bold tracking-widest uppercase transition-colors"
+              role="tab"
+              aria-selected={tab === t}
               style={{
                 color: tab === t ? 'rgba(0,200,255,0.9)' : 'rgba(0,200,255,0.35)',
                 borderBottom: tab === t ? '2px solid rgba(0,200,255,0.8)' : '2px solid transparent',
@@ -115,6 +121,7 @@ export default function OptionsModal({
                 : t === 'hosting' ? tk('tab_hosting', 'Hosting')
                 : t === 'database' ? tk('tab_database', 'Database')
                 : t === 'plugins' ? tk('tab_plugins', 'Plugins')
+                : t === 'mods' ? tk('tab_mods', 'Mods')
                 : tk('tab_actions', 'Actions')}
             </button>
           ))}
@@ -134,7 +141,19 @@ export default function OptionsModal({
           )}
           {tab === 'hosting' && <HostingTab />}
           {tab === 'database' && <DatabaseTab />}
-          {tab === 'plugins' && <PluginsTab />}
+          {tab === 'plugins' && (
+            <PluginsTab config={config} />
+          )}
+          {tab === 'mods' && (
+            <ModsTab
+              config={config}
+              onConfigSaved={(updated) => {
+                setConfig(updated)
+                setSavedConfig(updated)
+              }}
+              onRequestSwitchToConfigTab={() => setTab('config')}
+            />
+          )}
           {tab === 'actions' && (
             <div className="space-y-3">
               {onReset && (
