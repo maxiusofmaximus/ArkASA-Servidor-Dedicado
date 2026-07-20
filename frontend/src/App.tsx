@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, lazy, Suspense, type ReactNode } from 'react'
+import { useEffect, useState, useCallback, lazy, Suspense, useRef, type ReactNode } from 'react'
 import { initializeTauri, invoke, getTauriStatus } from './services/tauri'
 import { logger } from './services/logger'
 import { useConfigStore, type ConfigStore } from './stores/configStore'
@@ -6,6 +6,7 @@ import { useUiStore, type UiStore } from './stores/uiStore'
 import { useBackupStore, type BackupStore } from './stores/backupStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
+import { useServerVersion } from './hooks/useServerVersion'
 import { useAutoSave } from './hooks/useAutoSave'
 import { useTauriEvents } from './hooks/useTauriEvents'
 import { useInternetStatus } from './hooks/useInternetStatus'
@@ -21,6 +22,8 @@ import OptionsModal from './components/OptionsModal'
 import ConfigDiffViewer from './components/ConfigDiffViewer'
 import ServerLogsPanel from './components/ServerLogsPanel'
 import LogsViewer from './components/LogsViewer'
+import ErrorBoundary from './components/ErrorBoundary'
+import VersionBadge from './components/VersionBadge'
 
 import { computeDiff } from './utils/configDiff'
 import type { DiffEntry } from './utils/configDiff'
@@ -115,24 +118,44 @@ function App() {
   const [pendingApply, setPendingApply] = useState<(() => void) | null>(null)
 
   // ── Auto-dismiss error after 3 s ──────────────────────────────────────────
-  const errorTimer = useState<ReturnType<typeof setTimeout>>()[0]
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const setError = useCallback((msg: string | null) => {
     setErrorRaw(msg)
-    if (msg !== null) {
-      clearTimeout(errorTimer)
-      setTimeout(() => setErrorRaw(null), 3_000)
+    if (errorTimerRef.current !== null) {
+      clearTimeout(errorTimerRef.current)
+      errorTimerRef.current = null
     }
-  }, [errorTimer])
+    if (msg !== null) {
+      errorTimerRef.current = setTimeout(() => {
+        setErrorRaw(null)
+        errorTimerRef.current = null
+      }, 3_000)
+    }
+  }, [])
+
+  // Cleanup the timer on unmount.
+  useEffect(() => () => {
+    if (errorTimerRef.current !== null) clearTimeout(errorTimerRef.current)
+  }, [])
 
   // ── Auto-dismiss wake notification after 30 s ─────────────────────────────
-  const wakeTimer = useState<ReturnType<typeof setTimeout>>()[0]
+  const wakeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const setWakeInfo = useCallback((msg: string | null) => {
     setWakeInfoRaw(msg)
-    if (msg !== null) {
-      clearTimeout(wakeTimer)
-      setTimeout(() => setWakeInfoRaw(null), 30_000)
+    if (wakeTimerRef.current !== null) {
+      clearTimeout(wakeTimerRef.current)
+      wakeTimerRef.current = null
     }
-  }, [wakeTimer])
+    if (msg !== null) {
+      wakeTimerRef.current = setTimeout(() => {
+        setWakeInfoRaw(null)
+        wakeTimerRef.current = null
+      }, 30_000)
+    }
+  }, [])
+  useEffect(() => () => {
+    if (wakeTimerRef.current !== null) clearTimeout(wakeTimerRef.current)
+  }, [])
 
   // ── Hooks ──────────────────────────────────────────────────────────────────
   const {
@@ -150,11 +173,43 @@ function App() {
     onDemandReady:  (map) => setWakeInfo(`✅ ${tk('on_demand_ready', '{{name}} is ready — connect now').replace('{{name}}', map.replace('_WP', ''))}`),
   })
 
-  // Escape → toggle Options (unless DifficultyModal is open)
+  // ── Server version badge ──────────────────────────────────────────────────────
+  const version = useServerVersion(config)
+
+  // ── Background scroll lock while a modal is open ────────────────────────────
+  // Prevent the body / main page from being scrollable underneath an open
+  // Options or Difficulty modal. The main view is fixed-height; preventing
+  // the inner element from scrolling also catches overscroll (Windows trackpad
+  // pull-down) that otherwise bleeds through.
+  useEffect(() => {
+    const anyModalOpen = showOptionsModal || showDifficultyModal
+    const prevOverflow = document.body.style.overflow
+    if (anyModalOpen) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = prevOverflow || ''
+    }
+    return () => {
+      document.body.style.overflow = prevOverflow || ''
+    }
+  }, [showOptionsModal, showDifficultyModal])
+
+  // Escape → toggle Options (unless DifficultyModal is open).
+  // Guard: when the modal is OPEN, the modal's own onClose handles ESC
+  // via `e.stopPropagation()` — without this, a single ESC key triggers
+  // BOTH `toggle_modal here` AND `onClose inside the modal`, which
+  // means showOptionsModal flips twice in the same tick and renders an
+  // empty OptionsModal instance back over the laid-out content (the
+  // classic "blue screen of death" the user reported).
   // Ctrl+Z → undo, Ctrl+Y / Ctrl+Shift+Z → redo
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !showDifficultyModal) {
+      if (e.key === 'Escape') {
+        // If a modal is open, let ITS Escape handler take over (calls onClose).
+        // We do nothing at the app level in that case.
+        if (showOptionsModal || showDifficultyModal) {
+          return
+        }
         setShowOptionsModal((p) => !p)
         return
       }
@@ -165,7 +220,7 @@ function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [showDifficultyModal, undo, redo])
+  }, [showOptionsModal, showDifficultyModal, undo, redo])
 
   // ── Init ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -322,10 +377,20 @@ function App() {
 
   return (
     <ArkLayout>
-      <PrimaryNav activeTab={primaryTab} onTabChange={setPrimaryTab} />
-      <SubNav primaryTab={primaryTab} />
+      <ErrorBoundary>
+        <div className="flex items-center justify-end px-6 pt-3 gap-3">
+          <VersionBadge
+            info={version.info}
+            loading={version.loading}
+            updating={version.updating}
+            onRefresh={() => { void version.refresh() }}
+            onUpdate={() => version.runUpdate()}
+          />
+        </div>
+        <PrimaryNav activeTab={primaryTab} onTabChange={setPrimaryTab} />
+        <SubNav primaryTab={primaryTab} />
 
-      <main className="pb-24">{renderPage()}</main>
+        <main className="pb-24">{renderPage()}</main>
 
       {error && (
         <div className="fixed top-20 right-8 bg-ark-accent/20 border border-ark-accent text-ark-accent p-4 rounded z-50 max-w-sm">
@@ -417,6 +482,7 @@ function App() {
       )}
 
       <LogsViewer />
+      </ErrorBoundary>
     </ArkLayout>
   )
 }
