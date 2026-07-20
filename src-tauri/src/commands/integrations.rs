@@ -163,8 +163,18 @@ pub async fn read_remote_buildid(steam_cmd_dir: &str) -> std::result::Result<Opt
     } else {
         exe.join("steamcmd.sh")
     };
-    let output = Command::new(&cmd_path)
-        .args(["+login", "anonymous", "+app_info_print", "2430930", "+quit"])
+    let mut cmd = Command::new(&cmd_path);
+    cmd.args(["+login", "anonymous", "+app_info_print", "2430930", "+quit"]);
+    #[cfg(windows)]
+    {
+        // CREATE_NO_WINDOW (0x08000000) — SteamCMD is a console app and
+        // would otherwise pop a CMD box for every probe (and impersonate
+        // its own SteamCMD inner console).  See installer.rs:46 for the
+        // canonical pattern.
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| Error::ProcessError(format!("Failed to run SteamCMD: {}", e)))?;

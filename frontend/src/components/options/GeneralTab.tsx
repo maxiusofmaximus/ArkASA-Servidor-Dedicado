@@ -72,6 +72,69 @@ export default function GeneralTab() {
         </p>
       </Section>
 
+      {/* ── Mundo / Inventario (v2.1) ───────────────────────────────── */}
+      {/* Promoted to the top of the tab so the item-stack-size multiplier
+          (X1..X10) and the per-resource overrides panel are the first
+          controls the operator sees — most users want to bump stack
+          sizes immediately after a fresh install. */}
+      <Section title={tk('section_world', 'Mundo & Inventario')}>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex-1 pr-3">
+              <p className="text-ark-cyan/80 text-sm">{tk('auto_save_title', 'Auto-guardado del mundo (minutos)')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5">
+                {tk('auto_save_desc',
+                  'Frecuencia con que el server hace save al mundo entero. ARK ASA por defecto 15 min. Sube a 30–60 si tienes cluster grande y ves bajones tras cada saveworld; baja a 5 si quieres recuperación más granular tras caídas. 0 = guarda constantemente (no recomendable, mucho I/O).')
+                }
+              </p>
+              <p className="text-ark-cyan/30 text-[10px] mt-0.5 italic">
+                {tk('auto_save_hint',
+                  'También se guarda al pulsar Stop (saveworld → doexit). Razón principal de los FPS drops durante juego es el GC del cluster + el coste del save — ajustar este valor es lo que más afecta la fluidez general.')
+                }
+              </p>
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={120}
+              step={1}
+              value={cfg.advanced?.auto_save_period_minutes ?? 15}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (!Number.isFinite(v)) return;
+                cfg.updateAdvanced({ auto_save_period_minutes: Math.max(0, Math.min(120, Math.round(v))) });
+              }}
+              className="w-24 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1 pr-3">
+              <p className="text-ark-cyan/80 text-sm">{tk('global_stack_title', 'Apilable global (multiplicador de stacks)')}</p>
+              <p className="text-ark-cyan/40 text-xs mt-0.5">
+                {tk('global_stack_desc',
+                  'Multiplica el stack base de cada ítem apilable. 1 = oficial ARK (carne 100, primemeat 40, stone 100, etc.). 2 duplica todo. Para tocar un recurso concreto usa la tabla de abajo.')}
+              </p>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step={1}
+              value={cfg.advanced?.item_stack_size_multiplier ?? 1}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (!Number.isFinite(v)) return;
+                cfg.updateAdvanced({ item_stack_size_multiplier: Math.max(1, Math.min(10, Math.round(v))) });
+              }}
+              className="w-20 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
+            />
+          </div>
+
+          <StackOverridesRow />
+        </div>
+      </Section>
+
       <Section title={tk('section_on_demand', 'On-Demand Server')}>
         <div className="flex items-center justify-between">
           <div>
@@ -172,66 +235,6 @@ export default function GeneralTab() {
           </div>
         </div>
       </Section>
-
-      {/* ── Mundo / Inventario (v2.1) ───────────────────────────────── */}
-      <Section title={tk('section_world', 'Mundo & Inventario')}>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex-1 pr-3">
-              <p className="text-ark-cyan/80 text-sm">{tk('auto_save_title', 'Auto-guardado del mundo (minutos)')}</p>
-              <p className="text-ark-cyan/40 text-xs mt-0.5">
-                {tk('auto_save_desc',
-                  'Frecuencia con que el server hace save al mundo entero. ARK ASA por defecto 15 min. Sube a 30–60 si tienes cluster grande y ves bajones tras cada saveworld; baja a 5 si quieres recuperación más granular tras caídas. 0 = guarda constantemente (no recomendable, mucho I/O).')
-                }
-              </p>
-              <p className="text-ark-cyan/30 text-[10px] mt-0.5 italic">
-                {tk('auto_save_hint',
-                  'También se guarda al pulsar Stop (saveworld → doexit). Razón principal de los FPS drops durante juego es el GC del cluster + el coste del save — ajustar este valor es lo que más afecta la fluidez general.')
-                }
-              </p>
-            </div>
-            <input
-              type="number"
-              min={0}
-              max={120}
-              step={1}
-              value={cfg.advanced?.auto_save_period_minutes ?? 15}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (!Number.isFinite(v)) return;
-                cfg.updateAdvanced({ auto_save_period_minutes: Math.max(0, Math.min(120, Math.round(v))) });
-              }}
-              className="w-24 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="flex-1 pr-3">
-              <p className="text-ark-cyan/80 text-sm">{tk('global_stack_title', 'Apilable global (multiplicador de stacks)')}</p>
-              <p className="text-ark-cyan/40 text-xs mt-0.5">
-                {tk('global_stack_desc',
-                  'Multiplica el stack base de cada ítem apilable. 1 = oficial ARK (carne 100, primemeat 40, stone 100, etc.). 2 duplica todo. Para tocar un recurso concreto usa la tabla de abajo.')}
-              </p>
-            </div>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              step={1}
-              value={cfg.advanced?.item_stack_size_multiplier ?? 1}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (!Number.isFinite(v)) return;
-                cfg.updateAdvanced({ item_stack_size_multiplier: Math.max(1, Math.min(10, Math.round(v))) });
-              }}
-              className="w-20 bg-black/40 border border-ark-cyan/40 text-ark-cyan text-sm px-2 py-1 rounded font-mono"
-            />
-          </div>
-
-          <StackOverridesRow />
-        </div>
-      </Section>
-
       {/* ── Version sync (v2.1) ───────────────────────────────────────── */}
       <Section title={tk('section_version_sync', 'Version Sync (Steam buildid)')}>
         <div className="space-y-4">
@@ -356,13 +359,17 @@ function UpdateNowCard() {
   const [msg,  setMsg]    = useState<string | null>(null)
 
   const runUpdate = async () => {
+    if (busy || version.updating) return
     setBusy(true); setMsg(null)
     try {
-      const out = await invoke<string>('update_server', { config: cfg.config })
-      setMsg(out)
-      await version.refresh()
-    } catch (e: any) {
-      setMsg(String(e))
+      // Delegate to the same hook used by the top-bar badge — that path
+      // shares the in-flight single-flight lock + 30s debounce window so
+      // we can never fork two steamcmd subprocesses for the same click.
+      const out = await version.runUpdate()
+      setMsg(typeof out === 'string' ? out : 'Update OK')
+    } catch (e: unknown) {
+      const text = e instanceof Error ? e.message : String(e)
+      setMsg(text)
     } finally {
       setBusy(false)
     }
@@ -392,19 +399,21 @@ function UpdateNowCard() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            disabled={busy || version.loading}
+            type="button"
+            disabled={busy || version.loading || version.updating}
             onClick={() => void version.refresh()}
             className="text-ark-cyan/70 hover:text-ark-cyan text-[10px] tracking-widest uppercase disabled:opacity-40"
           >
             ↻ {tk('btn_refresh', 'REFRESH')}
           </button>
           <button
-            disabled={busy || !cfg.config}
+            type="button"
+            disabled={busy || version.updating || !cfg.config}
             onClick={runUpdate}
             className="ark-action-btn px-4 py-1.5 text-xs disabled:opacity-40"
             style={{ borderColor: color + '60' }}
           >
-            {busy ? tk('updating', 'Updating…')
+            {busy || version.updating ? tk('updating', 'Updating…')
                   : tk('btn_update_now', 'UPDATE NOW')}
           </button>
         </div>
