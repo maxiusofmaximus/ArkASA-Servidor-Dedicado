@@ -11,6 +11,7 @@ import HostingTab from './options/HostingTab'
 import DatabaseTab from './options/DatabaseTab'
 import PluginsTab from './options/PluginsTab'
 import ModsTab from './options/ModsTab'
+import DiagnosticsTab from './options/DiagnosticsTab'
 import type { ServerConfig } from '../types'
 
 interface OptionsModalProps {
@@ -24,7 +25,7 @@ interface OptionsModalProps {
   isSaving?: boolean
 }
 
-type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'plugins' | 'mods' | 'actions'
+type OptionsTab = 'general' | 'backup' | 'config' | 'hosting' | 'database' | 'diagnostics' | 'plugins' | 'mods' | 'actions'
 
 export default function OptionsModal({
   onClose,
@@ -76,7 +77,7 @@ export default function OptionsModal({
     e.target.value = ''
   }
 
-  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'plugins', 'mods', 'actions']
+  const tabs: OptionsTab[] = ['general', 'backup', 'config', 'hosting', 'database', 'diagnostics', 'plugins', 'mods', 'actions']
 
   return (
     <div
@@ -120,6 +121,7 @@ export default function OptionsModal({
                 : t === 'config' ? tk('tab_config_ini', 'Config INI')
                 : t === 'hosting' ? tk('tab_hosting', 'Hosting')
                 : t === 'database' ? tk('tab_database', 'Database')
+                : t === 'diagnostics' ? tk('tab_diagnostics', 'Diagnostics')
                 : t === 'plugins' ? tk('tab_plugins', 'Plugins')
                 : t === 'mods' ? tk('tab_mods', 'Mods')
                 : tk('tab_actions', 'Actions')}
@@ -141,6 +143,7 @@ export default function OptionsModal({
           )}
           {tab === 'hosting' && <HostingTab />}
           {tab === 'database' && <DatabaseTab />}
+          {tab === 'diagnostics' && <DiagnosticsTab config={config} />}
           {tab === 'plugins' && (
             <PluginsTab config={config} />
           )}
