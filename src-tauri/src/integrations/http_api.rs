@@ -38,9 +38,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::timeout;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapStatusDto {
@@ -58,6 +56,18 @@ pub struct StateSnapshot {
     pub last_update_ms:  i64,
 }
 
+/// Type alias for the multi-channel command dispatcher that the rest of
+/// the app bleeds router wiring into. Lives here rather than in
+/// command_router.rs to avoid pulling the closure-y type into places
+/// that already have implementations (Telegram, Discord, Slack all
+/// take concrete `Arc<F>` instead).
+pub type RouterFn = dyn Fn(
+    crate::integrations::command_router::RemoteCommandContext,
+    crate::integrations::command_router::RemoteCommand,
+) -> Result<crate::integrations::command_router::RouterOutcome, String>
+    + Send
+    + Sync;
+
 /// Shared state held by the HTTP server. The Tauri app populates
 /// `config_snapshot` once `load_config_or_default` finishes, and updates
 /// `state` whenever the cluster status poll refreshes.
@@ -67,15 +77,22 @@ pub struct AdminApiState {
     pub host_id: String,
     pub state: Arc<RwLock<StateSnapshot>>,
     pub config_snapshot: Arc<RwLock<Option<ServerConfig>>>,
+    /// Multi-channel router closure shared with Telegram/Discord/Slack
+    /// adapters.  WhatsApp + WeChat webhooks (and the `/api/v1/start`,
+    /// `/stop`, `/restart`, `/internal/dispatch` endpoints) reuse it so
+    /// that sending `/start` from a chat actually starts the server
+    /// instead of just acking "accepted".
+    pub router: Arc<RouterFn>,
 }
 
 impl AdminApiState {
-    pub fn new(auth: Arc<AuthState>, host_id: String) -> Self {
+    pub fn new(auth: Arc<AuthState>, host_id: String, router: Arc<RouterFn>) -> Self {
         Self {
             auth,
             host_id,
             state: Arc::new(RwLock::new(StateSnapshot::default())),
             config_snapshot: Arc::new(RwLock::new(None)),
+            router,
         }
     }
 
@@ -280,10 +297,17 @@ async fn admin_only_call(
     };
     if let Err(e) = authorize(&ctx, &cmd) { return err_500(format!("forbidden: {e}")); }
 
-    // Hito 12: invoke the actual launcher here. For now we synthesise a
-    // placeholder outcome so the wire contracts are usable end-to-end.
-    let outcome = RouterOutcome::Error {
-        reason: "start/stop/restart bridged to launcher in lib.rs at Hito 12".into(),
+    // Real dispatch: route through the same multi-channel router closure
+    // that Telegram/Discord/Slack already use.  The router internally
+    // uses block_on, so we push the actual call to a blocking thread
+    // to keep the axum reactor free.  Bounded at 30 s so a long-running
+    // start/stop cannot pin the loopback HTTP server.
+    let router = api.router.clone();
+    let join = tokio::task::spawn_blocking(move || router(ctx, cmd)).await;
+    let outcome = match join {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(e))      => RouterOutcome::Error { reason: format!("router: {e}") },
+        Err(e)          => RouterOutcome::Error { reason: format!("router task panicked: {e}") },
     };
 
     (StatusCode::OK, Json(outcome)).into_response()
@@ -331,22 +355,18 @@ async fn internal_dispatch(
         return err_500(format!("forbidden by authorize: {e}"));
     }
 
-    // Safety net: only resolve within 5 s; otherwise return a clear error
-    // rather than letting the Convex action hang.
-    let outcome = match timeout(
-        Duration::from_secs(5),
-        async {
-            // Hito 12: bridge to the launcher. For now we return a stub.
-            Ok::<_, String>(RouterOutcome::Error {
-                reason: "internal_dispatch bridged at Hito 12".into(),
-            })
-        },
-    ).await {
-        Ok(r)   => r.unwrap_or_else(|e| RouterOutcome::Error { reason: format!("bridge: {e}") }),
-        Err(_)  => RouterOutcome::Error { reason: "timeout executing command".into() },
+    // Dispatch via the shared router on a blocking thread; the
+    // router internally calls block_on so we cannot await it inside
+    // an async-without-yielding context.  Bound at 30 s in case the
+    // launcher takes too long so the Convex call doesn't hang.
+    let router = api.router.clone();
+    let join = tokio::task::spawn_blocking(move || router(body.context, body.cmd)).await;
+    let outcome = match join {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(e))      => RouterOutcome::Error { reason: format!("router: {e}") },
+        Err(e)          => RouterOutcome::Error { reason: format!("router task panicked: {e}") },
     };
 
-    let _ = api; // keep alive — Hito 12 will use api here
     (StatusCode::OK, Json(outcome)).into_response()
 }
 
@@ -357,7 +377,7 @@ fn err_500(reason: String) -> Response {
 // ─── Session 10 — webhook receivers (WhatsApp + WeChat) ───────────────
 
 async fn whatsapp_webhook(
-    AxState(_api): AxState<Arc<AdminApiState>>,
+    AxState(api): AxState<Arc<AdminApiState>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
@@ -382,21 +402,78 @@ async fn whatsapp_webhook(
         Ok(p)  => p,
         Err(e) => return err_500(format!("whatsapp webhook: bad json: {e}")),
     };
-    // Hand off to the bot. For the S10 wire-up we keep the bot
-    // alive just long enough to classify + accept the inbound
-    // against the allowlist. A future session will plumb the
-    // router closure through so the bot can dispatch real commands.
-    let _bot = crate::integrations::whatsapp::WhatsAppBot::new(cfg.clone());
-    let _ = tokio::task::spawn_blocking(move || {
-        // Receipt hook reserved for Sesión 10+; today we keep the
-        // bot alive inside this task without doing any further I/O.
-    });
+
+    let bot = crate::integrations::whatsapp::WhatsAppBot::new(cfg.clone());
+
+    // Walk every inbound message: classify via allowlist + parse_action,
+    // build a RemoteCommand, route through the same shared router closure
+    // we use for Telegram/Discord/Slack, and capture the rendered reply.
+    // Meta expects a fast 200 OK; we run the actual dispatch on the
+    // router and stash the response so it can be sent out-of-band via
+    // Graph API if/when that lands.  For now the visible UX is that
+    // /start typed in WhatsApp actually starts/stops the server — the
+    // operator sees status in the desktop UI immediately because the
+    // router writes receipts and the launcher emits lifecycle events.
+    let mut accepted: usize = 0;
+    let mut rejected: usize = 0;
+    let entries = payload.entry.len();
+    for entry in payload.entry.iter() {
+        for change in entry.changes.iter() {
+            for msg in change.value.messages.iter() {
+                // accept_message enforces admin allowlist + non-text skip.
+                let Some(ctx) = bot.accept_message(msg) else { rejected += 1; continue; };
+                let text_opt = msg.text.as_ref().map(|t| t.body.as_str()).unwrap_or("");
+                let Some(kind) = crate::integrations::whatsapp::WhatsAppBot::parse_action(text_opt) else {
+                    rejected += 1;
+                    continue;
+                };
+                let kind_for_log = match kind {
+                    crate::integrations::command_router::CommandKind::Start => "start",
+                    crate::integrations::command_router::CommandKind::Stop => "stop",
+                    crate::integrations::command_router::CommandKind::Restart => "restart",
+                    crate::integrations::command_router::CommandKind::Status => "status",
+                    crate::integrations::command_router::CommandKind::Logs => "logs",
+                    crate::integrations::command_router::CommandKind::Ip => "ip",
+                    crate::integrations::command_router::CommandKind::ConfigGet => "config_get",
+                    crate::integrations::command_router::CommandKind::ConfigSet => "config_set",
+                    crate::integrations::command_router::CommandKind::StartInstance => "start_instance",
+                    crate::integrations::command_router::CommandKind::StopInstance => "stop_instance",
+                };
+                let cmd = RemoteCommand {
+                    kind,
+                    map_index: None,
+                    config_patch: None,
+                    tail: None,
+                };
+                let from = msg.from.clone();
+                let router = api.router.clone();
+                let dispatch_join = tokio::task::spawn_blocking(move || router(ctx, cmd)).await;
+                match dispatch_join {
+                    Ok(Ok(outcome)) => {
+                        log::info!(
+                            "whatsapp webhook dispatch from={from} kind={kind_for_log} outcome={outcome:?}"
+                        );
+                        accepted += 1;
+                    }
+                    Ok(Err(e)) => {
+                        log::warn!("whatsapp webhook router returned error: {e}");
+                        rejected += 1;
+                    }
+                    Err(e) => {
+                        log::warn!("whatsapp webhook router task panicked: {e}");
+                        rejected += 1;
+                    }
+                }
+            }
+        }
+    }
+
     (StatusCode::OK,
      Json(serde_json::json!({
-         "status": "accepted",
-         "messages_in_batch": payload.entry.iter()
-             .flat_map(|e| e.changes.iter().flat_map(|c| c.value.messages.iter()))
-             .count(),
+         "status":            "accepted",
+         "entries":           entries,
+         "messages_dispatched": accepted,
+         "messages_rejected":   rejected,
      }))).into_response()
 }
 

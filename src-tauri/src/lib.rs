@@ -67,7 +67,52 @@ pub fn run() {
             };
 
             let host_id = machine_host_id().unwrap_or_else(|_| "unknown".into());
-            let api = Arc::new(integrations::http_api::AdminApiState::new(auth, host_id.clone()));
+
+            // Build the multi-channel router FIRST — the loopback HTTP
+            // server (AdminApiState) shares it via a typed Arc<dyn ...>
+            // so that /hooks/whatsapp, /api/v1/internal/dispatch and
+            // admin POSTs to /api/v1/{start,stop,restart} all dispatch
+            // through the same path Telegram/Discord/Slack already use.
+            let router_fn = move |ctx: integrations::command_router::RemoteCommandContext,
+                                   cmd: integrations::command_router::RemoteCommand| {
+                let cfg_path = std::env::var("ARK_ASA_CONFIG_PATH")
+                    .unwrap_or_else(|_| "server-config.toml".to_string());
+                let cfg_path_pb = std::path::PathBuf::from(cfg_path);
+                let cfg = match tauri::async_runtime::block_on(
+                    crate::config::loader::ConfigLoader::load_or_default(&cfg_path_pb),
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return Err::<integrations::command_router::RouterOutcome, String>(
+                            format!("config load failed: {e}"),
+                        );
+                    }
+                };
+                let _ = ctx;
+                let outcome = tauri::async_runtime::block_on(
+                    integrations::dispatch(&cfg, cmd.kind, cmd.map_index, cmd.tail),
+                );
+                match outcome {
+                    Ok(o) => Ok(o),
+                    Err(e) => Ok(integrations::command_router::RouterOutcome::Error {
+                        reason: format!("{e}"),
+                    }),
+                }
+            };
+            let router_arc: std::sync::Arc<
+                dyn Fn(
+                    integrations::command_router::RemoteCommandContext,
+                    integrations::command_router::RemoteCommand,
+                )
+                    -> Result<integrations::command_router::RouterOutcome, String>
+                    + Send
+                    + Sync
+                    + 'static,
+            > = std::sync::Arc::new(router_fn);
+
+            let api = Arc::new(integrations::http_api::AdminApiState::new(
+                auth, host_id.clone(), router_arc.clone(),
+            ));
             if let Err(e) = integrations::http_api::spawn_loopback_server(api.clone(), [127, 0, 0, 1], 8765).await {
                 log::error!("loopback HTTP API failed to spawn: {e}");
             } else {
@@ -105,46 +150,10 @@ pub fn run() {
                 }
             }
 
-            // v2.2 — multi-channel remote admin.
-            // We always build the router closure (it just loads the on-disk
-            // ServerConfig per command). Then we conditionally spawn each
-            // channel adapter based on its dedicated env vars.
-            let router_fn = move |ctx: integrations::command_router::RemoteCommandContext,
-                                   cmd: integrations::command_router::RemoteCommand| {
-                let cfg_path = std::env::var("ARK_ASA_CONFIG_PATH")
-                    .unwrap_or_else(|_| "server-config.toml".to_string());
-                let cfg_path_pb = std::path::PathBuf::from(cfg_path);
-                let cfg = match tauri::async_runtime::block_on(
-                    crate::config::loader::ConfigLoader::load_or_default(&cfg_path_pb),
-                ) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Err::<integrations::command_router::RouterOutcome, String>(
-                            format!("config load failed: {e}"),
-                        );
-                    }
-                };
-                let _ = ctx;
-                let outcome = tauri::async_runtime::block_on(
-                    integrations::dispatch(&cfg, cmd.kind, cmd.map_index, cmd.tail),
-                );
-                match outcome {
-                    Ok(o) => Ok(o),
-                    Err(e) => Ok(integrations::command_router::RouterOutcome::Error {
-                        reason: format!("{e}"),
-                    }),
-                }
-            };
-            let router_arc: std::sync::Arc<
-                dyn Fn(
-                    integrations::command_router::RemoteCommandContext,
-                    integrations::command_router::RemoteCommand,
-                )
-                    -> Result<integrations::command_router::RouterOutcome, String>
-                    + Send
-                    + Sync
-                    + 'static,
-            > = std::sync::Arc::new(router_fn);
+            // v2.2 — multi-channel remote admin (router_arc was already
+            // constructed above so the loopback HTTP server can share it
+            // with /hooks/whatsapp + /api/v1/internal/dispatch).
+            // Below: spawn each channel adapter using its dedicated env vars.
 
             // Telegram
             let bot_cfg = integrations::telegram::TelegramConfig::default();
