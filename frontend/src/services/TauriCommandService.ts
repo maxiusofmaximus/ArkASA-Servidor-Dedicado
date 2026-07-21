@@ -61,7 +61,12 @@ export class TauriCommandServiceImpl implements TauriCommandService {
   }
 
   async serverStatus(): Promise<any> {
-    return invoke('server_status')
+    try {
+      return await invoke('server_status')
+    } catch (err) {
+      console.warn('server_status unavailable', err)
+      return { running: false, process_id: null, uptime_seconds: 0 }
+    }
   }
 
   async startServer(config: ServerConfig): Promise<void> {
@@ -77,11 +82,21 @@ export class TauriCommandServiceImpl implements TauriCommandService {
   }
 
   async serverLogs(): Promise<string[]> {
-    return invoke('get_server_logs')
+    try {
+      return await invoke<string[]>('get_server_logs', { lines: 200 })
+    } catch (err) {
+      console.warn('get_server_logs unavailable', err)
+      return []
+    }
   }
 
   async serverMetrics(): Promise<any> {
-    return invoke('get_server_metrics')
+    try {
+      return await invoke('get_server_metrics')
+    } catch (err) {
+      console.warn('get_server_metrics unavailable', err)
+      return { cpu_pct: null, memory_mb: null, fps: null, process_id: null }
+    }
   }
 
   async backupSaves(): Promise<string> {

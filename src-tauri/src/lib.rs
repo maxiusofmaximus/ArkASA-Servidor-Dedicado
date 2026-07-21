@@ -400,9 +400,6 @@ pub fn run() {
             crate::commands::server::restart_server,
             crate::commands::server::get_server_logs,
             crate::commands::server::get_server_metrics,
-            crate::commands::server::backup_config,
-            crate::commands::server::list_backups,
-            crate::commands::server::restore_backup,
             // Cloud backup
             backup::backup_saves,
             backup::read_backup_metadata,

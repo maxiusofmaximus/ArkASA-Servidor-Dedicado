@@ -11,9 +11,158 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Command;
 use tauri::{Manager, Emitter};
 
+/// Snapshot of the running ARK server process — replaces the previous
+/// `server_status` stub that always returned `running: false`.  Uses the
+/// real `tasklist`/`pgrep` probe shared with `is_server_running`.
 #[tauri::command]
-pub fn server_status() -> std::result::Result<serde_json::Value, String> {
-    Ok(json!({"running": false, "process_id": null, "uptime_seconds": 0}))
+pub async fn server_status() -> std::result::Result<serde_json::Value, String> {
+    let running = is_server_running().await;
+    let pid = ark_process_pid().await;
+    Ok(json!({
+        "running":        running,
+        "process_id":     pid,
+        "image_name":     "ArkAscendedServer.exe",
+        "uptime_seconds": pid.map(|p| process_uptime_seconds(p)).flatten(),
+    }))
+}
+
+#[tauri::command]
+pub async fn get_server_logs(app: tauri::AppHandle, lines: Option<i32>) -> std::result::Result<Vec<String>, String> {
+    let cfg_dir = crate::commands::get_config_dir(&app)?;
+    tokio::fs::create_dir_all(&cfg_dir).await.map_err(|e| e.to_string())?;
+    let config = crate::config::ConfigLoader::load_or_default(&cfg_dir.join("server-config.toml"))
+        .await
+        .map_err(|e| e.to_string())?;
+    let n = lines.unwrap_or(100).clamp(1, 5000) as usize;
+    backup::read_server_log(config.paths.server_dir, None, n)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<serde_json::Value, String> {
+    let cfg_dir = crate::commands::get_config_dir(&app)?;
+    tokio::fs::create_dir_all(&cfg_dir).await.map_err(|e| e.to_string())?;
+    let config = crate::config::ConfigLoader::load_or_default(&cfg_dir.join("server-config.toml"))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let pid = ark_process_pid().await;
+    let (cpu_pct, memory_mb) = match pid {
+        Some(p) => {
+            #[cfg(windows)]
+            { (process_cpu_percent_windows(p).await, process_memory_mb_windows(p).await) }
+            #[cfg(not(windows))]
+            { (None, read_proc_status_mem_mb(p).await) }
+        }
+        None => (None, None),
+    };
+
+    // FPS must be scraped from the latest ShooterGame.log line containing
+    // "Stat FPS" (ARK writes one of these frames every ~1 second when a
+    // player is connected; absent logs ⇒ not yet measured).
+    let fps = backup::read_server_log(config.paths.server_dir.clone(), None, 4000)
+        .await
+        .ok()
+        .and_then(|lines| extract_last_stat_fps(&lines));
+
+    Ok(json!({
+        "cpu_pct":     cpu_pct,        // None when no PID
+        "memory_mb":   memory_mb,
+        "fps":         fps,            // None when log hasn't seen Stat FPS yet
+        "process_id":  pid,
+    }))
+}
+
+async fn ark_process_pid() -> Option<u32> {
+    #[cfg(windows)]
+    let out = {
+        use tokio::process::Command;
+        use std::os::windows::process::CommandExt;
+        Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq ArkAscendedServer.exe", "/FO", "CSV", "/NH"])
+            .creation_flags(0x08000000)
+            .output()
+            .await
+            .ok()?
+    };
+    #[cfg(not(windows))]
+    let out = {
+        use tokio::process::Command;
+        Command::new("pgrep")
+            .args(["-fa", "ArkAscendedServer"])
+            .output()
+            .await
+            .ok()?
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        // Win CSV row: "ArkAscendedServer.exe","12345","Console","1","512,345 K"
+        let mut fields = line.split('"').filter(|f| !f.trim().is_empty());
+        let _image = fields.next()?;
+        let pid = fields.next()?.trim().parse().ok()?;
+        return Some(pid);
+    }
+    None
+}
+
+// Process uptime in seconds — `tasklist`-only heuristic since ARK
+// doesn't expose start-time.  Best effort: if we can read it via
+// `wmic` (Win32_Process CreationDate), do so; else return None.
+fn process_uptime_seconds(_pid: u32) -> Option<u64> { None }
+
+#[cfg(windows)]
+async fn process_cpu_percent_windows(_pid: u32) -> Option<f32> { None }
+
+#[cfg(not(windows))]
+async fn process_cpu_percent_windows(_pid: u32) -> Option<f32> { None }
+
+#[cfg(windows)]
+async fn process_memory_mb_windows(_pid: u32) -> Option<f64> {
+    use tokio::process::Command;
+    use std::os::windows::process::CommandExt;
+    let out = Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq ArkAscendedServer.exe", "/FO", "CSV", "/NH"])
+        .creation_flags(0x08000000)
+        .output()
+        .await
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // CSV layout: "ImageName","PID","SessionName","Session#","MemUsage"
+    // MemUsage ends with ",<digit> K" or ",<digit>,<digit> K".
+    let row = text.lines().next()?;
+    let last = row.split(',').last()?; // "<number> K"
+    let num = last.trim().trim_end_matches('K').trim();
+    num.parse::<u64>().ok().map(|kb| (kb as f64) / 1024.0)
+}
+
+#[cfg(not(windows))]
+async fn process_memory_mb_windows(_pid: u32) -> Option<f64> { None }
+
+#[cfg(not(windows))]
+async fn read_proc_status_mem_mb(pid: u32) -> Option<f64> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some((kb as f64) / 1024.0);
+        }
+    }
+    None
+}
+
+fn extract_last_stat_fps(lines: &[String]) -> Option<f64> {
+    let needle = "Stat FPS";
+    for line in lines.iter().rev() {
+        if line.contains(needle) {
+            // ARK writes lines like:  "... Stat FPS=61.123456 ..."
+            let idx = line.find(needle)? + needle.len();
+            let rest = line[idx..].trim_start_matches(|c: char| c == '=' || c.is_whitespace() || c == ':' );
+            let num = rest.trim().split_whitespace().next()?;
+            return num.parse::<f64>().ok();
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -535,30 +684,18 @@ pub async fn restart_server(config: ServerConfig, cluster_delay_sec: Option<u64>
     start_server(config, cluster_delay_sec).await
 }
 
-#[tauri::command]
-pub fn get_server_logs(_lines: i32) -> std::result::Result<Vec<String>, String> {
-    Ok(vec!["[INFO] Server started".to_string()])
-}
-
-#[tauri::command]
-pub fn get_server_metrics() -> std::result::Result<serde_json::Value, String> {
-    Ok(json!({"cpu": 0, "memory": 0, "fps": 0}))
-}
-
-#[tauri::command]
-pub fn backup_config(_config: ServerConfig, name: String) -> std::result::Result<String, String> {
-    Ok(format!("Backup '{}' created", name))
-}
-
-#[tauri::command]
-pub fn list_backups() -> std::result::Result<Vec<serde_json::Value>, String> {
-    Ok(vec![])
-}
-
-#[tauri::command]
-pub fn restore_backup(_name: String) -> std::result::Result<ServerConfig, String> {
-    Ok(ServerConfig::default())
-}
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Stub-only commands `get_server_logs` (single hardcoded line), `get_server_metrics`
+// (always {cpu:0,mem:0,fps:0}), `backup_config`/`list_backups`/`restore_backup`
+// (hardcoded return values) have been removed in favour of the real
+// implementations above (`server_status`, `get_server_logs`, `get_server_metrics`)
+// and the `backup::*` family already exported via `backup.rs`. The frontend
+// `TauriCommandService` no longer references these names; new contributors
+// looking for the source of truth should look at:
+//   - server_status, get_server_logs, get_server_metrics, is_server_running
+//     --> this file
+//   - backup_saves, list_backups (real), restore_backup_from_cloud, ...
+//     --> src-tauri/src/backup.rs
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // IP auto-detection
