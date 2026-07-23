@@ -201,20 +201,12 @@ impl WhatsAppBot {
     pub fn new(cfg: WhatsAppConfig) -> Self { Self { cfg } }
 
     /// Apply the same `commands/actions` syntax used by Telegram +
-    /// Discord + Slack to a free-form WhatsApp text message.
+    /// Discord + Slack to a free-form WhatsApp text message.  Just a
+    /// thin wrapper around the canonical `CommandKind::parse_slash`.
     pub fn parse_action(text: &str) -> Option<CommandKind> {
         if !text.starts_with('/') { return None; }
-        let mut iter = text.split_whitespace();
-        let cmd = iter.next()?.trim().to_ascii_lowercase();
-        Some(match cmd.as_str() {
-            "/start"   => CommandKind::Start,
-            "/stop"    => CommandKind::Stop,
-            "/restart" => CommandKind::Restart,
-            "/status"  => CommandKind::Status,
-            "/logs"    => CommandKind::Logs,
-            "/ip"      => CommandKind::Ip,
-            _          => return None,
-        })
+        let first = text.split_whitespace().next()?.trim();
+        CommandKind::parse_slash(first)
     }
 
     /// Filter inbound webhooks:

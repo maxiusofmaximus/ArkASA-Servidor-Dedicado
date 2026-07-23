@@ -389,30 +389,10 @@ impl DiscordBot {
             let parts: Vec<&str> = text.split_whitespace().collect();
             let cmd = parts[0].to_ascii_lowercase();
             let arg = if parts.len() > 1 { Some(parts[1..].join(" ")) } else { None };
-            let kind_opt = match cmd.as_str() {
-                "/start"   => Some(CommandKind::Start),
-                "/stop"    => Some(CommandKind::Stop),
-                "/restart" => Some(CommandKind::Restart),
-                "/status"  => Some(CommandKind::Status),
-                "/logs"    => Some(CommandKind::Logs),
-                "/ip"      => Some(CommandKind::Ip),
-                _ => None,
-            };
-            let Some(kind) = kind_opt else {
+            let Some(kind) = CommandKind::parse_slash(&cmd) else {
                 return Some("⚠ unknown command. Try /start /stop /restart /status /logs /ip".into());
             };
-            let kind_label = match kind {
-                CommandKind::Start      => "start",
-                CommandKind::Stop       => "stop",
-                CommandKind::Restart    => "restart",
-                CommandKind::Status     => "status",
-                CommandKind::Logs       => "logs",
-                CommandKind::Ip         => "ip",
-                CommandKind::ConfigGet  => "config_get",
-                CommandKind::ConfigSet  => "config_set",
-                CommandKind::StartInstance => "start_instance",
-                CommandKind::StopInstance  => "stop_instance",
-            };
+            let kind_label = kind.as_str();
             let remote = RemoteCommand {
                 kind,
                 map_index: None,

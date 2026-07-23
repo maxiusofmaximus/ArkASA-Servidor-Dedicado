@@ -84,7 +84,7 @@ impl RestServer {
             "/api/v1/restart" => CommandKind::Restart,
             "/api/v1/status"  => CommandKind::Status,
             "/api/v1/logs"    => CommandKind::Logs,
-            "/api/v1/ip"      => CommandKind::Ip,
+            "/api/v1/ip" => CommandKind::Ip,
             _ => return None,
         })
     }

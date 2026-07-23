@@ -86,17 +86,8 @@ impl SshServer {
     pub fn parse_action(line: &str) -> Option<CommandKind> {
         // SSH channel lines don't go through "/" (operators just type
         // `start` or `stop server1`). Split on whitespace.
-        let mut iter = line.split_whitespace();
-        let cmd = iter.next()?.trim().to_ascii_lowercase();
-        Some(match cmd.as_str() {
-            "start"   => CommandKind::Start,
-            "stop"    => CommandKind::Stop,
-            "restart" => CommandKind::Restart,
-            "status"  => CommandKind::Status,
-            "logs"    => CommandKind::Logs,
-            "ip"      => CommandKind::Ip,
-            _         => return None,
-        })
+        let first = line.split_whitespace().next()?.trim();
+        CommandKind::parse_slash(first)
     }
 
     pub fn accept_request(&self, req: &SshCommandRequest) -> Option<RemoteCommandContext> {

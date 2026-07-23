@@ -56,18 +56,6 @@ pub struct StateSnapshot {
     pub last_update_ms:  i64,
 }
 
-/// Type alias for the multi-channel command dispatcher that the rest of
-/// the app bleeds router wiring into. Lives here rather than in
-/// command_router.rs to avoid pulling the closure-y type into places
-/// that already have implementations (Telegram, Discord, Slack all
-/// take concrete `Arc<F>` instead).
-pub type RouterFn = dyn Fn(
-    crate::integrations::command_router::RemoteCommandContext,
-    crate::integrations::command_router::RemoteCommand,
-) -> Result<crate::integrations::command_router::RouterOutcome, String>
-    + Send
-    + Sync;
-
 /// Shared state held by the HTTP server. The Tauri app populates
 /// `config_snapshot` once `load_config_or_default` finishes, and updates
 /// `state` whenever the cluster status poll refreshes.
@@ -78,15 +66,13 @@ pub struct AdminApiState {
     pub state: Arc<RwLock<StateSnapshot>>,
     pub config_snapshot: Arc<RwLock<Option<ServerConfig>>>,
     /// Multi-channel router closure shared with Telegram/Discord/Slack
-    /// adapters.  WhatsApp + WeChat webhooks (and the `/api/v1/start`,
-    /// `/stop`, `/restart`, `/internal/dispatch` endpoints) reuse it so
-    /// that sending `/start` from a chat actually starts the server
-    /// instead of just acking "accepted".
-    pub router: Arc<RouterFn>,
+    /// adapters; typed via `crate::integrations::RouterFn` so every
+    /// consumer speaks the same shape.
+    pub router: Arc<crate::integrations::RouterFn>,
 }
 
 impl AdminApiState {
-    pub fn new(auth: Arc<AuthState>, host_id: String, router: Arc<RouterFn>) -> Self {
+    pub fn new(auth: Arc<AuthState>, host_id: String, router: Arc<crate::integrations::RouterFn>) -> Self {
         Self {
             auth,
             host_id,
@@ -427,18 +413,7 @@ async fn whatsapp_webhook(
                     rejected += 1;
                     continue;
                 };
-                let kind_for_log = match kind {
-                    crate::integrations::command_router::CommandKind::Start => "start",
-                    crate::integrations::command_router::CommandKind::Stop => "stop",
-                    crate::integrations::command_router::CommandKind::Restart => "restart",
-                    crate::integrations::command_router::CommandKind::Status => "status",
-                    crate::integrations::command_router::CommandKind::Logs => "logs",
-                    crate::integrations::command_router::CommandKind::Ip => "ip",
-                    crate::integrations::command_router::CommandKind::ConfigGet => "config_get",
-                    crate::integrations::command_router::CommandKind::ConfigSet => "config_set",
-                    crate::integrations::command_router::CommandKind::StartInstance => "start_instance",
-                    crate::integrations::command_router::CommandKind::StopInstance => "stop_instance",
-                };
+                let kind_for_log = kind.as_str();
                 let cmd = RemoteCommand {
                     kind,
                     map_index: None,

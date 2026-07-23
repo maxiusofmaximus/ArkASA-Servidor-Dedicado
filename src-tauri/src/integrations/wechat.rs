@@ -91,17 +91,8 @@ impl WeChatBot {
 
     pub fn parse_action(text: &str) -> Option<CommandKind> {
         if !text.starts_with('/') { return None; }
-        let mut iter = text.split_whitespace();
-        let cmd = iter.next()?.trim().to_ascii_lowercase();
-        Some(match cmd.as_str() {
-            "/start"   => CommandKind::Start,
-            "/stop"    => CommandKind::Stop,
-            "/restart" => CommandKind::Restart,
-            "/status"  => CommandKind::Status,
-            "/logs"    => CommandKind::Logs,
-            "/ip"      => CommandKind::Ip,
-            _          => return None,
-        })
+        let first = text.split_whitespace().next()?.trim();
+        CommandKind::parse_slash(first)
     }
 
     pub fn accept_message(&self, payload: &WeChatXmlPayload) -> Option<RemoteCommandContext> {

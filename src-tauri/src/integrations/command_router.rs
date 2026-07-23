@@ -111,6 +111,49 @@ pub enum CommandKind {
     StopInstance,
 }
 
+impl CommandKind {
+    /// Canonical kebab-style label used in receipts, log lines, and
+    /// slash-command routing. Single source of truth — replaces 12+
+    /// inline `match cmd { Start => "start", ... }` blocks that were
+    /// duplicated across telegram / discord / slack / wechat / whatsapp
+    /// / ssh / signal / rest / http_api.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Start         => "start",
+            Self::Stop          => "stop",
+            Self::Restart       => "restart",
+            Self::Status        => "status",
+            Self::Logs          => "logs",
+            Self::Ip            => "ip",
+            Self::ConfigGet     => "config_get",
+            Self::ConfigSet     => "config_set",
+            Self::StartInstance => "start_instance",
+            Self::StopInstance  => "stop_instance",
+        }
+    }
+
+    /// Inverse of `as_str`: parse a slash-command payload (with or without
+    /// the leading `/`) into a `CommandKind`. Returns `None` for unknown
+    /// verbs, allowing the channel adapters to reject silently without
+    /// inventing an error enum variant for the same string.
+    pub fn parse_slash(s: &str) -> Option<Self> {
+        let trimmed = s.trim_start_matches('/');
+        Some(match trimmed.to_ascii_lowercase().as_str() {
+            "start"           => Self::Start,
+            "stop"            => Self::Stop,
+            "restart"         => Self::Restart,
+            "status"          => Self::Status,
+            "logs"            => Self::Logs,
+            "ip"              => Self::Ip,
+            "config_get"      => Self::ConfigGet,
+            "config_set"      => Self::ConfigSet,
+            "start_instance"  => Self::StartInstance,
+            "stop_instance"   => Self::StopInstance,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteCommand {
     pub kind: CommandKind,
@@ -118,6 +161,16 @@ pub struct RemoteCommand {
     pub config_patch: Option<serde_json::Value>,
     pub tail: Option<u32>,
 }
+
+/// Type alias for the multi-channel router closure injected by
+/// `lib::run()` and consumed by the desktop app, every chat adapter,
+/// and the loopback HTTP API. Single source of truth so we don't keep
+/// re-spelling the bounds inline at each adapter (`Arc<F: ???>`).
+/// Synchronous today (lib.rs uses `tauri::async_runtime::block_on`
+/// inside the closure); the intentional doc is that this is where an
+/// async-aware variant should live when the launcher becomes async.
+pub type RouterFn =
+    dyn Fn(RemoteCommandContext, RemoteCommand) -> Result<RouterOutcome, String> + Send + Sync;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
@@ -186,15 +239,6 @@ impl RouterOutcome {
             RouterOutcome::Error { reason }        => format!("⚠ {reason}"),
         }
     }
-}
-
-/// The router trait — adopted by the integration dispatcher in `lib.rs`.
-///
-/// In production this is fulfilled by a real closure injected from
-/// `lib::run()` (see signature comment below). Keeping it as a trait enables
-/// unit tests to swap in a recording fakes without booting an INI subprocess.
-pub trait CommandRouter: Send + Sync + 'static {
-    fn dispatch(&self, ctx: RemoteCommandContext, cmd: RemoteCommand) -> Result<RouterOutcome, RouterError>;
 }
 
 /// Builds a default authorization policy. Admin can do anything. Viewer can

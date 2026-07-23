@@ -204,32 +204,11 @@ impl TelegramBot {
             let cmd_str = parts.next().unwrap_or("").to_ascii_lowercase();
             let arg: Option<String> = parts.collect::<Vec<_>>().join(" ").into();
 
-            let kind_opt = match cmd_str.as_str() {
-                "/start"      => Some(CommandKind::Start),
-                "/stop"       => Some(CommandKind::Stop),
-                "/restart"    => Some(CommandKind::Restart),
-                "/status"     => Some(CommandKind::Status),
-                "/logs"       => Some(CommandKind::Logs),
-                "/ip"         => Some(CommandKind::Ip),
-                _            => None,
-            };
-
-            let Some(kind) = kind_opt else {
+            let Some(kind) = CommandKind::parse_slash(&cmd_str) else {
                 return Some("⚠ Unknown command. Try /start, /stop, /restart, /status, /logs, /ip".into());
             };
 
-            let kind_label = match kind {
-                CommandKind::Start      => "start",
-                CommandKind::Stop       => "stop",
-                CommandKind::Restart    => "restart",
-                CommandKind::Status     => "status",
-                CommandKind::Logs       => "logs",
-                CommandKind::Ip         => "ip",
-                CommandKind::ConfigGet  => "config_get",
-                CommandKind::ConfigSet  => "config_set",
-                CommandKind::StartInstance => "start_instance",
-                CommandKind::StopInstance  => "stop_instance",
-            };
+            let kind_label = kind.as_str();
             let remote = RemoteCommand {
                 kind,
                 map_index: None,
