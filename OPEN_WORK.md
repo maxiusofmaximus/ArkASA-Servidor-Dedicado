@@ -43,12 +43,22 @@
 | P34 | Low      | Spanish/English error strings mixed at backup.rs:62 etc. (cosmetic) | Audit 2026-07 (this branch) |
 | P35 | Info     | Frontend `any`/`as unknown` casts concentrated in dynamic setter pattern (SettingRow, ServerSettings, etc.). Replace with `ConfigField<T>` typing. | Audit 2026-07 (this branch) |
 
-**Closed in `fix/rc.3-cleanup` (this branch, commit ff00a4c):**
+**Closed in `fix/rc.3-cleanup` (commit ff00a4c):**
 
   - H1 P-dead-file-1: `integrations/http_commands.rs` (125 LOC dead). DELETED.
   - H3 P-dead-trait-1: `pub trait CommandRouter` (no impls). REMOVED.
   - H4 P-verb-judo-1: Duplicate `CommandKind -> &str` match arms across 12+ sites. UNIFIED via `CommandKind::as_str/parse_slash`.
   - M7 P-routerfn-1: `RouterFn` type alias moved to `command_router.rs`. SINGLE SOURCE.
+
+**Closed in `fix/rc.4-layer-tighten` (commit tbd):**
+
+  - P21: `update_server` + `check_server_version` + `read_*_buildid` helpers moved out of `commands/integrations.rs` (the integrations adapter layer doesn't operate the ARK server lifecycle) into `commands/server.rs`.  `commands/integrations.rs` shed 124 LOC; `commands/server.rs` is now self-contained.  `events.rs::emit_version` and `lib.rs::generate_handler!` re-pointed accordingly.
+  - P22: still OPEN — split of `integrations/hosting.rs` (552 LOC).  Deferred to single dedicated sub-PR.
+  - P23: still OPEN — split of `integrations/command_router.rs` (571 LOC).  Deferred until P19 (async-router) lands.
+  - P25: NEW `ark/labels.rs` exposes canonical `map_label(&str) -> String` and `map_key_stem(&str) -> &str`.  Removed 2 byte-identical `map_display_label` definitions (commands/server.rs:350, integrations/bridge.rs:12); updated 4 inline `trim_end_matches("_WP")` callsites in launcher.rs, stub.rs, bridge.rs, server.rs to use the canonical helper.  Centralised drift.
+  - P27: still OPEN — `admin_only_call` / `internal_dispatch` not yet adopting `run_with_receipts`.  Waiting on P19 (async-router) so the call site collapses cleanly.
+  - P28: `commands/server.rs::server_status` and `get_server_metrics` rewritten to omit the keys they cannot honestly report (`cpu_pct`, `uptime_seconds`, `udp_conns` on linux).  Five `_pid: u32` no-impl helpers removed (`process_uptime_seconds`, `process_cpu_percent_windows` ×2 cfg twins), and one real `process_memory_mb_windows` and `read_proc_status_mem_mb` retained.  UI no longer lies about zero/null fields the impl couldn't poll.
+  - P29: `lib.rs::run()` auth-init wait switched from a 50-iteration mutex+lock+sleep poll to `tokio::sync::watch::<Option<Arc<AuthState>>>`.  Auth initialiser publishes, loopback server subscribes (`auth_rx.changed().await` + `borrow().clone()`), bounded by a 5-second `tokio::time::timeout`.  Zero polling, zero lock churn.  Static `auth_initial_holder` Mutex kept for callers `admin_token` + `rotate_admin_token`; conversion is non-trivial and tracked under OPEN_WORK P30.
 
 > **Manifest contract.** Each entry below names the file(s), the
 > bad behaviour, the recommended fix shape, and a `?` for "needs

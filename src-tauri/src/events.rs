@@ -5,7 +5,7 @@
 //! frontend keeps a slow safety fallback for the rare case where the event
 //! bridge is interrupted.
 
-use crate::commands::{self, integrations::ServerVersionInfo, server::MapInstanceStatus};
+use crate::commands::{self, server::MapInstanceStatus, server::ServerVersionInfo};
 use crate::config::ServerConfig;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -220,7 +220,7 @@ async fn publisher_loop(app: AppHandle) {
             }
             _ = version_tick.tick() => {
                 let Some(cfg) = config.clone() else { continue };
-                if let Ok(info) = commands::integrations::check_server_version(cfg).await {
+                if let Ok(info) = commands::server::check_server_version(cfg).await {
                     if previous_version.as_ref() != Some(&info) {
                         emit(&app, SERVER_VERSION_EVENT, &info);
                         previous_version = Some(info);

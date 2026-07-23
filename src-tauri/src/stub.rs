@@ -109,7 +109,7 @@ fn build_a2s_info(display_name: &str, map: &str, game_port: u16) -> Vec<u8> {
 
     // ── Null-terminated strings ──────────────────────────────────────────────
     buf.extend_from_slice(display_name.as_bytes()); buf.push(0); // server name
-    let map_display = map.trim_end_matches("_WP");
+    let map_display = crate::ark::map_key_stem(map);
     buf.extend_from_slice(map_display.as_bytes()); buf.push(0);  // map name
     buf.extend_from_slice(b"ShooterGame"); buf.push(0);           // game folder
     buf.extend_from_slice(b"ARK: Survival Ascended"); buf.push(0); // game description

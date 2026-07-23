@@ -24,10 +24,14 @@ pub fn run() {
     // v2.1 — admin auth + loopback HTTP API.
     // AuthState::load_or_init is async; bounded blocking spawn so the UI thread
     // does not stall on first run.
-    let auth_initial_holder: Arc<tokio::sync::Mutex<Option<Arc<auth::AuthState>>>> =
-        Arc::new(tokio::sync::Mutex::new(None));
+    //
+    // P29: replaced the previous Mutex+lock-poll busy-wait (50 iterations of
+    // `lock().await.clone()` every 100 ms) with tokio::sync::watch — the
+    // auth initialiser publishes, the loopback server subscribes once and
+    // `wait_for(|s| s.is_some())`.  No polling, no lock churn, less load.
+    let (auth_tx, mut auth_rx) = tokio::sync::watch::channel::<Option<Arc<auth::AuthState>>>(None);
     {
-        let holder = auth_initial_holder.clone();
+        let auth_tx = auth_tx.clone();
         tauri::async_runtime::spawn(async move {
             match auth::AuthState::load_or_init().await {
                 Ok(auth) => {
@@ -35,7 +39,7 @@ pub fn run() {
                         "admin token started; copy from Options → Remote Admin. Active token length: {}",
                         auth.active_token().len(),
                     );
-                    *holder.lock().await = Some(Arc::new(auth));
+                    auth_tx.send(Some(Arc::new(auth))).ok();
                 }
                 Err(e) => log::error!("admin auth init failed: {e}"),
             }
@@ -45,24 +49,29 @@ pub fn run() {
         Arc::new(tokio::sync::Mutex::new(None));
     {
         let holder = admin_state_holder.clone();
-        let auth_holder = auth_initial_holder.clone();
         tauri::async_runtime::spawn(async move {
-            // Wait up to 5 seconds for the auth to materialise.
-            let auth = {
-                let mut auth_opt: Option<Arc<auth::AuthState>> = None;
-                for _ in 0..50 {
-                    if let Some(a) = auth_holder.lock().await.clone() {
-                        auth_opt = Some(a);
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-                match auth_opt {
+            // Wait up to 5 seconds for the auth to materialise via the
+            // `watch` channel.  `changed()` resolves the moment the
+            // sender publishes ANY update; we then re-borrow to read
+            // the live value.  No polling loop, no lock churn.
+            //
+            // The receiver is `&mut auth_rx` for `changed()`; we keep
+            // its borrow scope tight so the subsequent `.borrow().clone()`
+            // does not collide with the already-active mut borrow.
+            let auth = match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                async { let _ = auth_rx.changed().await; },
+            ).await {
+                Ok(())     => match auth_rx.borrow().clone() {
                     Some(a) => a,
                     None    => {
-                        log::warn!("admin auth not ready after 5s; loopback HTTP API will start when 'admin_token' command is invoked.");
+                        log::warn!("admin auth sender raced to None after publish; loopback disabled.");
                         return;
                     }
+                },
+                Err(_)     => {
+                    log::warn!("admin auth not ready after 5s; loopback HTTP API will start when 'admin_token' command is invoked.");
+                    return;
                 }
             };
 
@@ -427,8 +436,8 @@ pub fn run() {
             // invisible in in-game Unofficial PC list" ASA symptom.
             crate::ark::diagnostics::diagnose_server_list,
             // Version sync (Steam app 2430930)
-            crate::commands::integrations::check_server_version,
-            crate::commands::integrations::update_server,
+            crate::commands::server::check_server_version,
+            crate::commands::server::update_server,
             // Tailscale wizard (v2.1, Network blocker #4)
             crate::commands::integrations::tailscale_installed,
             crate::commands::integrations::tailscale_download_url,

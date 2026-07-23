@@ -38,7 +38,7 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
 
     // In cluster mode: secondary maps get a human-readable suffix so players
     // can distinguish them in the ARK server browser.
-    let map_label = map.trim_end_matches("_WP");
+    let map_label = crate::ark::map_key_stem(map);
     let session_name = if is_cluster && instance_idx > 0 {
         format!("{} · {}", config.identification.session_name, map_label)
     } else {

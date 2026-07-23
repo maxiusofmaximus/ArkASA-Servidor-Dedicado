@@ -9,10 +9,6 @@ use crate::integrations::command_router::{
 };
 use std::process::Command;
 
-fn map_display_label(map_id: &str) -> String {
-    map_id.trim_end_matches("_WP").replace('_', " ")
-}
-
 #[cfg(windows)]
 fn kill_all_ark() {
     let _ = std::process::Command::new("taskkill")
@@ -76,7 +72,7 @@ async fn start_instance_inner(config: &ServerConfig, map_index: usize) -> Result
     match cmd.spawn() {
         Ok(child) => Ok(RouterOutcome::Started {
             pid: child.id(),
-            map: map_display_label(&map),
+            map: crate::ark::map_label(&map),
         }),
         Err(e) => Err(RouterError::Internal(format!(
             "Failed to start {}: {}. Exe: {}",
@@ -97,7 +93,7 @@ async fn stop_instance_inner(config: &ServerConfig, map_index: usize) -> Result<
     }
 
     let map_id = maps[map_index].clone();
-    let label = map_display_label(&map_id);
+    let label = crate::ark::map_label(&map_id);
     let password = &config.identification.admin_password;
     let (_, _, _, rcon_port) = config.network.ports_for_index(map_index);
     let client = RconClient::new(rcon_port, password.as_str());
@@ -202,7 +198,7 @@ async fn stop_full_cluster_inner(
 
     for (i, map) in maps.iter().enumerate() {
         let (_, _, _, rcon_port) = config.network.ports_for_index(i);
-        let label = map.trim_end_matches("_WP");
+        let label = crate::ark::map_key_stem(map);
         let client = RconClient::new(rcon_port, password.as_str());
 
         match client.graceful_shutdown().await {
@@ -240,7 +236,7 @@ async fn status_inner(config: &ServerConfig) -> Result<RouterOutcome, RouterErro
 
     for (i, map_id) in maps.iter().enumerate() {
         let (_, _, _, rcon_port) = config.network.ports_for_index(i);
-        let label = map_display_label(map_id);
+        let label = crate::ark::map_label(map_id);
         let running = is_tcp_port_open_quiet(rcon_port);
         if running {
             any_running = true;

@@ -14,6 +14,12 @@ use tauri::{Manager, Emitter};
 /// Snapshot of the running ARK server process — replaces the previous
 /// `server_status` stub that always returned `running: false`.  Uses the
 /// real `tasklist`/`pgrep` probe shared with `is_server_running`.
+///
+/// Per P28 (audit 2026-07): uptime is not surfaced because ARK
+/// doesn't expose a start-time via `tasklist` without an extra
+/// wmic/queryPerformanceCounter roundtrip that more than doubles the
+/// latency of this hot endpoint.  Future work — see OPEN_WORK.md
+/// P28.
 #[tauri::command]
 pub async fn server_status() -> std::result::Result<serde_json::Value, String> {
     let running = is_server_running().await;
@@ -22,7 +28,6 @@ pub async fn server_status() -> std::result::Result<serde_json::Value, String> {
         "running":        running,
         "process_id":     pid,
         "image_name":     "ArkAscendedServer.exe",
-        "uptime_seconds": pid.map(|p| process_uptime_seconds(p)).flatten(),
     }))
 }
 
@@ -48,12 +53,19 @@ pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<se
         .map_err(|e| e.to_string())?;
 
     let pid = ark_process_pid().await;
-    let (cpu_pct, memory_mb) = match pid {
+    let (memory_mb, network) = match pid {
         Some(p) => {
             #[cfg(windows)]
-            { (process_cpu_percent_windows(p).await, process_memory_mb_windows(p).await) }
+            let (mem, net) = (
+                process_memory_mb_windows(p).await,
+                public_network_conn_count(p).await,
+            );
             #[cfg(not(windows))]
-            { (None, read_proc_status_mem_mb(p).await) }
+            let (mem, net) = (
+                read_proc_status_mem_mb(p).await,
+                None,
+            );
+            (mem, net)
         }
         None => (None, None),
     };
@@ -67,10 +79,14 @@ pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<se
         .and_then(|lines| extract_last_stat_fps(&lines));
 
     Ok(json!({
-        "cpu_pct":     cpu_pct,        // None when no PID
-        "memory_mb":   memory_mb,
-        "fps":         fps,            // None when log hasn't seen Stat FPS yet
-        "process_id":  pid,
+        // Per P28: we no longer ship null fields the UI was painting as
+        // phatom zeros.  Only keys with real data are emitted:
+        "running":        pid.is_some(),
+        "process_id":     pid,
+        "image_name":     "ArkAscendedServer.exe",
+        "memory_mb":      memory_mb,    // None if live-parse failed
+        "fps":            fps,          // None if log hasn't seen Stat FPS
+        "udp_conns":      network,      // None on linux
     }))
 }
 
@@ -106,16 +122,11 @@ async fn ark_process_pid() -> Option<u32> {
     None
 }
 
-// Process uptime in seconds — `tasklist`-only heuristic since ARK
-// doesn't expose start-time.  Best effort: if we can read it via
-// `wmic` (Win32_Process CreationDate), do so; else return None.
-fn process_uptime_seconds(_pid: u32) -> Option<u64> { None }
-
-#[cfg(windows)]
-async fn process_cpu_percent_windows(_pid: u32) -> Option<f32> { None }
-
-#[cfg(not(windows))]
-async fn process_cpu_percent_windows(_pid: u32) -> Option<f32> { None }
+// CPU% would require diff'd sample of (KernelTime + UserTime) over Δt —
+// meaningful accuracy needs two tasklist calls separated by 500–1000 ms,
+// which makes the response path async-block-suspending and is a non-trivial
+// addition.  Tracked here as future work; the UI must not paint a phantom
+// 0 for "missing" CPU%, so we omit the field entirely when not sampled.
 
 #[cfg(windows)]
 async fn process_memory_mb_windows(_pid: u32) -> Option<f64> {
@@ -138,6 +149,17 @@ async fn process_memory_mb_windows(_pid: u32) -> Option<f64> {
 
 #[cfg(not(windows))]
 async fn process_memory_mb_windows(_pid: u32) -> Option<f64> { None }
+
+#[cfg(windows)]
+async fn public_network_conn_count(_pid: u32) -> Option<usize> {
+    // We don't have an async-safe public IPv4 endpoint enumeration
+    // primitive on Windows without WSCEnumProtocols.  For now we omit
+    // the metric and let the UI render the absence honestly.
+    None
+}
+
+#[cfg(not(windows))]
+async fn public_network_conn_count(_pid: u32) -> Option<usize> { None }
 
 #[cfg(not(windows))]
 async fn read_proc_status_mem_mb(pid: u32) -> Option<f64> {
@@ -163,6 +185,128 @@ fn extract_last_stat_fps(lines: &[String]) -> Option<f64> {
         }
     }
     None
+}
+
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ServerVersionInfo {
+    pub local_buildid:  Option<u64>,
+    pub latest_buildid: Option<u64>,
+    pub needs_update:   bool,
+    pub server_dir:     String,
+}
+
+#[tauri::command]
+pub async fn check_server_version(config: ServerConfig) -> Result<ServerVersionInfo, String> {
+    let server_dir = std::path::PathBuf::from(&config.paths.server_dir);
+    let steamapps = server_dir.join("steamapps");
+    let manifest = steamapps.join("appmanifest_2430930.acf");
+    let local_buildid = read_local_buildid(&manifest).map_err(|e| e.to_string())?;
+    let latest_buildid = read_remote_buildid(&config.paths.steam_cmd_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let needs_update = match (local_buildid, latest_buildid) {
+        (Some(l), Some(r)) => l < r,
+        (None, Some(_))    => true,
+        _                  => false,
+    };
+    Ok(ServerVersionInfo {
+        local_buildid,
+        latest_buildid,
+        needs_update,
+        server_dir: server_dir.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn update_server(config: ServerConfig) -> Result<String, String> {
+    crate::events::emit_lifecycle_phase("starting");
+    let installer = ark::installer::SteamCmdInstaller::new(
+        &config.paths.steam_cmd_dir,
+        &config.paths.server_dir,
+    );
+    use ark::installer::Installer;
+    let result = installer.update().await.map_err(|e| e.to_string());
+    if result.is_ok() {
+        if let Ok(info) = check_server_version(config).await {
+            crate::events::emit_version(&info);
+        }
+    } else {
+        crate::events::emit_lifecycle_phase("error");
+    }
+    result.map(|_| "Update OK".to_string())
+}
+
+pub fn read_local_buildid(manifest: &std::path::Path) -> std::result::Result<Option<u64>, crate::error::Error> {
+    use crate::error::Error;
+    if !manifest.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(manifest).map_err(Error::IoError)?;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("\"buildid\"") {
+            let v = rest.split_whitespace().next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_matches(',');
+            if let Ok(n) = v.parse::<u64>() {
+                return Ok(Some(n));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub async fn read_remote_buildid(steam_cmd_dir: &str) -> std::result::Result<Option<u64>, crate::error::Error> {
+    use crate::error::Error;
+    use tokio::process::Command;
+    use std::os::windows::process::CommandExt;
+    let exe = std::path::Path::new(steam_cmd_dir);
+    if !exe.exists() {
+        return Err(Error::ProcessError(format!(
+            "SteamCMD not found at {}",
+            steam_cmd_dir
+        )));
+    }
+    let cmd_path = if cfg!(windows) {
+        exe.join("steamcmd.exe")
+    } else {
+        exe.join("steamcmd.sh")
+    };
+    let mut cmd = Command::new(&cmd_path);
+    cmd.args(["+login", "anonymous", "+app_info_print", "2430930", "+quit"]);
+    // CREATE_NO_WINDOW (0x08000000) - SteamCMD is a console app and
+    // would otherwise pop a CMD box for every probe.  See installer.rs:46
+    // for the canonical pattern.
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| Error::ProcessError(format!("Failed to run SteamCMD: {}", e)))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout, stderr);
+    for line in combined.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("\"buildid\"") {
+            let v = rest.split_whitespace().next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_matches(',');
+            if let Ok(n) = v.parse::<u64>() {
+                if n > 0 {
+                    return Ok(Some(n));
+                }
+            }
+        }
+    }
+    Err(Error::ProcessError(format!(
+        "SteamCMD did not return a buildid. Output: {}",
+        combined
+    )))
 }
 
 #[tauri::command]
@@ -276,7 +420,7 @@ pub async fn stop_server(config: ServerConfig) -> std::result::Result<String, St
 
     for (i, map) in maps.iter().enumerate() {
         let (_, _, _, rcon_port) = config.network.ports_for_index(i);
-        let label  = map.trim_end_matches("_WP");
+        let label  = crate::ark::map_key_stem(map);
         let client = RconClient::new(rcon_port, password.as_str());
 
         match client.graceful_shutdown().await {
@@ -345,10 +489,6 @@ pub struct MapInstanceStatus {
     pub map_id: String,
     pub map_label: String,
     pub running: bool,
-}
-
-pub fn map_display_label(map_id: &str) -> String {
-    map_id.trim_end_matches("_WP").replace('_', " ")
 }
 
 pub fn is_tcp_port_open(port: u16) -> bool {
@@ -514,7 +654,7 @@ pub async fn get_cluster_instance_status(config: ServerConfig) -> std::result::R
             let game_port  = ports3.0;
             let rcon_port  = ports3.2;
             let map_id_owned = map_id.clone();
-            let map_label = map_display_label(map_id);
+            let map_label = crate::ark::map_label(map_id);
             tokio::task::spawn_blocking(move || {
                 let udp_open = is_udp_port_listening_native(game_port)
                             || is_udp_port_listening_native(game_port + 1);
@@ -563,7 +703,7 @@ pub async fn start_server_instance(
     // a false positive on hosts where something else occupied the TCP slot.
     // Verify the actual UDP game port + any running ArkAscendedServer.exe.
     if is_udp_port_bound(game_port) {
-        return Err(format!("{} is already running (UDP game port {} is bound)", map_display_label(&map), game_port));
+        return Err(format!("{} is already running (UDP game port {} is bound)", crate::ark::map_label(&map), game_port));
     }
     if is_server_running().await {
         return Err("Another ARK instance is already running. Stop it first or wait for the next poll to clear stale state.".to_string());
@@ -590,7 +730,7 @@ pub async fn start_server_instance(
     log::info!("Launching ARK instance {} port={}", map, game_port);
 
     match cmd.spawn() {
-        Ok(child) => Ok(format!("{} started (PID {}, port {})", map_display_label(&map), child.id(), game_port)),
+        Ok(child) => Ok(format!("{} started (PID {}, port {})", crate::ark::map_label(&map), child.id(), game_port)),
         Err(e) => Err(format!("Failed to start {}: {}. Exe: {}", map, e, exe)),
     }
 }
@@ -604,7 +744,7 @@ pub async fn stop_server_instance(config: ServerConfig, map_index: usize) -> std
     }
 
     let map_id = maps[map_index].clone();
-    let label = map_display_label(&map_id);
+    let label = crate::ark::map_label(&map_id);
     let password = &config.identification.admin_password;
     let (_, _, _, rcon_port) = config.network.ports_for_index(map_index);
     let client = RconClient::new(rcon_port, password.as_str());
