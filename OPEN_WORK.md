@@ -24,6 +24,31 @@
 | P15 | Info      | Frontend `services/tauri.ts` mocks should throw dev-mock-only errors | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P16 | Info      | Apple Silicon notarization pipeline                                 | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P17 | Info      | WhatsApp outbound reply via Graph API (today inbound-only)           | Audit 2026-07 (this branch)                     |
+| P18 | **HIGH**   | `backup.rs` 1346 LOC god-module (Zip-I/O + S3 SigV4 + GDrive REST + OneDrive REST + log reader + PKCE OAuth x 2 mixed) | Audit 2026-07 (this branch) |
+| P19 | **HIGH**   | `router_arc` (lib.rs) calls `tauri::async_runtime::block_on` inside an async closure; each consumer dances around with `tokio::task::spawn_blocking`.  Convert the type to async-aware so we drop the dance + deadlock footgun. | Audit 2026-07 (this branch) |
+| P20 | **HIGH**   | CurseForge API key persisted to `<cfg>/curseforge_api_key.txt` plaintext; the same crate has `secret_store_v2` (keyring) ready for it. **Tracked this audit, not in OPEN_WORK previously.** | Audit 2026-07 (this branch) |
+| P21 | High     | `commands/integrations.rs::update_server` lives in the wrong module — it operates on the ARK server (SteamCmdInstaller::update), not on integrations. Move to `commands/server.rs`. | Audit 2026-07 (this branch) |
+| P22 | Med      | `integrations/hosting.rs` (552 LOC) mixes 4 concerns. Split into `hosting/{types,cloud_init,bash_runner,provider_cli,self_hosted}.rs`. | Audit 2026-07 (this branch) |
+| P23 | Med      | `integrations/command_router.rs` (571 LOC) mixes types / authorization / `run_with_receipts` pipeline. Split into `command_router/{types,policy,pipeline}.rs`. | Audit 2026-07 (this branch) |
+| P24 | Med      | `Role` enum duplicated as `auth::Role` + `command_router::Role`. Replace with `pub use crate::auth::Role;` alias in command_router. | Audit 2026-07 (this branch) |
+| P25 | Med      | `map_display_label` byte-identical 2x (`commands/server.rs:350`, `integrations/bridge.rs:12`), drift in 3 inline siblings. Promote to `ark::map_label()`. | Audit 2026-07 (this branch) |
+| P26 | Med      | `bridge.rs:289` hardcodes `C:\\ASA\\server\\ShooterGame\\Saved\\Logs\\ShooterGame.log` for `CommandKind::Logs`. Re-route through `config.paths.server_dir`. | Audit 2026-07 (this branch) |
+| P27 | Med      | `admin_only_call` + `internal_dispatch` reimplement `run_with_receipts` inline. After P19 lands (async router), reuse the canonical pipeline. | Audit 2026-07 (this branch) |
+| P28 | Med      | `commands/server.rs:113-152` 5 stub metric helpers (`process_uptime_seconds` always None, etc.) shipped in production JS payload as `null` keys. Either populate via `wmic` or strip the null keys. | Audit 2026-07 (this branch) |
+| P29 | Med      | `lib.rs:53-67` 5-second busy-wait poll for `auth_holder`. Replace with `tokio::sync::watch` or `Notify`. | Audit 2026-07 (this branch) |
+| P30 | Med      | Once-Lock proliferation (`AUTH_HOLDER`, `admin_state_holder`, `EMITTER`, `TEST_STORE`). Migrate to `app.manage(...)` pattern (Tauri 2 idiom). | Audit 2026-07 (this branch) |
+| P31 | Med      | Receipts ledger (`integrations/receipt_emit.rs:51-58`) writes `rawText` per inbound chat message without a TTL or retention policy. GDPR Article 5 violation. Add `RetentionExpiresAt` to `Receipt` + boot-time janitor task. | Audit 2026-07 (this branch) |
+| P32 | Med      | `Claims.sub = "tauri-app"` literal in `auth/mod.rs:103, 146`. 7-axis identity collapses to "the desktop app"; Convex/Vercel/loopback-bearer indistinguishable in receipts. | Audit 2026-07 (this branch) |
+| P33 | Med      | `sha1_smol`/`constant_time_eq`/`parse_wechat_xml_loose` (~40 LOC) belong in `integrations/wechat.rs` not `http_api.rs`. Pure boundary move. | Audit 2026-07 (this branch) |
+| P34 | Low      | Spanish/English error strings mixed at backup.rs:62 etc. (cosmetic) | Audit 2026-07 (this branch) |
+| P35 | Info     | Frontend `any`/`as unknown` casts concentrated in dynamic setter pattern (SettingRow, ServerSettings, etc.). Replace with `ConfigField<T>` typing. | Audit 2026-07 (this branch) |
+
+**Closed in `fix/rc.3-cleanup` (this branch, commit ff00a4c):**
+
+  - H1 P-dead-file-1: `integrations/http_commands.rs` (125 LOC dead). DELETED.
+  - H3 P-dead-trait-1: `pub trait CommandRouter` (no impls). REMOVED.
+  - H4 P-verb-judo-1: Duplicate `CommandKind -> &str` match arms across 12+ sites. UNIFIED via `CommandKind::as_str/parse_slash`.
+  - M7 P-routerfn-1: `RouterFn` type alias moved to `command_router.rs`. SINGLE SOURCE.
 
 > **Manifest contract.** Each entry below names the file(s), the
 > bad behaviour, the recommended fix shape, and a `?` for "needs
