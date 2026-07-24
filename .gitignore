@@ -104,3 +104,20 @@ _tmp_*
 session-*.md
 .worktree/
 src-tauri/target-next/
+
+# Local SQLite scratch database (operator.debug / smoke tests only)
+ark-config.db
+src-tauri/ark-config.db
+
+# Rolling TODO scratchpad kept at the workspace root (session-local)
+TODO.md
+
+# Local supervisor script (Windows-only; session-local)
+supervisor.ps1
+
+# BAK-suffixed planning / review docs (session-local backups)
+docs/*_BAK.md
+docs/*_BAK_*.md
+
+# opencode session-local ignore file
+.opencodeignore

@@ -1,0 +1,29 @@
+# All tracked source files normalize to LF in the repo.
+# Generated artefacts stay LF regardless of platform checkout policy.
+*             text=auto eol=lf
+*.toml        text eol=lf
+*.rs          text eol=lf
+*.ts          text eol=lf
+*.tsx         text eol=lf
+*.js          text eol=lf
+*.json        text eol=lf
+*.md          text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+
+# Explicit binary markers (override auto-detection in case the heuristics
+# misclassify core dumps, cert/key blobs, generated proto files, etc.).
+*.png         binary
+*.jpg         binary
+*.jpeg        binary
+*.gif         binary
+*.ico         binary
+*.icns        binary
+*.p12         binary
+*.pem         binary
+*.key         binary
+*.db          binary
+*.sqlite      binary
+*.sqlite3     binary
+*.wasm        binary
+*.node        binary
