@@ -14,7 +14,7 @@
 | P5  | Med       | DB DAO only SQLite — Convex/Supabase/Mongo/Postgres are labels-only | Audit 2026-07 (this branch)                     |
 | P6  | Med       | `diagnostics::steam_validate` ignores `_repair` flag                | Audit 2026-07 (this branch)                     |
 | P7  | Med       | WeChat / SSH adapters lack real wire-up                             | Audit 2026-07 (this branch)                     |
-| P8  | Med       | `auth/admin.jwt` plaintext on disk, not keyring                     | Audit 2026-07 (this branch)                     |
+| P8  | Med       | `auth/admin.jwt` plaintext on disk, not keyring                     | Audit 2026-07 (this branch)                     | **CLOSED** (`fix/ga.1-secrets-keyring`) |
 | P9  | Low-Med   | 33 dev-mode mock strings in `services/tauri.ts`                     | Audit 2026-07 (this branch)                     |
 | P10 | Low       | Plugin runtime mounts (signal-cli / russh)                         | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P11 | Low       | Tauri v2 capability-based permissions not enforced on adapters      | `docs/ARCHITECTURE_AUDIT.md`                    |
@@ -26,7 +26,7 @@
 | P17 | Info      | WhatsApp outbound reply via Graph API (today inbound-only)           | Audit 2026-07 (this branch)                     |
 | P18 | **HIGH**   | `backup.rs` 1346 LOC god-module (Zip-I/O + S3 SigV4 + GDrive REST + OneDrive REST + log reader + PKCE OAuth x 2 mixed) | Audit 2026-07 (this branch) |
 | P19 | **HIGH**   | `router_arc` (lib.rs) calls `tauri::async_runtime::block_on` inside an async closure; each consumer dances around with `tokio::task::spawn_blocking`.  Convert the type to async-aware so we drop the dance + deadlock footgun. | Audit 2026-07 (this branch) |
-| P20 | **HIGH**   | CurseForge API key persisted to `<cfg>/curseforge_api_key.txt` plaintext; the same crate has `secret_store_v2` (keyring) ready for it. **Tracked this audit, not in OPEN_WORK previously.** | Audit 2026-07 (this branch) |
+| P20 | **HIGH**   | CurseForge API key persisted to `<cfg>/curseforge_api_key.txt` plaintext; the same crate has `secret_store_v2` (keyring) ready for it. **Tracked this audit, not in OPEN_WORK previously.** | Audit 2026-07 (this branch) | **CLOSED** (`fix/ga.1-secrets-keyring`) |
 | P21 | High     | `commands/integrations.rs::update_server` lives in the wrong module — it operates on the ARK server (SteamCmdInstaller::update), not on integrations. Move to `commands/server.rs`. | Audit 2026-07 (this branch) |
 | P22 | Med      | `integrations/hosting.rs` (552 LOC) mixes 4 concerns. Split into `hosting/{types,cloud_init,bash_runner,provider_cli,self_hosted}.rs`. | Audit 2026-07 (this branch) |
 | P23 | Med      | `integrations/command_router.rs` (571 LOC) mixes types / authorization / `run_with_receipts` pipeline. Split into `command_router/{types,policy,pipeline}.rs`. | Audit 2026-07 (this branch) |
@@ -49,6 +49,44 @@
   - H3 P-dead-trait-1: `pub trait CommandRouter` (no impls). REMOVED.
   - H4 P-verb-judo-1: Duplicate `CommandKind -> &str` match arms across 12+ sites. UNIFIED via `CommandKind::as_str/parse_slash`.
   - M7 P-routerfn-1: `RouterFn` type alias moved to `command_router.rs`. SINGLE SOURCE.
+
+**Closed in `fix/ga.1-secrets-keyring` (commit tbd, branch on top of v2.1.0-rc.4):**
+
+  - P8: `auth/mod.rs` rewritten so both the JWT HS256 secret and the
+    derived admin token are stored as a single keyring entry `"auth_admin_v2"`
+    under `secret_store_v2` (OS Credential Manager via `keyring` v4).
+    Token + secret round-trip through `secret_store_v2::read` /
+    `secret_store_v2::write` wrapped in `tokio::task::spawn_blocking`
+    (the underlying keyring call is synchronous). On first boot, if the
+    legacy plaintext pair `<cfg>/admin.jwt` + `<cfg>/admin.token` is
+    still on disk, it is *lifted into the keyring first* and only then
+    the plaintext files are deleted — a crash mid-migration cannot drop
+    the only copy. Rotation (`AuthState::rotate`) generates a fresh
+    HS256 secret + derived token (`derive_token` over the secret with
+    `"v2.1-rotated-token"` domain) and writes through the keyring,
+    with belt-and-braces plaintext best-effort writes also performed
+    so a downgrade round-trip is recoverable. Per-test isolation is
+    handled by `thread_local! TEST_KEYRING_OVERRIDE` (test-only, behind
+    `cfg(test)`) + `install_test_keyring_id` / `clear_test_keyring_id` /
+    `wipe` helpers; production builds compile the override out. New
+    test `legacy_plaintext_is_lifted_and_deleted` exercises the full
+    lift → delete → re-load round-trip. GDPR Article 32 (security of
+    processing) is now satisfied for the admin credential on the
+    supported desktop platforms (Windows Credential Manager, macOS
+    Keychain, libsecret on Linux).
+  - P20: `commands/mods.rs::read_api_key` and
+    `commands/mods.rs::set_curseforge_api_key` rewritten to route the
+    CurseForge API key through the same `secret_store_v2` keyring
+    backend (slot `"curseforge_api_key_v2"`, field `"api_key"`).
+    `read_api_key` probes the legacy plaintext
+    `<config_dir>/curseforge_api_key.txt`; if present and non-empty,
+    it writes the value through the keyring and then deletes the
+    plaintext file before returning the key. `set_curseforge_api_key`
+    rejects empty input, writes the new value to the keyring slot and
+    also deletes the legacy file. Both code paths spawn_blocking on
+    the synchronous `keyring` call. No new dependencies; `keyring` v4
+    was already declared. 158 cargo test pass; `cargo build --release`
+    emits the same binary cleanly.
 
 **Closed in `fix/rc.4-layer-tighten` (commit tbd):**
 

@@ -4,6 +4,7 @@ use crate::{auth, backup, config, integrations, plugins, receipts, stub};
 use crate::ark;
 use crate::config::{ConfigLoader, ConfigPersister, ServerConfig, CompositeValidator};
 use crate::ark::{build_launch_args, RconClient};
+use crate::plugins::secret_store_v2::{self as secret_store, StoredSecret};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, LazyLock};
@@ -12,6 +13,14 @@ use std::process::Command;
 use tauri::{Manager, Emitter};
 
 use crate::commands::get_config_dir;
+
+/// Keyring slot id for the CurseForge API key. P20 / GA-1.
+const CURSEFORGE_KEYRING_PLUGIN_ID: &str = "curseforge_api_key_v2";
+/// Field label for the API key inside the keyring `StoredSecret.fields` map.
+const FIELD_API_KEY: &str = "api_key";
+/// Legacy plaintext filename used by pre-GA-1 builds; tolerated on one pass
+/// for the migration sweep.
+const LEGACY_API_KEY_FILENAME: &str = "curseforge_api_key.txt";
 
 const LOCAL_MODS_JSON: &str = include_str!("../mods_db.json");
 
@@ -35,12 +44,88 @@ pub fn get_local_mod_by_id(mod_id: &str) -> Option<CurseForgeMod> {
     LOCAL_MODS_DB.iter().find(|m| m.id == mod_id).cloned()
 }
 
+/// Look up the user's CurseForge API key, lifting the pre-GA-1 plaintext
+/// `<config_dir>/curseforge_api_key.txt` into the OS keyring once on the
+/// first call. After the first migration the legacy file is removed so the
+/// leaves-on-disk attack surface shrinks on the next launch.
+///
+/// Returns an empty string when no key is stored anywhere (defaulting
+/// callers to the local-mods fallback instead of leaking `Option` through
+/// every call site).
+///
+/// Uses `spawn_blocking` because `secret_store_v2` is synchronous (it talks
+/// to the OS Credential Manager).
 pub async fn read_api_key(config_dir: &PathBuf) -> String {
-    tokio::fs::read_to_string(config_dir.join("curseforge_api_key.txt"))
+    let dir = config_dir.clone();
+    let lift_result: Result<Option<String>, String> =
+        tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+            let legacy_path = dir.join(LEGACY_API_KEY_FILENAME);
+            if legacy_path.exists() {
+                match std::fs::read_to_string(&legacy_path) {
+                    Ok(raw) => {
+                        let trimmed = raw.trim().to_string();
+                        if !trimmed.is_empty() {
+                            let stored = StoredSecret {
+                                updated_at_unix: chrono::Utc::now().timestamp(),
+                                fields: std::collections::BTreeMap::from([(
+                                    FIELD_API_KEY.to_string(),
+                                    trimmed.clone(),
+                                )]),
+                            };
+                            if let Err(e) =
+                                secret_store::write(CURSEFORGE_KEYRING_PLUGIN_ID, &stored)
+                            {
+                                log::warn!(
+                                    "curseforge: could not migrate legacy api key into keyring: {e}"
+                                );
+                                // Migration failed; serve from plaintext so the
+                                // operator doesn't lose access, but keep the
+                                // file intact instead of deleting it before
+                                // the secure copy lands.
+                                return Ok(Some(trimmed));
+                            }
+                            if let Err(e) = std::fs::remove_file(&legacy_path) {
+                                log::warn!(
+                                    "curseforge: lifted api key but could not delete legacy {LEGACY_API_KEY_FILENAME}: {e}"
+                                );
+                            } else {
+                                log::info!(
+                                    "curseforge: lifted legacy {LEGACY_API_KEY_FILENAME} into keyring"
+                                );
+                            }
+                            return Ok(Some(trimmed));
+                        }
+                        // Empty plaintext: delete it and fall through to keyring read.
+                        let _ = std::fs::remove_file(&legacy_path);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "curseforge: could not read legacy api key file {legacy_path:?}: {e}"
+                        );
+                    }
+                }
+            }
+
+            let Some(stored) = secret_store::read(CURSEFORGE_KEYRING_PLUGIN_ID) else {
+                return Ok(None);
+            };
+            let key = stored
+                .fields
+                .get(FIELD_API_KEY)
+                .cloned()
+                .unwrap_or_default();
+            Ok(Some(key))
+        })
         .await
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+        .unwrap_or_else(|e| {
+            log::warn!("curseforge: keyring join crashed: {e}");
+            Ok(None)
+        });
+
+    match lift_result {
+        Ok(Some(k)) if !k.is_empty() => k,
+        _ => String::new(),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,11 +240,32 @@ pub async fn get_curseforge_api_key(app: tauri::AppHandle) -> std::result::Resul
 
 #[tauri::command]
 pub async fn set_curseforge_api_key(app: tauri::AppHandle, api_key: String) -> std::result::Result<(), String> {
-    let config_dir = get_config_dir(&app)?;
-    tokio::fs::create_dir_all(&config_dir).await.map_err(|e| e.to_string())?;
-    tokio::fs::write(config_dir.join("curseforge_api_key.txt"), api_key.trim())
-        .await
-        .map_err(|e| e.to_string())
+    let trimmed = api_key.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("API key is empty".into());
+    }
+    let stored = StoredSecret {
+        updated_at_unix: chrono::Utc::now().timestamp(),
+        fields: std::collections::BTreeMap::from([(
+            FIELD_API_KEY.to_string(),
+            trimmed.clone(),
+        )]),
+    };
+    tokio::task::spawn_blocking(move || {
+        secret_store::write(CURSEFORGE_KEYRING_PLUGIN_ID, &stored)
+    })
+    .await
+    .map_err(|e| format!("keyring write join: {e}"))??;
+
+    // Converge: make sure no plaintext copy lingers from a previous build.
+    if let Ok(d) = get_config_dir(&app) {
+        let legacy = d.join(LEGACY_API_KEY_FILENAME);
+        if legacy.exists() {
+            let _ = std::fs::remove_file(&legacy);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
