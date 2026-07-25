@@ -310,7 +310,7 @@ fn parse_manifest_buildid(manifest: &std::path::Path) -> Option<u64> {
     None
 }
 
-pub async fn check_steam_validate(steam_cmd_dir: &str, server_dir: &str, _repair: bool) -> DiagCheck {
+pub async fn check_steam_validate(steam_cmd_dir: &str, server_dir: &str, repair: bool) -> DiagCheck {
     let label = "steam_validate".to_string();
 
     // SteamCMD installs with `+force_install_dir <server_dir>`, so the
@@ -338,16 +338,100 @@ pub async fn check_steam_validate(steam_cmd_dir: &str, server_dir: &str, _repair
                  or the directory is incorrect.".to_string(),
     };
 
-    let status = if local_buildid.is_some() { "ok" } else { "stale" };
+    let mut status = if local_buildid.is_some() { "ok" } else { "stale" };
+    let mut repaired = false;
+
+    // P6 — if the operator clicked REPAIR, drive `steamcmd +app_update
+    // 2430930 validate` ourselves (parity with `installer.rs`'s CREATE_NO_WINDOW
+    // spawn). The previous release silently ignored the `_repair` flag and
+    // left the operator on the hook.
+    if repair && status == "stale" {
+        match run_steam_validate(steam_cmd_dir, server_dir).await {
+            Ok(out) if out.success => {
+                status = "ok";
+                repaired = true;
+                log::info!("[diagnostics] steam_validate repair succeeded: {}", out.tail);
+            }
+            Ok(out) => {
+                log::warn!("[diagnostics] steam_validate repair failed: {}", out.tail);
+            }
+            Err(e) => {
+                log::error!("[diagnostics] steam_validate repair errored: {e}");
+            }
+        }
+    }
+
+    let mut final_detail = format!(
+        "{}. To validate / repair stale binaries after a major ASA update, \
+         run: 'steamcmd +force_install_dir \"{}\" +login anonymous \
+         +app_update {} validate +quit'.",
+        detail, server_dir, ASA_APP_ID
+    );
+    if repaired {
+        final_detail.push_str(" Repair was executed by the operator's diagnostics click.");
+    }
+
     DiagCheck {
         key: "steam_validate".into(), label, status: status.into(),
-        detail: format!("{}. To validate / repair stale binaries after a \
-                        major ASA update, run: 'steamcmd +force_install_dir \"{}\" \
-                        +login anonymous +app_update {} validate +quit'. \
-                        (Not auto-executed to avoid disrupting running sessions.)",
-                        detail, server_dir, ASA_APP_ID),
-        repaired: false,
+        detail: final_detail,
+        repaired,
     }
+}
+
+/// Outcome of a single SteamCMD `validate` invocation. Captures just
+/// enough info for the diagnostics UI to show whether `+app_update`
+/// actually re-fetched the binaries or merely touched them.
+#[derive(Debug, Default)]
+struct SteamValidateOutcome {
+    success: bool,
+    tail:    String,
+}
+
+/// Spawn `steamcmd +force_install_dir <server_dir> +login anonymous
+/// +app_update <ASA_APP_ID> validate +quit`. Returns `Ok(outcome)`
+/// regardless of exit code; `out.success` is false when the process
+/// exits non-zero. Used by `check_steam_validate` when `_repair=true`.
+async fn run_steam_validate(
+    steam_cmd_dir: &str,
+    server_dir:    &str,
+) -> Result<SteamValidateOutcome, String> {
+    let steamcmd_path = {
+        let primary = PathBuf::from(steam_cmd_dir).join(if cfg!(windows) {
+            "steamcmd.exe"
+        } else {
+            "steamcmd.sh"
+        });
+        if primary.exists() { primary } else { PathBuf::from(steam_cmd_dir) }
+    };
+
+    let mut cmd = Command::new(&steamcmd_path);
+    cmd.arg("+force_install_dir").arg(server_dir)
+        .arg("+login").arg("anonymous")
+        .arg("+app_update").arg(format!("{ASA_APP_ID}"))
+        .arg("validate")
+        .arg("+quit");
+    super::set_no_window_flag(&mut cmd);
+    let output = cmd.output().await
+        .map_err(|e| format!("failed to spawn steamcmd ({steamcmd_path:?}): {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let tail = stdout
+        .lines()
+        .chain(stderr.lines())
+        .filter(|l| !l.trim().is_empty())
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    Ok(SteamValidateOutcome {
+        success: output.status.success(),
+        tail:    if tail.is_empty() { "(no output)".into() } else { tail },
+    })
 }
 
 // ────────────────────────────────────────────────────────────────────

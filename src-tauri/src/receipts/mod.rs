@@ -53,6 +53,12 @@ impl Stage {
     }
 }
 
+/// Default retention window for `rawText` on `ChannelIngress` receipts.
+/// GDPR Article 5(1)(e) — "kept in a form which permits identification of
+/// data subjects for no longer than is necessary". 30 days covers operator
+/// debugging + incident forensics without indefinite retention.
+pub const DEFAULT_RAW_TEXT_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
 /// One immutable line of the ledger.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
@@ -60,6 +66,11 @@ pub struct Receipt {
     pub at: i64,
     pub host_id: HostId,
     pub stage: Stage,
+    /// Epoch-ms when the payload's `rawText` (and any other PII it carries)
+    /// can be redacted by the janitor. Zero means "no retention policy" —
+    /// the row is audit metadata only and never touches user data.
+    #[serde(default)]
+    pub retention_expires_at_ms: i64,
     /// Free-form JSON payload (identity axes, command, outcome, etc.)
     pub payload: serde_json::Value,
 }
@@ -99,10 +110,18 @@ impl ReceiptLedger {
     }
 
     /// Append a receipt. The `payload` must be a JSON value (use serde_json::json!).
+    /// Stages that may carry PII (today: `ChannelIngress` with `rawText`) are
+    /// stamped with `now + DEFAULT_RAW_TEXT_RETENTION_MS` so the janitor can
+    /// honour GDPR Article 5 (storage limitation). Audit/Hosting receipts —
+    /// never PII — get `0` (no retention).
     pub fn append(&self, payload: serde_json::Value, stage: Stage) -> Result<(), String> {
         let now = chrono::Utc::now().timestamp_millis();
         let host_id = self.inner.host_id.clone();
-        let receipt = Receipt { at: now, host_id, stage, payload };
+        let retention_expires_at_ms = match stage {
+            Stage::ChannelIngress => now + DEFAULT_RAW_TEXT_RETENTION_MS,
+            _ => 0,
+        };
+        let receipt = Receipt { at: now, host_id, stage, retention_expires_at_ms, payload };
         let line = format!("{}\n", serde_json::to_string(&receipt).map_err(|e| e.to_string())?);
         let key = date_key(receipt.at);
 
@@ -163,6 +182,78 @@ impl ReceiptLedger {
         }
         Ok(out)
     }
+
+    /// GDPR Article 5 janitor. Walks every `YYYY-MM-DD.jsonl` file under
+    /// `base_dir`, parses each line, and rewrites the file with `rawText`
+    /// (and `textLength`) purged from any receipt whose
+    /// `retention_expires_at_ms` has elapsed.
+    ///
+    /// Idempotent: a re-run on an already-swept file is a no-op (the field
+    /// is already null + 0). Safe to call from `lib::run()` at boot and
+    /// from a periodic timer.
+    ///
+    /// Returns the number of rows redacted across all files.
+    pub fn sweep_expired(&self) -> Result<u64, String> {
+        let base = self.inner.base_dir.clone();
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut total_redacted: u64 = 0;
+
+        let entries = match std::fs::read_dir(&base) {
+            Ok(it) => it,
+            Err(_) => return Ok(0),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let txt = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut rewritten = String::with_capacity(txt.len());
+            let mut redacted_in_file: u64 = 0;
+            for line in txt.lines() {
+                if line.is_empty() {
+                    continue;
+                }
+                let mut r: Receipt = match serde_json::from_str(line) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        rewritten.push_str(line);
+                        rewritten.push('\n');
+                        continue;
+                    }
+                };
+                if r.retention_expires_at_ms != 0 && r.retention_expires_at_ms <= now {
+                    if let Some(obj) = r.payload.as_object_mut() {
+                        let had_raw = obj.remove("rawText").is_some();
+                        obj.insert("textLength".to_string(), serde_json::Value::from(0));
+                        obj.insert(
+                            "redactedAt".to_string(),
+                            serde_json::Value::from(now),
+                        );
+                        obj.insert(
+                            "redactionReason".to_string(),
+                            serde_json::Value::String("gdpr_art5_storage_limitation".into()),
+                        );
+                        if had_raw {
+                            redacted_in_file += 1;
+                        }
+                    }
+                }
+                let serialised = serde_json::to_string(&r).map_err(|e| e.to_string())?;
+                rewritten.push_str(&serialised);
+                rewritten.push('\n');
+            }
+            if redacted_in_file > 0 {
+                atomic_replace(&path, rewritten.as_bytes())
+                    .map_err(|e| format!("atomic_replace failed ({}): {}", path.display(), e))?;
+            }
+            total_redacted += redacted_in_file;
+        }
+        Ok(total_redacted)
+    }
 }
 
 fn date_key(epoch_ms: i64) -> String {
@@ -180,6 +271,23 @@ fn append_all_or_nothing(path: &Path, data: &[u8]) -> std::io::Result<()> {
     f.write_all(data)?;
     f.sync_all()?;
     Ok(())
+}
+
+/// Replace `path` with `data` atomically: write to `<path>.tmp`, fsync,
+/// rename. Power-loss safe.
+fn atomic_replace(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("jsonl.tmp");
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
@@ -233,5 +341,142 @@ mod tests {
         assert_eq!(Stage::ChannelIngress.as_str(),  "channel_ingress");
         assert_eq!(Stage::RuntimePipeline.as_str(), "runtime_pipeline");
         assert_eq!(Stage::ChannelDelivery.as_str(), "channel_delivery");
+    }
+
+    #[test]
+    fn ingress_receipt_stamps_retention_window() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ark-asa-ledger-test-retain-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let ledger = ReceiptLedger::new(&tmp, "host-retain".into());
+        let before = chrono::Utc::now().timestamp_millis();
+        ledger
+            .append(
+                serde_json::json!({"rawText": "/start", "traceId": "t1"}),
+                Stage::ChannelIngress,
+            )
+            .unwrap();
+        let tail = ledger.tail(1).unwrap();
+        let r = &tail[0];
+        assert!(r.retention_expires_at_ms > 0);
+        assert!(r.retention_expires_at_ms >= before + DEFAULT_RAW_TEXT_RETENTION_MS - 5_000);
+        assert!(r.retention_expires_at_ms <= before + DEFAULT_RAW_TEXT_RETENTION_MS + 5_000);
+        // Audit/Hosting never carry PII → no retention stamp (0).
+        ledger
+            .append(serde_json::json!({"hello": "world"}), Stage::Audit)
+            .unwrap();
+        let tail = ledger.tail(2).unwrap();
+        assert_eq!(tail[1].stage, Stage::Audit);
+        assert_eq!(tail[1].retention_expires_at_ms, 0);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn janitor_redacts_only_expired_rows() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ark-asa-ledger-test-janitor-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let day_file = tmp.join("2025-01-01.jsonl");
+        let old_row = serde_json::json!({
+            "at": 1_700_000_000_000_i64,
+            "host_id": "host-old",
+            "stage": "channel_ingress",
+            "retention_expires_at_ms": 1_700_000_000_000_i64 + DEFAULT_RAW_TEXT_RETENTION_MS,
+            "payload": {
+                "rawText": "real user message",
+                "textLength": 18,
+                "traceId": "t-old",
+            }
+        });
+        let fresh_row = serde_json::json!({
+            "at": chrono::Utc::now().timestamp_millis(),
+            "host_id": "host-new",
+            "stage": "channel_ingress",
+            "retention_expires_at_ms": chrono::Utc::now().timestamp_millis() + 86_400_000,
+            "payload": {
+                "rawText": "fresh chat content",
+                "textLength": 18,
+                "traceId": "t-new",
+            }
+        });
+        let audit_row = serde_json::json!({
+            "at": 1_700_000_000_000_i64,
+            "host_id": "host-old",
+            "stage": "audit",
+            "retention_expires_at_ms": 0,
+            "payload": {"note": "audit-only-no-pii"}
+        });
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&day_file)
+            .unwrap();
+        writeln!(f, "{}", old_row).unwrap();
+        writeln!(f, "{}", fresh_row).unwrap();
+        writeln!(f, "{}", audit_row).unwrap();
+        drop(f);
+
+        let ledger = ReceiptLedger::new(&tmp, "host-janitor".into());
+        let redacted = ledger.sweep_expired().unwrap();
+        assert_eq!(redacted, 1, "exactly one row should be redacted");
+
+        let txt = std::fs::read_to_string(&day_file).unwrap();
+        let lines: Vec<&str> = txt.lines().collect();
+        assert_eq!(lines.len(), 3);
+
+        let r_old: Receipt = serde_json::from_str(lines[0]).unwrap();
+        assert!(r_old.payload.get("rawText").is_none());
+        assert_eq!(r_old.payload["textLength"], serde_json::json!(0));
+        assert_eq!(r_old.payload["redactionReason"],
+                   serde_json::json!("gdpr_art5_storage_limitation"));
+        assert!(r_old.payload["redactedAt"].as_i64().unwrap() > 0);
+
+        let r_new: Receipt = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(r_new.payload["rawText"], serde_json::json!("fresh chat content"));
+
+        let r_audit: Receipt = serde_json::from_str(lines[2]).unwrap();
+        assert_eq!(r_audit.payload["note"], serde_json::json!("audit-only-no-pii"));
+        assert!(r_audit.payload.get("redactedAt").is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn janitor_is_idempotent() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ark-asa-ledger-test-idem-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let day_file = tmp.join("2025-01-01.jsonl");
+        let row = serde_json::json!({
+            "at": 1_700_000_000_000_i64,
+            "host_id": "host",
+            "stage": "channel_ingress",
+            "retention_expires_at_ms": 1_700_000_000_000_i64,
+            "payload": {"rawText": "secret", "textLength": 6}
+        });
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&day_file)
+            .unwrap();
+        writeln!(f, "{}", row).unwrap();
+        drop(f);
+
+        let ledger = ReceiptLedger::new(&tmp, "host-idem".into());
+        let first = ledger.sweep_expired().unwrap();
+        let second = ledger.sweep_expired().unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(second, 0, "second sweep should be a no-op");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

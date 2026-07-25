@@ -65,20 +65,32 @@ pub struct AdminApiState {
     pub host_id: String,
     pub state: Arc<RwLock<StateSnapshot>>,
     pub config_snapshot: Arc<RwLock<Option<ServerConfig>>>,
-    /// Multi-channel router closure shared with Telegram/Discord/Slack
-    /// adapters; typed via `crate::integrations::RouterFn` so every
-    /// consumer speaks the same shape.
+    /// Legacy sync router shared with the bots that still speak the
+    /// `RouterFn` shape (Telegram/Discord/Slack as built today). P19
+    /// keeps this around for the transition window; new code should
+    /// use `async_router` and `await` directly.
     pub router: Arc<crate::integrations::RouterFn>,
+    /// P19 — async router. The preferred dispatch path; eliminates
+    /// the `spawn_blocking(|| router(...))` dance and the hidden
+    /// deadlock footgun tied to calling block_on inside the sync
+    /// router closure.
+    pub async_router: Arc<crate::integrations::AsyncRouterFn>,
 }
 
 impl AdminApiState {
-    pub fn new(auth: Arc<AuthState>, host_id: String, router: Arc<crate::integrations::RouterFn>) -> Self {
+    pub fn new(
+        auth: Arc<AuthState>,
+        host_id: String,
+        router: Arc<crate::integrations::RouterFn>,
+        async_router: Arc<crate::integrations::AsyncRouterFn>,
+    ) -> Self {
         Self {
             auth,
             host_id,
             state: Arc::new(RwLock::new(StateSnapshot::default())),
             config_snapshot: Arc::new(RwLock::new(None)),
             router,
+            async_router,
         }
     }
 
@@ -255,16 +267,17 @@ async fn admin_only_call(
     // Bind a real 7-axis Identity to the inbound request so the
     // receipts ledger can correlate the actor precisely (instead
     // of leaving `identity: None` and tracing back to "http-api").
-    // The platform is Web (this endpoint), the runtime is Interactive
-    // (the operator is at the keyboard), and the user is whoever
-    // proved they hold the bearer / JWT.
+    // P32: `user_id` carries the `PrincipalKind` tag so Convex /
+    // Vercel / loopback sub-agents no longer collapse into the same
+    // `"tauri-app"` bucket in receipts.
+    let principal_tag = claims.principal.as_str();
     let identity = crate::integrations::Identity {
         platform:      crate::integrations::Platform::Web,
         account_id:    api.host_id.clone(),
-        channel_id:    "http-api".into(),
-        user_id:       claims.sub.clone(),
-        agent_id:      String::new(),
-        session_key:   format!("http-api:{}", claims.sub),
+        channel_id:    format!("http-api:{principal_tag}"),
+        user_id:       format!("{principal_tag}:{}", claims.sub),
+        agent_id:      principal_tag.to_string(),
+        session_key:   format!("http-api:{principal_tag}:{}", claims.sub),
         runtime_class: crate::integrations::RuntimeClass::Interactive,
     };
 
@@ -283,17 +296,22 @@ async fn admin_only_call(
     };
     if let Err(e) = authorize(&ctx, &cmd) { return err_500(format!("forbidden: {e}")); }
 
-    // Real dispatch: route through the same multi-channel router closure
-    // that Telegram/Discord/Slack already use.  The router internally
-    // uses block_on, so we push the actual call to a blocking thread
-    // to keep the axum reactor free.  Bounded at 30 s so a long-running
-    // start/stop cannot pin the loopback HTTP server.
-    let router = api.router.clone();
-    let join = tokio::task::spawn_blocking(move || router(ctx, cmd)).await;
-    let outcome = match join {
+    // Real dispatch: route through the same multi-channel async
+    // router that Telegram/Discord/Slack will migrate to (P19). We
+    // `await` directly on the axum reactor instead of pushing to
+    // `spawn_blocking` — the hidden deadline footgun is gone.  A
+    // 30-second `tokio::time::timeout` bounds the call so a
+    // long-running start/stop cannot pin the loopback HTTP server.
+    let router = api.async_router.clone();
+    let outcome = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        router(ctx, cmd),
+    )
+    .await
+    {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(e))      => RouterOutcome::Error { reason: format!("router: {e}") },
-        Err(e)          => RouterOutcome::Error { reason: format!("router task panicked: {e}") },
+        Err(_)          => RouterOutcome::Error { reason: "router: 30s timeout".into() },
     };
 
     (StatusCode::OK, Json(outcome)).into_response()
@@ -341,16 +359,20 @@ async fn internal_dispatch(
         return err_500(format!("forbidden by authorize: {e}"));
     }
 
-    // Dispatch via the shared router on a blocking thread; the
-    // router internally calls block_on so we cannot await it inside
-    // an async-without-yielding context.  Bound at 30 s in case the
-    // launcher takes too long so the Convex call doesn't hang.
-    let router = api.router.clone();
-    let join = tokio::task::spawn_blocking(move || router(body.context, body.cmd)).await;
-    let outcome = match join {
+    // Dispatch via the shared async router (P19) — no more
+    // spawn_blocking dance; the `await` is yield-friendly. Bounded
+    // at 30 s in case the launcher takes too long so the Convex call
+    // doesn't hang.
+    let router = api.async_router.clone();
+    let outcome = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        router(body.context, body.cmd),
+    )
+    .await
+    {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(e))      => RouterOutcome::Error { reason: format!("router: {e}") },
-        Err(e)          => RouterOutcome::Error { reason: format!("router task panicked: {e}") },
+        Err(_)          => RouterOutcome::Error { reason: "router: 30s timeout".into() },
     };
 
     (StatusCode::OK, Json(outcome)).into_response()
@@ -486,7 +508,7 @@ async fn wechat_webhook(
                 Ok(s)  => s,
                 Err(_) => return err_500("wechat webhook: not utf-8".into()),
             };
-            let v = parse_wechat_xml_loose(text);
+            let v = crate::integrations::wechat::parse_wechat_xml_loose(text);
             match serde_json::from_value::<crate::integrations::wechat::WeChatXmlPayload>(v) {
                 Ok(p)  => p,
                 Err(e) => return err_500(format!("wechat webhook: parse failed: {e}")),
@@ -507,6 +529,10 @@ async fn wechat_webhook(
 /// time; on success we return `echostr` so WeCom accepts our
 /// callback. On failure we return an empty body — WeCom will
 /// retry a couple times before giving up.
+///
+/// P33: the SHA-1 + lex-sort + XML-parse helpers moved out of
+/// this file into `integrations::wechat`. They're WeChat-protocol
+/// concerns, not transport concerns.
 async fn wechat_handshake(
     query: axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> String {
@@ -524,32 +550,13 @@ async fn wechat_handshake(
         || nonce.is_empty() || echostr.is_empty() {
         return String::new();
     }
-    // token + timestamp + nonce sorted lexicographically then
-    // SHA1'd; compare against operator's `msg_signature` in
-    // constant time.
-    let mut parts = vec![token.to_string(), timestamp.clone(), nonce.clone()];
-    parts.sort();
-    let concat = parts.join("");
     let nonce_for_log = nonce.clone();
-    // sha1_smol = 1 — SHA-1 is mandated by WeChat Work's URL
-    // verification handshake (`token + timestamp + nonce`
-    // lex-sorted, then SHA-1 hex). Switching to SHA-3 here would
-    // silently break the operator's WeCom webhook verification.
-    // SHA-1 remains safe in this specific use because: (a)
-    // corp_secret is a high-entropy shared key (256+ bits); (b)
-    // the handshake runs once per operator setup; (c) no stored
-    // secrets depend on this output. SHA-3 would break WeCom
-    // compatibility, so we hold to SHA-1 by protocol mandate.
-    let computed = {
-        let d = sha1_smol::Sha1::from(concat.as_bytes()).digest();
-        let mut hex = String::with_capacity(d.bytes().len() * 2);
-        for b in d.bytes() {
-            use std::fmt::Write;
-            let _ = write!(&mut hex, "{b:02x}");
-        }
-        hex
-    };
-    if constant_time_eq(computed.as_bytes(), signature.as_bytes()) {
+    let computed = crate::integrations::wechat::wechat_handshake_sha1(
+        token,
+        &timestamp,
+        &nonce,
+    );
+    if crate::integrations::wechat::constant_time_eq(computed.as_bytes(), signature.as_bytes()) {
         echostr
     } else {
         log::warn!("wechat handshake: signature mismatch for nonce={nonce_for_log}");
@@ -557,114 +564,8 @@ async fn wechat_handshake(
     }
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
-    a.iter().zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::constant_time_eq;
-
-    #[test]
-    fn constant_time_eq_matches_equal_inputs() {
-        assert!(constant_time_eq(b"hello", b"hello"));
-        assert!(constant_time_eq(b"", b""));
-        assert!(constant_time_eq(b"\x00\x01\x02", b"\x00\x01\x02"));
-    }
-
-    #[test]
-    fn constant_time_eq_rejects_different_inputs() {
-        assert!(!constant_time_eq(b"hello", b"Hello"));
-        assert!(!constant_time_eq(b"hello", b"hello!"));
-        assert!(!constant_time_eq(b"", b"."));
-        // Length mismatch through first guard
-        assert!(!constant_time_eq(b"abc", b"abcd"));
-    }
-
-    #[test]
-    fn parse_wechat_xml_cdata_removes_wrapper() {
-        let xml = r#"<xml>
-            <ToUserName>corp_xxx</ToUserName>
-            <FromUserName>user_yyy</FromUserName>
-            <CreateTime>1700000000</CreateTime>
-            <MsgType>text</MsgType>
-            <Content><![CDATA[this is 🦊 content]]></Content>
-            <MsgId>msg_zzz</MsgId>
-        </xml>"#;
-        let v = super::parse_wechat_xml_loose(xml);
-        assert_eq!(v["ToUserName"], "corp_xxx");
-        assert_eq!(v["Content"], "this is 🦊 content");
-        assert_eq!(v["MsgType"], "text");
-    }
-
-    #[test]
-    fn parse_wechat_xml_xml_decl_stripped() {
-        let xml = r#"<?xml version="1.0"?>
-            <xml><Content>plain</Content></xml>"#;
-        let v = super::parse_wechat_xml_loose(xml);
-        assert_eq!(v["Content"], "plain");
-    }
-
-    #[test]
-    fn parse_wechat_xml_missing_tag_returns_null() {
-        let xml = "<xml><ToUserName>onlyhere</ToUserName></xml>";
-        let v = super::parse_wechat_xml_loose(xml);
-        assert!(v["Content"].is_null(),
-            "missing tag should be null in JSON, got {:?}", v["Content"]);
-    }
-}
-
-/// Tiny pull-style XML→flat-field extractor for WeChat Work.
-///
-/// We can't pull in `serde-xml-rs` without bumping Cargo; this
-/// minimum viable helper satisfies the operator's most common
-/// case (plain `<xml><Content>...</Content>...</xml>`). If the
-/// payload uses an outer wrapper that's escaped, this is a no-op
-/// — the operator wires an XML adapter in lib::run() to pre-parse
-/// the body into JSON before forwarding here.
-/// WeChat Work CDATA-aware tag extractor: pulls either
-/// `<tag>text</tag>` or `<tag><![CDATA[text]]></tag>`. Anything
-/// else falls back to `None` so the rest of the handshake can
-/// fall back to the JSON-pre-parsed path.
-fn parse_wechat_xml_loose(xml: &str) -> serde_json::Value {
-    // strip OUTER <?xml ...?> declaration if present
-    let xml = if xml.trim_start().starts_with("<?xml") {
-        if let Some(end) = xml.find("?>") {
-            xml[end + 2..].to_string()
-        } else {
-            xml.to_string()
-        }
-    } else {
-        xml.to_string()
-    };
-    let tag = |t: &str| -> Option<String> {
-        let open  = format!("<{t}>");
-        let close = format!("</{t}>");
-        // Plain text between tags
-        if let Some(i) = xml.find(&open) {
-            let j = i + open.len();
-            if let Some(k) = xml[j..].find(&close) {
-                let inner = &xml[j..j + k];
-                if inner.starts_with("<![CDATA[")
-                    && inner.ends_with("]]>")
-                {
-                    // Strip CDATA wrapper
-                    return Some(inner[9..inner.len() - 3].to_string());
-                }
-                return Some(inner.to_string());
-            }
-        }
-        None
-    };
-    serde_json::json!({
-        "ToUserName":  tag("ToUserName"),
-        "FromUserName": tag("FromUserName"),
-        "CreateTime":   tag("CreateTime"),
-        "MsgType":      tag("MsgType"),
-        "Content":      tag("Content"),
-        "MsgId":        tag("MsgId"),
-    })
-}
+// P33 — `constant_time_eq`, `wechat_handshake_sha1`, and
+// `parse_wechat_xml_loose` used to live here. They were WeChat-protocol
+// concerns hiding inside the Web transport layer; they now live in
+// `integrations::wechat` (alongside the bot itself), which is where any
+// future WeChat-specific helper should also go.

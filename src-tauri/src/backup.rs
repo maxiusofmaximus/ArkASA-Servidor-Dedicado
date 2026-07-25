@@ -2,6 +2,17 @@
 // backup.rs — Cloud save backup system for ARK SA
 // Providers: S3-compatible, Google Drive, OneDrive, iCloud
 // ============================================================
+//
+// P18 (in-progress) — this god-module combines Zip I/O,
+// S3 SigV4, GDrive REST, OneDrive REST, OAuth PKCE, log
+// reading, and ICopy helper code. A full split is queued for
+// a dedicated branch (`refactor/p18-backup-mod-split`). This
+// cargo cult of "everything-in-one-file" must die before v2.2.
+//
+// Until that lands, the file is targeted with `clippy::file_lines`
+// alerts via section dividers below so reviewers can grep for a
+// single concern without scrolling. Future split: see OPEN_WORK.md §P18.
+// ============================================================
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

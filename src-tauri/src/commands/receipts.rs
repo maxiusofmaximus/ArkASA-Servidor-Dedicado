@@ -39,6 +39,17 @@ pub fn receipts_tail(n: u32) -> Result<Vec<receipts::Receipt>, String> {
     l.tail(n as usize)
 }
 
+/// Manually trigger the GDPR Article 5 janitor. Returns the number of
+/// `rawText` rows that were redacted across all `YYYY-MM-DD.jsonl` files.
+#[tauri::command]
+pub fn receipts_sweep_expired() -> Result<u64, String> {
+    let g = shared_ledger().read();
+    let Some(l) = g.as_ref() else {
+        return Err("ledger not initialised".into());
+    };
+    l.sweep_expired()
+}
+
 // ─── Ledger lifecycle ─────────────────────────────────────────────────────────
 
 use std::path::Path;

@@ -40,12 +40,90 @@ pub async fn rotate_admin_token() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn set_admin_feature_flag(_key: String, _value: bool) -> Result<(), String> {
-    // Hito 4 wires this up to a TOML-backed registry so Convex enable/
-    // disable round-trips to disk rather than eating argv. For now this
-    // is intentionally a no-op so the frontend can call it without
-    // crashing.
+pub async fn set_admin_feature_flag(key: String, value: bool) -> Result<(), String> {
+    // P4 — was a silent no-op. Now backed by a TOML file in the
+    // operator's storage dir so flips survive reboots and the next
+    // milestone that consumes a feature flag sees the recorded state.
+    let dir = crate::auth::AuthState::storage_dir();
+    set_feature_flag(&dir, &key, value)
+}
+
+/// Read a feature flag from the on-disk TOML registry. Companion to
+/// `set_admin_feature_flag`. Returns `false` (the conservative
+/// default) when the file is missing or the key isn't recorded yet.
+#[tauri::command]
+pub fn get_admin_feature_flag(key: String) -> Result<bool, String> {
+    let dir = crate::auth::AuthState::storage_dir();
+    Ok(read_feature_flag(&dir, &key))
+}
+
+/// Path to the feature-flags TOML file. Operator-facing for support.
+#[tauri::command]
+pub fn admin_feature_flags_path() -> Result<String, String> {
+    let dir = crate::auth::AuthState::storage_dir();
+    Ok(flags_path(&dir).to_string_lossy().into_owned())
+}
+
+fn flags_path(storage_dir: &std::path::Path) -> std::path::PathBuf {
+    storage_dir.join("admin_feature_flags.toml")
+}
+
+/// Mutate one key in `<storage_dir>/admin_feature_flags.toml`. If the
+/// value is `false` we *delete* the key rather than serialising `false`
+/// — keeps the registry quiet. The map is round-tripped through
+/// `toml::Value::Table` so unknown keys survive a flip.
+fn set_feature_flag(
+    storage_dir: &std::path::Path,
+    key:         &str,
+    value:       bool,
+) -> Result<(), String> {
+    if key.trim().is_empty() {
+        return Err("feature flag key must not be empty".into());
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return Err("feature flag key may only contain [A-Za-z0-9_.]".into());
+    }
+    let path = flags_path(storage_dir);
+    std::fs::create_dir_all(storage_dir)
+        .map_err(|e| format!("create_dir_all {storage_dir:?}: {e}"))?;
+
+    let mut map: toml::value::Table = match std::fs::read_to_string(&path) {
+        Ok(s)  => {
+            let v: toml::Value = toml::from_str(&s)
+                .map_err(|e| format!("parse {path:?}: {e}"))?;
+            match v {
+                toml::Value::Table(t) => t,
+                _ => return Err(format!("{path:?} is not a TOML table")),
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::value::Table::new(),
+        Err(e) => return Err(format!("read failed: {e}")),
+    };
+    if value {
+        map.insert(key.to_string(), toml::Value::Boolean(true));
+    } else {
+        map.remove(key);
+    }
+    let serialised = toml::to_string_pretty(&toml::Value::Table(map))
+        .map_err(|e| format!("serialise flags: {e}"))?;
+    std::fs::write(&path, serialised)
+        .map_err(|e| format!("write {path:?}: {e}"))?;
     Ok(())
+}
+
+/// Companion to `set_feature_flag`. Returns `false` when the file
+/// doesn't exist or the recorded value isn't `true`. This is the
+/// conservative default — a milestone that checks a flag must treat
+/// "missing file" and "missing key" identically.
+fn read_feature_flag(storage_dir: &std::path::Path, key: &str) -> bool {
+    let path = flags_path(storage_dir);
+    let Ok(s) = std::fs::read_to_string(&path) else { return false; };
+    let Ok(v) = toml::from_str::<toml::Value>(&s) else { return false; };
+    let Some(table) = v.as_table() else { return false; };
+    matches!(table.get(key), Some(toml::Value::Boolean(true)))
 }
 
 /// Manually trigger a one-shot migration of any remaining v1 plaintext
@@ -305,3 +383,61 @@ pub fn render_local_provision_plan(
 // `receipts_today_path`     → operator-facing path to today's JSONL file.
 // `receipts_tail(n)`         → last N receipts for UI/teaching support.
 // `receipts_probe(host_id)`  → id ensures the ledger is bound to this host.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmp_dir(label: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "ark-asa-flags-test-{label}-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn feature_flag_round_trip_on_disk() {
+        let dir = tmp_dir("rt");
+        assert!(!read_feature_flag(&dir, "convex_dual_sync"));
+        set_feature_flag(&dir, "convex_dual_sync", true).unwrap();
+        assert!(read_feature_flag(&dir, "convex_dual_sync"));
+        // Toggling off *deletes* the key from TOML so the file stays quiet.
+        set_feature_flag(&dir, "convex_dual_sync", false).unwrap();
+        assert!(!read_feature_flag(&dir, "convex_dual_sync"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn feature_flag_rejects_invalid_keys() {
+        let dir = tmp_dir("validate");
+        let err = set_feature_flag(&dir, "bad key with space", true).unwrap_err();
+        assert!(err.contains("A-Za-z"));
+        let err = set_feature_flag(&dir, "", true).unwrap_err();
+        assert!(err.contains("empty"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn feature_flag_roundtrip_preserves_unknown_keys() {
+        let dir = tmp_dir("preserve");
+        // Pre-existing multi-section file: top-level table mix. The
+        // registry is supposed to gracefully *append* the new key
+        // alongside the operator's [prefs] table without losing it.
+        std::fs::write(
+            flags_path(&dir),
+            r#"[prefs]
+chocolate = "dark"
+"#,
+        )
+        .unwrap();
+        set_feature_flag(&dir, "convex_dual_sync", true).unwrap();
+        let after = std::fs::read_to_string(flags_path(&dir)).unwrap();
+        assert!(after.contains("convex_dual_sync = true"));
+        assert!(after.contains("[prefs]"));
+        assert!(after.contains("chocolate"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

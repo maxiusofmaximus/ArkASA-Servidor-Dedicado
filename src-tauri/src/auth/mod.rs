@@ -76,15 +76,61 @@ pub enum Role {
     Viewer,
 }
 
+/// Who actually issued the JWT/bearer. P32 closes the 7-axis identity gap
+/// where every Convex / Vercel / loopback-bearer appeared as the same
+/// `"tauri-app"` principal in receipts. Use this in `RuntimeClass::as_str`
+/// when binding to `Identity::runtime_class` so the ledger records the
+/// real origin.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrincipalKind {
+    /// Raw bearer token issued via `Options → Remote Admin` (operator
+    /// cutting/pasting from the desktop app).
+    Desktop,
+    /// A sub-component of the desktop app calling back into the loopback
+    /// HTTP API over `127.0.0.1`. Today: the `convex_publisher` interval.
+    Loopback,
+    /// Convex backend calling `/api/v1/internal/dispatch` with a JWT
+    /// minted by `sign_jwt(PrincipalKind::Convex, ...)`.
+    Convex,
+    /// Vercel webhook hitting the loopback after a successful deploy.
+    Vercel,
+}
+
+impl PrincipalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrincipalKind::Desktop  => "desktop",
+            PrincipalKind::Loopback => "loopback",
+            PrincipalKind::Convex   => "convex",
+            PrincipalKind::Vercel   => "vercel",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,    // "tauri-app"
+    /// Coarse-grained principal class. Replaces the literal
+    /// `sub="tauri-app"` that conflated desktop / loopback / Convex /
+    /// Vercel in receipts.
+    #[serde(default = "default_principal_kind")]
+    pub principal: PrincipalKind,
+    /// Free-form subsidiary id (`"tauri-app"` for desktop, the deployment
+    /// id for Convex, the project id for Vercel, …). Set alongside
+    /// `principal` so receipts can correlate to the upstream system.
+    #[serde(default = "default_sub")]
+    pub sub: String,
     pub exp: i64,       // unix epoch seconds
     pub iat: i64,
     pub role: Role,
-    /// Human-readable label, eg. "desktop" — purely for audit.
+    /// Human-readable label for audit, eg. `"operator@host-7a1f"`.
+    #[serde(default = "default_label")]
     pub label: String,
 }
+
+fn default_principal_kind() -> PrincipalKind { PrincipalKind::Desktop }
+fn default_sub()          -> String           { "tauri-app".into() }
+fn default_label()        -> String           { "desktop".into() }
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -154,11 +200,12 @@ impl AuthState {
 
         let now = Utc::now().timestamp();
         let claims = Claims {
-            sub: "tauri-app".into(),
+            principal: PrincipalKind::Desktop,
+            sub: default_sub(),
             iat: now,
             exp: (Utc::now() + Duration::days(30)).timestamp(),
             role: Role::Admin,
-            label: "desktop".into(),
+            label: default_label(),
         };
 
         Ok(Self { secret, token, claims })
@@ -188,14 +235,19 @@ impl AuthState {
 
     /// Build a signed JWT for outbound HTTP calls (eg. Convex actions
     /// calling back into the loopback API).
-    pub fn sign_jwt(&self, role: Role) -> Result<String, String> {
+    ///
+    /// `principal` distinguishes the upstream consumer so the receipts
+    /// ledger can pin the inbound to `Convex` / `Vercel` / `Loopback`
+    /// rather than the previous "tauri-app" black hole. P32.
+    pub fn sign_jwt(&self, principal: PrincipalKind, role: Role) -> Result<String, String> {
         let now = Utc::now().timestamp();
         let claims = Claims {
-            sub: "tauri-app".into(),
+            principal,
+            sub: principal.as_str().to_string(),
             iat: now,
             exp: (Utc::now() + Duration::days(30)).timestamp(),
             role,
-            label: "desktop".into(),
+            label: principal.as_str().to_string(),
         };
         encode(
             &Header::new(Algorithm::HS256),
@@ -442,6 +494,45 @@ mod tests {
         let again = AuthState::load_or_init().await.unwrap();
         assert_eq!(again.secret, secret);
         assert_eq!(again.active_token(), "LEGACY-TOKEN-do-not-rotate-me");
+
+        wipe(&id);
+        clear_test_keyring_id();
+    }
+
+    /// P32 — `sign_jwt(principal, role)` mints claims whose `principal`
+    /// round-trips through `validate_with_claims`, replacing the
+    /// black-hole `"tauri-app"` literal. Convex / Vercel / loopback
+    /// sub-agents can now be told apart in receipts.
+    #[tokio::test]
+    async fn principal_kind_roundtrips_through_signed_jwt() {
+        let id = install_test_keyring_id("principal_kind");
+        wipe(&id);
+        let home = std::env::temp_dir().join("ark-asa-test-principal");
+        let _ = std::fs::create_dir_all(&home.join(".ark-asa"));
+        std::env::set_var("ARK_ASA_HOME", &home);
+        let auth = AuthState::load_or_init().await.unwrap();
+
+        // Desktop principal binds to "desktop" by default (raw bearer).
+        let desktop_claims = auth
+            .validate_with_claims(&format!("Bearer {}", auth.active_token()))
+            .unwrap();
+        assert_eq!(desktop_claims.principal, PrincipalKind::Desktop);
+        assert_eq!(desktop_claims.sub, "tauri-app");
+        assert_eq!(desktop_claims.label, "desktop");
+
+        // Sign a JWT as Convex; the round-trip must echo the principal.
+        let jwt = auth.sign_jwt(PrincipalKind::Convex, Role::Admin).unwrap();
+        let convex_claims = auth.validate_with_claims(&jwt).unwrap();
+        assert_eq!(convex_claims.principal, PrincipalKind::Convex);
+        assert_eq!(convex_claims.sub, "convex");
+        assert_eq!(convex_claims.label, "convex");
+
+        // Vercel pivot survives the round-trip too.
+        let vjwt = auth.sign_jwt(PrincipalKind::Vercel, Role::Viewer).unwrap();
+        let v_claims = auth.validate_with_claims(&vjwt).unwrap();
+        assert_eq!(v_claims.principal, PrincipalKind::Vercel);
+        assert_eq!(v_claims.role,     Role::Viewer);
+        assert_eq!(v_claims.sub,      "vercel");
 
         wipe(&id);
         clear_test_keyring_id();
