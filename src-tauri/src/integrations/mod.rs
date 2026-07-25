@@ -35,7 +35,7 @@ pub mod wechat;
 pub mod ssh;
 pub mod rest;
 
-pub use command_router::{RouterError, RouterOutcome, RouterFn, RemoteCommandContext, Channel, Role};
+pub use command_router::{RouterError, RouterOutcome, RouterFn, AsyncRouterFn, RemoteCommandContext, Channel, Role};
 pub use identity::{Identity, IdentityResolution, ChannelBinding, Platform, RuntimeClass, RejectionReason};
 pub use telegram::{TelegramBot, TelegramConfig, spawn_looper};
 pub use bridge::dispatch;

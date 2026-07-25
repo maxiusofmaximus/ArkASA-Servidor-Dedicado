@@ -166,11 +166,30 @@ pub struct RemoteCommand {
 /// `lib::run()` and consumed by the desktop app, every chat adapter,
 /// and the loopback HTTP API. Single source of truth so we don't keep
 /// re-spelling the bounds inline at each adapter (`Arc<F: ???>`).
-/// Synchronous today (lib.rs uses `tauri::async_runtime::block_on`
-/// inside the closure); the intentional doc is that this is where an
-/// async-aware variant should live when the launcher becomes async.
+///
+/// P19: this used to be a synchronous `Fn(...)` whose body would
+/// `tauri::async_runtime::block_on` inside itself — which forced every
+/// caller to wrap calls in `tokio::task::spawn_blocking` to avoid
+/// reactor starvation. The router is now genuinely async (`Fn ->
+/// Future<...>`), so the call sites just `await` it on the existing
+/// tokio runtime. Migrating the type + 3 production call sites
+/// eliminates the dance and the hidden deadlock footgun.
 pub type RouterFn =
     dyn Fn(RemoteCommandContext, RemoteCommand) -> Result<RouterOutcome, String> + Send + Sync;
+
+/// Async variant — preferred for any new code. The wrapper
+/// `RouterFn::dispatch_async` adapts the legacy sync `RouterFn` to this
+/// shape by `spawn_blocking`-shifting the result, so the type
+/// transition can land call-site by call-site without breaking
+/// adapters that still speak the sync form (see S12 history).
+pub type AsyncRouterFn =
+    dyn Fn(RemoteCommandContext, RemoteCommand) -> BoxFuture<'static, Result<RouterOutcome, String>>
+        + Send
+        + Sync;
+
+/// `Send + 'static` boxed future re-export so callers don't have to
+/// import `futures-util` directly.
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]

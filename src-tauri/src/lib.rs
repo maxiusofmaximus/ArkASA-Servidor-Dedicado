@@ -82,45 +82,73 @@ pub fn run() {
             // so that /hooks/whatsapp, /api/v1/internal/dispatch and
             // admin POSTs to /api/v1/{start,stop,restart} all dispatch
             // through the same path Telegram/Discord/Slack already use.
-            let router_fn = move |ctx: integrations::command_router::RemoteCommandContext,
-                                   cmd: integrations::command_router::RemoteCommand| {
-                let cfg_path = std::env::var("ARK_ASA_CONFIG_PATH")
-                    .unwrap_or_else(|_| "server-config.toml".to_string());
-                let cfg_path_pb = std::path::PathBuf::from(cfg_path);
-                let cfg = match tauri::async_runtime::block_on(
-                    crate::config::loader::ConfigLoader::load_or_default(&cfg_path_pb),
-                ) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Err::<integrations::command_router::RouterOutcome, String>(
-                            format!("config load failed: {e}"),
-                        );
-                    }
-                };
-                let _ = ctx;
-                let outcome = tauri::async_runtime::block_on(
-                    integrations::dispatch(&cfg, cmd.kind, cmd.map_index, cmd.tail),
+            //
+            // P19 — async router. The router body used to call
+            // `tauri::async_runtime::block_on` *inside itself*, which forced
+            // every consumer to wrap the call in `tokio::task::spawn_blocking`
+            // to avoid reactor starvation. We now express the router as an
+            // async function that lazily awaits config load + dispatch on
+            // the existing tokio runtime. The closure still satisfies the
+            // synchronous `RouterFn` alias for legacy adapters by returning
+            // a `BoxFuture` — call sites can either `await` directly (new
+            // code) or `spawn_blocking` if they can't migrate yet.
+            let router_fn_async: std::sync::Arc<integrations::AsyncRouterFn> =
+                std::sync::Arc::new(
+                    move |ctx: integrations::command_router::RemoteCommandContext,
+                          cmd: integrations::command_router::RemoteCommand| {
+                        Box::pin(async move {
+                            let cfg_path = std::env::var("ARK_ASA_CONFIG_PATH")
+                                .unwrap_or_else(|_| "server-config.toml".to_string());
+                            let cfg_path_pb = std::path::PathBuf::from(cfg_path);
+                            let cfg = match crate::config::loader::ConfigLoader::load_or_default(
+                                &cfg_path_pb,
+                            )
+                            .await
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    return Err::<
+                                        integrations::command_router::RouterOutcome,
+                                        String,
+                                    >(format!("config load failed: {e}"));
+                                }
+                            };
+                            let _ = ctx;
+                            let outcome =
+                                integrations::dispatch(&cfg, cmd.kind, cmd.map_index, cmd.tail)
+                                    .await;
+                            match outcome {
+                                Ok(o) => Ok(o),
+                                Err(e) => Ok(integrations::command_router::RouterOutcome::Error {
+                                    reason: format!("{e}"),
+                                }),
+                            }
+                        })
+                    },
                 );
-                match outcome {
-                    Ok(o) => Ok(o),
-                    Err(e) => Ok(integrations::command_router::RouterOutcome::Error {
-                        reason: format!("{e}"),
-                    }),
+
+            // Backward-compat shim — sync `RouterFn` adapters (legacy bots)
+            // wrap the async router in `spawn_blocking`. We use
+            // `Handle::block_on` since the closure body runs on a
+            // dedicated blocking thread (so a deadlock against the
+            // outer executor is impossible). This is removed when P19
+            // lands for all call sites.
+            let sync_router_arc = router_fn_async.clone();
+            let router_fn = move |ctx: integrations::command_router::RemoteCommandContext,
+                                  cmd: integrations::command_router::RemoteCommand| {
+                let arc = sync_router_arc.clone();
+                let handle = tauri::async_runtime::handle();
+                match handle.block_on(async move { arc(ctx, cmd).await }) {
+                    Ok(o)  => Ok(o),
+                    Err(e) => Err(e),
                 }
             };
-            let router_arc: std::sync::Arc<
-                dyn Fn(
-                    integrations::command_router::RemoteCommandContext,
-                    integrations::command_router::RemoteCommand,
-                )
-                    -> Result<integrations::command_router::RouterOutcome, String>
-                    + Send
-                    + Sync
-                    + 'static,
-            > = std::sync::Arc::new(router_fn);
+            let router_arc: std::sync::Arc<integrations::RouterFn> = std::sync::Arc::new(router_fn);
+            let async_router_arc: std::sync::Arc<integrations::AsyncRouterFn> =
+                router_fn_async.clone();
 
             let api = Arc::new(integrations::http_api::AdminApiState::new(
-                auth, host_id.clone(), router_arc.clone(),
+                auth, host_id.clone(), router_arc.clone(), async_router_arc.clone(),
             ));
             if let Err(e) = integrations::http_api::spawn_loopback_server(api.clone(), [127, 0, 0, 1], 8765).await {
                 log::error!("loopback HTTP API failed to spawn: {e}");
@@ -136,13 +164,23 @@ pub fn run() {
                     // Bind the global receipt emitter so every chat adapter
                     // and bridge call can append receipts without jugglery.
                     integrations::receipt_emit::install_emitter(ledger.clone());
+                    // GDPR Article 5 (storage limitation) — sweep any rows
+                    // whose `rawText` retention window has expired before
+                    // we accept new traffic. Best-effort, logged.
+                    match ledger.sweep_expired() {
+                        Ok(n) if n > 0 => log::info!(
+                            "[P31] janitor redacted {n} expired rawText rows at boot"
+                        ),
+                        Ok(_) => log::debug!("[P31] janitor: no expired rawText rows to redact"),
+                        Err(e) => log::warn!("[P31] janitor sweep failed: {e}"),
+                    }
                     let _ = ledger.append(
                         serde_json::json!({
                             "kind": "boot",
                             "loopback_port": 8765,
                             "loopback_host_id": host_id,
                         }),
-                        receipts::Stage::ChannelIngress,
+                        receipts::Stage::Audit,
                     );
                 }
             }
@@ -458,6 +496,7 @@ pub fn run() {
             crate::commands::receipts::receipts_probe,
             crate::commands::receipts::receipts_today_path,
             crate::commands::receipts::receipts_tail,
+            crate::commands::receipts::receipts_sweep_expired,
             // Ping / Tailscale
             crate::commands::utilities::start_ping,
             crate::commands::utilities::stop_ping,

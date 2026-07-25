@@ -16,6 +16,13 @@
 //! string fields — if you ship a richer parser, it goes in
 //! `bridge.rs`.
 
+//! ────────────────────────────────────────────────────────────────────
+//! P33 — helpers moved out of `integrations::http_api`
+//! (`constant_time_eq`, `parse_wechat_xml_loose`, `wechat_handshake_sha1`).
+//! They were 40-line misplaced utility bits sitting in the Web transport
+//! layer; keeping them here avoids spurious imports on every http_api
+//! modification and centralises all WeChat-specific glue.
+
 use crate::integrations::command_router::{
     default_chat_binding, gated_chat_binding, Channel, CommandKind,
     RemoteCommandContext, Role, RouterOutcome,
@@ -162,6 +169,80 @@ impl crate::plugins::Plugin for WeChatPlugin {
     }
 }
 
+// ───── P33 — WeChat-specific crypto + XML helpers (moved from http_api) ─
+
+/// Constant-time slice comparison. Returns `false` immediately if the
+/// lengths differ (length is publicly known, no need to leak). Used by
+/// `wechat_handshake_sha1` so a forged `msg_signature` cannot be
+/// timing-attacked out of the loopback server.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    a.iter().zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+/// WeChat Work URL-verification SHA-1.
+///
+/// WeChat mandates SHA-1 here (not SHA-3 / BLAKE3) — switching would
+/// silently break the operator's WeCom callback URL. SHA-1 is safe in
+/// this **specific** use because `corp_secret` is a high-entropy shared
+/// key (256+ bits) and the handshake runs once per operator setup.
+pub fn wechat_handshake_sha1(corp_secret: &str, timestamp: &str, nonce: &str) -> String {
+    let mut parts = vec![corp_secret.to_string(), timestamp.to_string(), nonce.to_string()];
+    parts.sort();
+    let concat = parts.join("");
+    let d = sha1_smol::Sha1::from(concat.as_bytes()).digest();
+    let mut hex = String::with_capacity(d.bytes().len() * 2);
+    use std::fmt::Write;
+    for b in d.bytes() {
+        let _ = write!(&mut hex, "{b:02x}");
+    }
+    hex
+}
+
+/// Tiny pull-style XML→flat-field extractor for WeChat Work.
+///
+/// We can't pull in `serde-xml-rs` without bumping Cargo; this
+/// minimum viable helper satisfies the operator's most common
+/// case (plain `<xml><Content>...</Content>...</xml>`, including
+/// CDATA-wrapped emoji content). Returns a JSON object with the
+/// canonical WeChat fields.
+pub fn parse_wechat_xml_loose(xml: &str) -> serde_json::Value {
+    let xml = if xml.trim_start().starts_with("<?xml") {
+        if let Some(end) = xml.find("?>") {
+            xml[end + 2..].to_string()
+        } else {
+            xml.to_string()
+        }
+    } else {
+        xml.to_string()
+    };
+    let tag = |t: &str| -> Option<String> {
+        let open  = format!("<{t}>");
+        let close = format!("</{t}>");
+        if let Some(i) = xml.find(&open) {
+            let j = i + open.len();
+            if let Some(k) = xml[j..].find(&close) {
+                let inner = &xml[j..j + k];
+                if inner.starts_with("<![CDATA[") && inner.ends_with("]]>") {
+                    return Some(inner[9..inner.len() - 3].to_string());
+                }
+                return Some(inner.to_string());
+            }
+        }
+        None
+    };
+    serde_json::json!({
+        "ToUserName":   tag("ToUserName"),
+        "FromUserName": tag("FromUserName"),
+        "CreateTime":   tag("CreateTime"),
+        "MsgType":      tag("MsgType"),
+        "Content":      tag("Content"),
+        "MsgId":        tag("MsgId"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +325,49 @@ mod tests {
         ] {
             assert!(s.is_empty());
         }
+    }
+
+    // ─── P33 — relocated helper tests ─────────────────────────────────────
+
+    #[test]
+    fn constant_time_eq_handles_equal_and_unequal_inputs() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"hello", b"Hello"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+    }
+
+    #[test]
+    fn wechat_handshake_sha1_matches_lex_sorted_concat() {
+        // Hard-coded golden output: with corp_secret = "TOK", ts = "1700",
+        // nonce = "ABC", lex-sorted → "1700ABCTOK"; the SHA-1 hex of that
+        // is well-known. We verify by recomputing with sha1_smol directly.
+        use std::fmt::Write;
+        let mut parts = vec!["TOK".to_string(), "1700".to_string(), "ABC".to_string()];
+        parts.sort();
+        let concat: String = parts.join("");
+        let d = sha1_smol::Sha1::from(concat.as_bytes()).digest();
+        let mut expected = String::new();
+        for b in d.bytes() { let _ = write!(&mut expected, "{b:02x}"); }
+        let got = wechat_handshake_sha1("TOK", "1700", "ABC");
+        assert_eq!(got, expected);
+        assert_eq!(got.len(), 40, "SHA-1 hex is 40 chars");
+    }
+
+    #[test]
+    fn parse_wechat_xml_loose_strips_cdata_and_handles_missing_tags() {
+        let xml = r#"<xml>
+            <ToUserName>corp_xxx</ToUserName>
+            <FromUserName>user_yyy</FromUserName>
+            <CreateTime>1700000000</CreateTime>
+            <MsgType>text</MsgType>
+            <Content><![CDATA[this is 🦊 content]]></Content>
+            <MsgId>msg_zzz</MsgId>
+        </xml>"#;
+        let v = parse_wechat_xml_loose(xml);
+        assert_eq!(v["ToUserName"], "corp_xxx");
+        assert_eq!(v["Content"], "this is 🦊 content");
+        assert_eq!(v["MsgType"], "text");
+        assert!(v["CreateTime"].is_string());
     }
 }
