@@ -1,6 +1,11 @@
 pub mod config;
 pub mod error;
-pub mod cli;
+// P3b — the standalone `cli` module was deleted: it was 254 LOC of
+// fake-output skeleton documented in `docs/CLI.md` as if it shipped.
+// Operators use the desktop UI, the loopback HTTP API, or the
+// chat-bot adapters (Telegram/Discord/Slack/WhatsApp/WeChat/Signal)
+// instead. See docs/CLI.md for the new "NOT IMPLEMENTED in v2.1.0"
+// header.
 pub mod backup;
 pub mod stub;
 pub mod auth;
@@ -382,6 +387,8 @@ pub fn run() {
             crate::commands::integrations::admin_token,
             crate::commands::integrations::rotate_admin_token,
             crate::commands::integrations::set_admin_feature_flag,
+            crate::commands::integrations::get_admin_feature_flag,
+            crate::commands::integrations::admin_feature_flags_path,
             // Secret-store migration (P2): lift v1 TOML into OS keyring. Auto-run on startup.
             crate::commands::integrations::migrate_secrets,
             // Plugin auth flows (v2.1) — Convex uses CLI bridge, not OAuth

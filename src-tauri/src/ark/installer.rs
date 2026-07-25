@@ -48,11 +48,9 @@ impl SteamCmdInstaller {
         // Microsoft Learn — Process Creation Flags:
         //   https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
         // On Linux there is no equivalent, so we just inherit stdio.
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
-        }
+        // The helper centralises this so P6 (diagnostics::steam_validate
+        // repair) and any future subprocess can fly under the same flag.
+        super::set_no_window_flag(&mut cmd);
 
         let output = cmd
             .output()

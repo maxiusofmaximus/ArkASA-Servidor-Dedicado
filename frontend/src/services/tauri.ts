@@ -428,8 +428,15 @@ function createMockInvoke() {
       return response
     }
 
-    logger.warn(`No mock implementation for command: ${command}`)
-    return { mock: true, command }
+    // P9 / P15 — dev mode no longer returns a fake `{ mock: true, command }`
+    // payload; it throws so a refactor that breaks the
+    // `__TAURI_INTERNALS__` gate stops pretending to work. The repair
+    // path is `pnpm run tauri:dev` (or run the bundled desktop app).
+    throw new Error(
+      `dev-mock-only: no mock implementation for command '${command}'. ` +
+      `Run \`pnpm run tauri:dev\` (or use the bundled desktop app) ` +
+      `so the real backend handles this invoke.`
+    )
   }
 }
 

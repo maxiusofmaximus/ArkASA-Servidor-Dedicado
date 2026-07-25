@@ -281,9 +281,14 @@ pub async fn dispatch(
         CommandKind::Status => status_inner(config).await,
         CommandKind::Logs => {
             let n = tail.unwrap_or(20).min(500) as usize;
-            let p = std::path::PathBuf::from(format!(
-                "C:\\ASA\\server\\ShooterGame\\Saved\\Logs\\ShooterGame.log"
-            ));
+            // P26 — route through `config.paths.server_dir` so operators
+            // who install ARK anywhere other than `C:\ASA\server\` still
+            // get their actual log tail (was a hardcoded Windows path).
+            let p = std::path::PathBuf::from(&config.paths.server_dir)
+                .join("ShooterGame")
+                .join("Saved")
+                .join("Logs")
+                .join("ShooterGame.log");
             let reader = crate::ark::logs::LogReader::new(&p);
             let lines = reader.read_last_n(n).await.unwrap_or_default();
             let mut raw: Vec<String> = Vec::with_capacity(lines.len());
