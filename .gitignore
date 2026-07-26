@@ -121,3 +121,11 @@ docs/*_BAK_*.md
 
 # opencode session-local ignore file
 .opencodeignore
+
+# ========== GRAPHIFY ==========
+# graphify-out/ is meant to be committed so the team shares the map;
+# only the local-only build cache + cost log should be excluded.
+graphify-out/cost.json
+graphify-out/cache/
+graphify-out/.graphify_root.tmp
+graphify-out/.graphify_python
