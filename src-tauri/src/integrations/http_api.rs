@@ -25,9 +25,10 @@
 use crate::auth::AuthState;
 use crate::config::schema::ServerConfig;
 use crate::integrations::command_router::{
-    authorize, CommandKind, RemoteCommand, RemoteCommandContext, RouterOutcome,
-    Role as RouterRole,
+    authorize, gated_chat_binding, run_with_receipts_async, CommandKind, PipelineExecution,
+    PipelineOutcome, RemoteCommand, RemoteCommandContext, RouterOutcome, Role as RouterRole,
 };
+use crate::integrations::receipt_emit::try_global;
 use axum::{
     extract::{Query, State as AxState},
     http::{HeaderMap, StatusCode},
@@ -264,57 +265,96 @@ async fn admin_only_call(
     };
     if role != RouterRole::Admin { return unauthorized("admin role required"); }
 
-    // Bind a real 7-axis Identity to the inbound request so the
-    // receipts ledger can correlate the actor precisely (instead
-    // of leaving `identity: None` and tracing back to "http-api").
     // P32: `user_id` carries the `PrincipalKind` tag so Convex /
-    // Vercel / loopback sub-agents no longer collapse into the same
+    // Vercel / loopback sub-agents no longer collapse into the
     // `"tauri-app"` bucket in receipts.
-    let principal_tag = claims.principal.as_str();
-    let identity = crate::integrations::Identity {
-        platform:      crate::integrations::Platform::Web,
-        account_id:    api.host_id.clone(),
-        channel_id:    format!("http-api:{principal_tag}"),
-        user_id:       format!("{principal_tag}:{}", claims.sub),
-        agent_id:      principal_tag.to_string(),
-        session_key:   format!("http-api:{principal_tag}:{}", claims.sub),
-        runtime_class: crate::integrations::RuntimeClass::Interactive,
-    };
+    let _principal_tag = claims.principal.as_str();
+    let trace_id      = format!("http-{}:{}", kind.as_str(), claims.sub);
+    let raw_text      = format!("/{}", kind.as_str());
 
-    let ctx = RemoteCommandContext {
-        channel: crate::integrations::command_router::Channel::Web,
-        actor_id: claims.sub.clone(),
-        actor_name: claims.label.clone(),
-        role,
-        identity: Some(identity),
-    };
+    // P27: route through the canonical receipt-emit pipeline. The
+    // binding is built around the validated `claims.sub` so the
+    // admin allow-list gates the audit trail before the router is
+    // invoked. Admin-only check is also re-asserted via role at
+    // `authorize` inside the pipeline.
+    let binding = gated_chat_binding(
+        crate::integrations::command_router::Channel::Web,
+        "http-api:admin",
+        vec![claims.sub.clone()],
+    );
+    let emitter = try_global();
+
+    let kind_label = kind.as_str();
     let cmd = RemoteCommand {
         kind,
         map_index: body.map_index,
         config_patch: None,
         tail: None,
     };
-    if let Err(e) = authorize(&ctx, &cmd) { return err_500(format!("forbidden: {e}")); }
-
-    // Real dispatch: route through the same multi-channel async
-    // router that Telegram/Discord/Slack will migrate to (P19). We
-    // `await` directly on the axum reactor instead of pushing to
-    // `spawn_blocking` — the hidden deadline footgun is gone.  A
-    // 30-second `tokio::time::timeout` bounds the call so a
-    // long-running start/stop cannot pin the loopback HTTP server.
     let router = api.async_router.clone();
-    let outcome = match tokio::time::timeout(
+    let exec = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        router(ctx, cmd),
+        run_with_receipts_async(
+            emitter.as_deref(),
+            crate::integrations::Platform::Web,
+            crate::integrations::command_router::Channel::Web,
+            &binding,
+            &claims.sub,
+            &claims.label,
+            &trace_id,
+            &raw_text,
+            None,
+            Some(kind_label),
+            Some(cmd),
+            move |ctx, cmd| async move { router(ctx, cmd).await },
+        ),
     )
     .await
     {
-        Ok(Ok(outcome)) => outcome,
-        Ok(Err(e))      => RouterOutcome::Error { reason: format!("router: {e}") },
-        Err(_)          => RouterOutcome::Error { reason: "router: 30s timeout".into() },
+        Ok(e)  => e,
+        Err(_) => {
+            // 30 s elapsed before the pipeline finished — emit a
+            // Failed ChannelDelivery so the audit trail reflects the
+            // dropped call, and return a typed RouterOutcome::Error.
+            if let Some(e) = emitter.as_deref() {
+                let rctx = crate::integrations::receipt_emit::ReceiptContext {
+                    trace_id:   &trace_id,
+                    actor_id:   &claims.sub,
+                    actor_name: &claims.label,
+                    runtime:    crate::integrations::RuntimeClass::Interactive,
+                };
+                e.delivery(
+                    rctx,
+                    crate::integrations::Platform::Web,
+                    &claims.sub,
+                    crate::integrations::receipt_emit::DeliveryStatus::Failed,
+                    Some("router: 30s timeout"),
+                );
+            }
+            return (StatusCode::OK, Json(RouterOutcome::Error {
+                reason: "router: 30s timeout".into(),
+            })).into_response();
+        }
     };
 
-    (StatusCode::OK, Json(outcome)).into_response()
+    match exec.pipeline {
+        PipelineOutcome::Done(_) => {
+            let outcome = exec.router_outcome.unwrap_or_else(|| RouterOutcome::Error {
+                reason: "router returned no outcome".into(),
+            });
+            (StatusCode::OK, Json(outcome)).into_response()
+        }
+        PipelineOutcome::Rejected(reason) => {
+            // Identity gate rejected the actor — audit trail already
+            // recorded the rejection. Return 403 so callers know.
+            (StatusCode::FORBIDDEN, Json(serde_json::json!({
+                "error": reason,
+            }))).into_response()
+        }
+        PipelineOutcome::NoCommand(_) => {
+            (StatusCode::OK, Json(serde_json::json!({}))).into_response()
+        }
+    }
 }
 
 async fn post_start(
@@ -359,23 +399,91 @@ async fn internal_dispatch(
         return err_500(format!("forbidden by authorize: {e}"));
     }
 
-    // Dispatch via the shared async router (P19) — no more
-    // spawn_blocking dance; the `await` is yield-friendly. Bounded
-    // at 30 s in case the launcher takes too long so the Convex call
-    // doesn't hang.
+    // P27: drive the same receipt-emit pipeline as the chat bots,
+    // but `await`ed — the audit trail now covers Convex-initiated
+    // dispatches instead of vanishing at `RuntimePipeline`. The
+    // binding gate happens inside the helper using the
+    // `body.context.actor_id` resolved upstream by Convex's JWT
+    // verifier, so a forged payload can't bypass identity.
+    let principal_tag = body.context.actor_id.clone();
+    let trace_id      = format!("convex-{}:{}", body.cmd.kind.as_str(), principal_tag);
+    let raw_text      = format!("/{}", body.cmd.kind.as_str());
+    let binding = gated_chat_binding(
+        crate::integrations::command_router::Channel::Web,
+        "http-api:convex",
+        vec![principal_tag.clone()],
+    );
+    let emitter = try_global();
+    let ctx_channel = body.context.channel;
+    let actor_id    = body.context.actor_id.clone();
+    let actor_name  = body.context.actor_name.clone();
+
     let router = api.async_router.clone();
-    let outcome = match tokio::time::timeout(
+    let exec_result = run_with_receipts_async(
+        emitter.as_deref(),
+        crate::integrations::Platform::Web,
+        ctx_channel,
+        &binding,
+        &actor_id,
+        &actor_name,
+        &trace_id,
+        &raw_text,
+        None,
+        Some(body.cmd.kind.as_str()),
+        Some(body.cmd),
+        move |ctx, cmd| async move { router(ctx, cmd).await },
+    );
+    let exec: PipelineExecution = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        router(body.context, body.cmd),
+        exec_result,
     )
     .await
     {
-        Ok(Ok(outcome)) => outcome,
-        Ok(Err(e))      => RouterOutcome::Error { reason: format!("router: {e}") },
-        Err(_)          => RouterOutcome::Error { reason: "router: 30s timeout".into() },
+        Ok(e) => e,
+        Err(_) => {
+            if let Some(e) = emitter.as_deref() {
+                let rctx = crate::integrations::receipt_emit::ReceiptContext {
+                    trace_id:   &trace_id,
+                    actor_id:   &actor_id,
+                    actor_name: &actor_name,
+                    runtime:    crate::integrations::RuntimeClass::Interactive,
+                };
+                e.delivery(
+                    rctx,
+                    crate::integrations::Platform::Web,
+                    &actor_id,
+                    crate::integrations::receipt_emit::DeliveryStatus::Failed,
+                    Some("router: 30s timeout"),
+                );
+            }
+            return (StatusCode::OK, Json(RouterOutcome::Error {
+                reason: "router: 30s timeout".into(),
+            })).into_response();
+        }
     };
 
-    (StatusCode::OK, Json(outcome)).into_response()
+    match exec_ref_to_outcome(exec) {
+        Ok(out)            => (StatusCode::OK, Json(out)).into_response(),
+        Err(rejection_msg) => (StatusCode::FORBIDDEN, Json(serde_json::json!({
+            "error": rejection_msg,
+        }))).into_response(),
+    }
+}
+
+/// Helper used by `internal_dispatch` (and any future cursor that
+/// routes through `run_with_receipts_async`) to lift the
+/// `PipelineExecution` back into a typed `RouterOutcome` for
+/// machine-readable HTTP responses. P27 audit closed when this
+/// helper is the only `exec.pipeline` consumer in the loopback
+/// HTTP layer.
+fn exec_ref_to_outcome(exec: PipelineExecution) -> Result<RouterOutcome, String> {
+    match exec.pipeline {
+        PipelineOutcome::Done(_) => exec.router_outcome.ok_or_else(|| {
+            "router returned no outcome".into()
+        }),
+        PipelineOutcome::Rejected(reason) => Err(reason),
+        PipelineOutcome::NoCommand(_) => Err("no command resolved".into()),
+    }
 }
 
 fn err_500(reason: String) -> Response {

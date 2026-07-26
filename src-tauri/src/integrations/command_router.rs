@@ -334,6 +334,19 @@ pub enum PipelineOutcome {
     NoCommand(String),
 }
 
+/// Async-pipeline result. Mirrors [`PipelineOutcome`] (user-facing message)
+/// but also surfaces the raw [`RouterOutcome`] when the router actually ran,
+/// so loopback HTTP API callers (P27 `admin_only_call` / `internal_dispatch`)
+/// can serialize the typed payload instead of washing it through
+/// `to_user_message`. The field is `None` when identity was rejected or no
+/// command was resolved — i.e. the cases where the chat-bot path would
+/// fall back to rendering the human-readable reply.
+#[derive(Debug)]
+pub struct PipelineExecution {
+    pub pipeline:       PipelineOutcome,
+    pub router_outcome: Option<RouterOutcome>,
+}
+
 /// Run the full receipt-emit pipeline for a single inbound message:
 /// ChannelIngress → IdentityCheck → [QueueEnqueue] → RuntimePipeline → ChannelDelivery.
 ///
@@ -460,6 +473,154 @@ where
 }
 
 use crate::integrations::receipt_emit::DeliveryStatus;
+
+/// Async companion of [`run_with_receipts`] — emits the same five-stage
+/// pipeline but `await`s the router and admits a `ChannelBinding`-driven
+/// identity. P27 unifies the loopback HTTP API (`admin_only_call`,
+/// `internal_dispatch`) on top of this helper so the trailing stages
+/// (`RuntimePipeline` + `ChannelDelivery`) are no longer silently dropped.
+///
+/// The contract is identical to the sync version: an emitter backed by
+/// the active `Emitter` may be `None` (e.g. unit tests, init-race), in
+/// which case receipts are silently dropped and the adapter still gets
+/// a `PipelineOutcome` back. `kind_label` distinguishes unknown-dispatch
+/// shells (the resolver failed before producing a `RemoteCommand`).
+///
+/// `binding` is required: the HTTP API holds the operator's allow-list
+/// for desktop + webadmin, so the identity gate has to resolve before
+/// we invoke the router. Chat-bot callers (Telegram/Discord/Slack)
+/// keep using the sync `run_with_receipts` + `spawn_blocking` adapter
+/// because their Rust callbacks are synchronous and battle-tested.
+pub async fn run_with_receipts_async<F, Fut>(
+    emitter:        Option<&crate::integrations::receipt_emit::Emitter>,
+    platform:       Platform,
+    ctx_channel:    Channel,
+    binding:        &ChannelBinding,
+    actor_id:       &str,
+    actor_name:     &str,
+    trace_id:       &str,
+    raw_text:       &str,
+    language:       Option<&str>,
+    kind_label:     Option<&str>,   // None ⇒ no CommandKind resolved yet
+    remote:         Option<RemoteCommand>,
+    router:         F,
+) -> PipelineExecution
+where
+    F: FnOnce(RemoteCommandContext, RemoteCommand) -> Fut,
+    Fut: std::future::Future<Output = Result<RouterOutcome, String>>,
+{
+    let rctx = crate::integrations::receipt_emit::ReceiptContext {
+        trace_id,
+        actor_id,
+        actor_name,
+        runtime: default_runtime_class(),
+    };
+
+    // 1. Channel Ingress
+    if let Some(e) = emitter { e.ingress(platform, rctx, raw_text, language); }
+
+    // 2. Identity check
+    let actor_id_str = actor_id.to_string();
+    let resolution = binding.resolve(
+        actor_id,
+        default_runtime_class(),
+        &session_key_from(&[trace_id, &actor_id_str]),
+    );
+    match resolution {
+        IdentityResolution::Bound(id) => {
+            if let Some(e) = emitter { e.identity_admitted(rctx, platform, &id); }
+        }
+        IdentityResolution::Rejected(reason) => {
+            let size = match &binding.admin_actors {
+                Some(v) => v.len() as u32,
+                None    => 0,
+            };
+            if let Some(e) = emitter {
+                e.identity_rejected(rctx, platform, actor_id, "channel_fail_closed", size);
+            }
+            let user_msg = format!(
+                "⚠ Your identity `{}` is not authorised for this server ({})",
+                actor_id, reason.human()
+            );
+            if let Some(e) = emitter { e.delivery(rctx, platform, actor_id, DeliveryStatus::Skipped, None); }
+            return PipelineExecution {
+                pipeline:       PipelineOutcome::Rejected(user_msg),
+                router_outcome: None,
+            };
+        }
+    }
+
+    // 3. Router invocation (if a CommandKind was resolved)
+    let Some(remote) = remote else {
+        // No command — don't emit RuntimePipeline; just deliver a no-op.
+        return PipelineExecution {
+            pipeline:       PipelineOutcome::NoCommand(String::new()),
+            router_outcome: None,
+        };
+    };
+    let kind_label = kind_label.unwrap_or("unknown");
+
+    let ctx = match RemoteCommandContext::from_binding(
+        ctx_channel,
+        binding,
+        actor_id,
+        actor_name,
+        Role::Admin,
+        default_runtime_class(),
+        &session_key_from(&[trace_id, &actor_id_str]),
+    ) {
+        Ok(c)  => c,
+        Err(e) => {
+            // Shouldn't happen if Bound above was admitted, but stay safe.
+            let reply = format!("⚠ router-ctx-failed: {e}");
+            if let Some(em) = emitter {
+                em.runtime_completed(rctx, platform, kind_label, remote.map_index, &serde_json::json!({"error": &reply}));
+                em.delivery(rctx, platform, actor_id, DeliveryStatus::Failed, Some(&reply));
+            }
+            return PipelineExecution {
+                pipeline:       PipelineOutcome::Done(reply),
+                router_outcome: None,
+            };
+        }
+    };
+    if let Err(e) = authorize(&ctx, &remote) {
+        let reply = format!("⚠ Forbidden: {e}");
+        if let Some(em) = emitter {
+            em.runtime_completed(rctx, platform, kind_label, remote.map_index, &serde_json::json!({"error": &reply}));
+            em.delivery(rctx, platform, actor_id, DeliveryStatus::Failed, Some(&reply));
+        }
+        return PipelineExecution {
+            pipeline:       PipelineOutcome::Done(reply),
+            router_outcome: None,
+        };
+    }
+
+    match router(ctx, remote.clone()).await {
+        Ok(outcome) => {
+            let user_msg = outcome.to_user_message();
+            let v = serde_json::to_value(&outcome).unwrap_or(serde_json::Value::Null);
+            if let Some(e) = emitter {
+                e.runtime_completed(rctx, platform, kind_label, remote.map_index, &v);
+                e.delivery(rctx, platform, actor_id, DeliveryStatus::Delivered, None);
+            }
+            PipelineExecution {
+                pipeline:       PipelineOutcome::Done(user_msg),
+                router_outcome: Some(outcome),
+            }
+        }
+        Err(e) => {
+            let reply = format!("⚠ Router error: {e}");
+            if let Some(em) = emitter {
+                em.runtime_completed(rctx, platform, kind_label, remote.map_index, &serde_json::json!({"error": &reply}));
+                em.delivery(rctx, platform, actor_id, DeliveryStatus::Failed, Some(&reply));
+            }
+            PipelineExecution {
+                pipeline:       PipelineOutcome::Done(reply),
+                router_outcome: None,
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -677,6 +838,127 @@ mod tests {
         assert_eq!(tail.len(), 2);
         assert_eq!(tail[0].stage, ReceiptStage::ChannelIngress);
         assert_eq!(tail[1].stage, ReceiptStage::IdentityCheck);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // run_with_receipts_async — pipeline regression tests
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Mirror of `fake_config_get_router()` but async — the closure body
+    /// resolves to a future so the async pipeline can exercise the real
+    /// await path (the tokio runtime mock is implicit: `#[tokio::test]`).
+    fn fake_async_router() -> impl Fn(RemoteCommandContext, RemoteCommand)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<RouterOutcome, String>> + Send>>
+        + 'static
+    {
+        |_ctx, _cmd| {
+            Box::pin(async {
+                Ok(RouterOutcome::Status { running: true, maps: vec![] })
+            })
+        }
+    }
+
+    /// P27 happy path — the async pipeline must emit the same five-stage
+    /// trace as the sync pipeline: ChannelIngress → IdentityCheck(admitted)
+    /// → RuntimePipeline → ChannelDelivery(delivered).
+    #[tokio::test]
+    async fn async_pipeline_emits_full_trace_when_admitted() {
+        let (emitter, tmp, ledger) = fresh_emitter();
+        let admins = vec!["alice".to_string()];
+        let binding = gated_chat_binding(Channel::Web, "http-api:convex", admins);
+
+        let remote = RemoteCommand {
+            kind: CommandKind::Status,
+            map_index: None,
+            config_patch: None,
+            tail: None,
+        };
+        let outcome = run_with_receipts_async(
+            Some(&emitter), Platform::Web, Channel::Web,
+            &binding, "alice", "Alice", "trace-async-1", "/status", None,
+            Some("status"), Some(remote), fake_async_router(),
+        ).await;
+        assert!(matches!(outcome.pipeline, PipelineOutcome::Done(_)));
+        assert!(outcome.router_outcome.is_some(), "router outcome must be propagated for HTTP API");
+
+        let tail = ledger.tail(10).unwrap();
+        assert_eq!(tail.len(), 4, "got stages: {:?}", tail.iter().map(|r| r.stage.clone()).collect::<Vec<_>>());
+        assert_eq!(tail[0].stage, ReceiptStage::ChannelIngress);
+        assert_eq!(tail[1].stage, ReceiptStage::IdentityCheck);
+        assert_eq!(tail[1].payload["decision"], "admitted");
+        assert_eq!(tail[1].payload["identity"]["userId"], "alice");
+        assert_eq!(tail[2].stage, ReceiptStage::RuntimePipeline);
+        assert_eq!(tail[3].stage, ReceiptStage::ChannelDelivery);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// P27 reject path — non-admin actor must hit `IdentityResolution::Rejected`
+    /// and trigger only ChannelIngress → IdentityCheck(rejected) →
+    /// ChannelDelivery(skipped). The router must NEVER be invoked.
+    #[tokio::test]
+    async fn async_pipeline_emits_rejected_when_outsider_no_router() {
+        let (emitter, tmp, ledger) = fresh_emitter();
+        let admins = vec!["alice".to_string()];
+        let binding = gated_chat_binding(Channel::Web, "http-api:convex", admins);
+
+        let remote = RemoteCommand {
+            kind: CommandKind::Start,
+            map_index: None,
+            config_patch: None,
+            tail: None,
+        };
+        let outcome = run_with_receipts_async(
+            Some(&emitter), Platform::Web, Channel::Web,
+            &binding, "eve", "Eve", "trace-async-2", "/start", None,
+            Some("start"), Some(remote),
+            |_, _| Box::pin(async { panic!("router must NOT be invoked for rejected actor") }),
+        ).await;
+        assert!(matches!(outcome.pipeline, PipelineOutcome::Rejected(_)));
+        assert!(outcome.router_outcome.is_none(), "rejected path leaks no RouterOutcome");
+
+        let tail = ledger.tail(10).unwrap();
+        assert_eq!(tail.len(), 3, "rejected path should emit exactly 3 receipts");
+        assert_eq!(tail[0].stage, ReceiptStage::ChannelIngress);
+        assert_eq!(tail[1].stage, ReceiptStage::IdentityCheck);
+        assert_eq!(tail[1].payload["decision"], "rejected");
+        assert_eq!(tail[1].payload["actorId"], "eve");
+        assert_eq!(tail[2].stage, ReceiptStage::ChannelDelivery);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// P27 runtime-error path — admitted actor, router returns Err, must emit
+    /// RuntimePipeline + ChannelDelivery(Failed).
+    #[tokio::test]
+    async fn async_pipeline_emits_failure_when_router_errors() {
+        let (emitter, tmp, ledger) = fresh_emitter();
+        let admins = vec!["alice".to_string()];
+        let binding = gated_chat_binding(Channel::Web, "http-api:convex", admins);
+
+        let remote = RemoteCommand {
+            kind: CommandKind::Stop,
+            map_index: Some(2),
+            config_patch: None,
+            tail: None,
+        };
+        let outcome = run_with_receipts_async(
+            Some(&emitter), Platform::Web, Channel::Web,
+            &binding, "alice", "Alice", "trace-async-3", "/stop 2", None,
+            Some("stop"), Some(remote),
+            |_ctx, _cmd| Box::pin(async { Err("simulated launcher panic".to_string()) }),
+        ).await;
+        assert!(matches!(outcome.pipeline, PipelineOutcome::Done(ref s) if s.contains("Router error")));
+        assert!(outcome.router_outcome.is_none(), "router error leaks no RouterOutcome");
+
+        let tail = ledger.tail(10).unwrap();
+        assert_eq!(tail.len(), 4);
+        assert_eq!(tail[2].stage, ReceiptStage::RuntimePipeline);
+        assert!(tail[2].payload["outcome"]["error"].as_str().unwrap().contains("Router error"));
+        assert_eq!(tail[3].stage, ReceiptStage::ChannelDelivery);
+        assert_eq!(tail[3].payload["status"], "failed");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
