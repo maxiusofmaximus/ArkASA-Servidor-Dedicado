@@ -6,7 +6,71 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-> ## v2.1.0-rc.2 — ship-blocker patch cut
+> ## v2.1.0-rc.3 — audit-consolidated release candidate
+>
+> Single branch `fix/ga.1-secrets-keyring` now carries nine
+> audit findings closed end-to-end on top of the rc.2 baseline.
+> Branch consolidates `caef267` (rc.3 cleanup) + `ee3a1c6`
+> (rc.4 layer-tighten) + `4918126` (admin + CurseForge keyring)
+> + `72dee4f` (LF line endings) + `44680a5` (`.gitattributes`)
+> and merges two audit-driven commits:
+>
+> * **`8f4dd23`** — P31 (GDPR TTL janitor for receipts `rawText`,
+>   `Receipt.retention_expires_at_ms` + `DEFAULT_RAW_TEXT_RETENTION_MS = 30d`,
+>   `Ledger::sweep_expired` atomic `tmp+rename+fsync`, 3 tests,
+>   `receipts_sweep_expired` Tauri command) +
+>   P32 (7-axis identity via `PrincipalKind { Desktop, Loopback,
+>   Convex, Vercel }`, `Claims.principal` defaults to `Desktop`,
+>   `sign_jwt(principal, role)`, `admin_only_call` tagged) +
+>   P33 (WeChat primitives `sha1_smol` / `constant_time_eq` /
+>   `wechat_handshake_sha1` / `parse_wechat_xml_loose` + 3 tests
+>   relocated from `http_api.rs` to `wechat.rs`, ~115 LOC shed) +
+>   P19 (async router: `AsyncRouterFn -> BoxFuture<'static, Result<…>>`
+>   + `AdminApiState.async_router`, `admin_only_call` + `internal_dispatch`
+>   wrapped in `tokio::time::timeout(30s, …)`, legacy `router_arc` kept
+>   as a `tauri::async_runtime::handle().block_on` shim).
+> * **`0fc9933`** — P4 (`set_admin_feature_flag` persists to
+>   `<storage_dir>/admin_feature_flags.toml`; `false` deletes the key;
+>   `get_admin_feature_flag` + `admin_feature_flags_path` commands + 3
+>   tests including regex `[A-Za-z0-9_.]` validation) +
+>   P6 (`ark::diagnostics::check_steam_validate` honours `repair`;
+>   `steamcmd +force_install_dir +login anonymous +app_update 2430930
+>   validate +quit` returning last 8 non-empty lines tagged
+>   `status="ok"`, `repaired=true`; new `ark::set_no_window_flag(cmd)`
+>   helper centralises `CREATE_NO_WINDOW (0x08000000)` across
+>   `installer.rs` and the repair path, cfg_attr-guarded for non-Windows
+>   hosts) +
+>   P26 (`bridge::CommandKind::Logs` now joins
+>   `config.paths.server_dir + "ShooterGame/Saved/Logs/ShooterGame.log"`
+>   instead of the hardcoded `C:\ASA\server\…`) +
+>   P3b (`pub mod cli;` removed from `src-tauri/src/lib.rs`,
+>   `src-tauri/src/cli.rs` deleted, `docs/CLI.md` rewritten as the
+>   honest "NOT IMPLEMENTED in v2.1.0" banner pointing operators to
+>   the Desktop UI / loopback HTTP API / chat-bot / Vercel / Convex) +
+>   P9/P15 (`frontend/src/services/tauri.ts` literal-mock branch now
+>   `throw new Error('dev-mock-only: no mock implementation for command
+>   … Run pnpm run tauri:dev …')`).
+>
+> Verification on the merged commit `c5fdae0`: `cargo build --lib` 0
+> warnings, `cargo test --lib` 160 passed / 0 failed / 0 ignored,
+> `cargo build --release` clean (9 m 06 s), `pnpm exec tauri build
+> --no-bundle` produces `src-tauri\target\release\ark-asa-config.exe`,
+> `pnpm exec tsc --noEmit` 0 errors.
+>
+> **Still open at rc.3:** P5 (DB DAO Postgres/Supabase/Mongo/Convex
+> REST — only SQLite is real), P7 (WeChat Msg-Crypt HTTPS + SSH
+> russh listener wire-up), P10 (plugin daemon mounts), P11 (Tauri v2
+> capability permissions coupled to dispatch), P17 (WhatsApp outbound
+> reply via Graph), P18 (`backup.rs` 1346 LOC split), P22 + P23
+> (`integrations::hosting.rs` 552 LOC + the now-asyncable
+> `command_router.rs` split — both single-PR follow-ups), P27
+> (`admin_only_call`/`internal_dispatch` to adopt canonical
+> `run_with_receipts` pipeline — depends on P19 having landed, ready
+> to close out).
+
+---
+
+
 >
 > Branch `fix/tauri-invoke-acl-2.11.5` merged 7 bug-fix commits onto
 > the rc.1 baseline (all derived from real operator smoke tests on
