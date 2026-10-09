@@ -61,6 +61,8 @@ debug-logs/
 *.backup_*
 config/
 !src-tauri/src/config/
+!crates/ark-core/src/config/
+!android-app/app/src/main/kotlin/com/arkasa/mobile/presentation/config/
 steamcmd/
 server/
 backups/
@@ -129,3 +131,16 @@ graphify-out/cost.json
 graphify-out/cache/
 graphify-out/.graphify_root.tmp
 graphify-out/.graphify_python
+
+# Generated UniFFI bindings (regenerate with scripts/generate-uniffi-bindings.ps1)
+target/uniffi-bindings/
+crates/ark-mobile-facade/jvmTest/build/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+android-app/.gradle/
+
+# Native libs are built by scripts/build-android.ps1
+android-app/app/src/main/jniLibs/
+android-app/app/release/
+crates/ark-mobile-facade/jvmTest/.gradle/
