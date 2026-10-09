@@ -1,5 +1,8 @@
-pub mod config;
-pub mod error;
+// `config` (schema, TOML/INI, profiles, validators, drift, presets) and `error`
+// now live in the platform-agnostic `ark-core` crate so they can be shared with
+// the mobile companion. Re-export them under the historic `crate::config` /
+// `crate::error` paths so existing call sites keep working unchanged.
+pub use ark_core::{config, error};
 // P3b — the standalone `cli` module was deleted: it was 254 LOC of
 // fake-output skeleton documented in `docs/CLI.md` as if it shipped.
 // Operators use the desktop UI, the loopback HTTP API, or the
@@ -207,12 +210,25 @@ pub fn run() {
             // with /hooks/whatsapp + /api/v1/internal/dispatch).
             // Below: spawn each channel adapter using its dedicated env vars.
 
+            // P11 — Operator capability policy. `plugin_policy.toml` decides,
+            // per plugin id, whether the capability gate is enforced and which
+            // capabilities apply. Adapters that declare no capabilities get
+            // full access by default, so wiring this is behaviour-preserving
+            // until the operator opts into a restriction.
+            let policy = integrations::plugin_gateway::PluginPolicyFile::load();
+            let telegram_router = integrations::plugin_gateway::gate_router(
+                router_arc.clone(), policy.enforce_caps("telegram", &[]));
+            let discord_router = integrations::plugin_gateway::gate_router(
+                router_arc.clone(), policy.enforce_caps("discord", &[]));
+            let slack_router = integrations::plugin_gateway::gate_router(
+                router_arc.clone(), policy.enforce_caps("slack", &[]));
+
             // Telegram
             let bot_cfg = integrations::telegram::TelegramConfig::default();
             if bot_cfg.enabled {
                 let bot = integrations::telegram::TelegramBot::new(bot_cfg);
                 let _ = tauri::async_runtime::spawn(
-                    integrations::telegram::spawn_looper(bot, router_arc.clone()),
+                    integrations::telegram::spawn_looper(bot, telegram_router),
                 );
                 log::info!("telegram bot looper started");
             }
@@ -222,7 +238,7 @@ pub fn run() {
             if discord_cfg.is_active() {
                 let discord_bot = integrations::discord::DiscordBot::new(discord_cfg);
                 let _ = tauri::async_runtime::spawn(
-                    integrations::discord::spawn_looper(discord_bot, router_arc.clone()),
+                    integrations::discord::spawn_looper(discord_bot, discord_router),
                 );
                 log::info!("discord bot gateway started");
             }
@@ -232,24 +248,13 @@ pub fn run() {
             if slack_cfg.is_active() {
                 let slack_bot = integrations::slack::SlackBot::new(slack_cfg);
                 let _ = tauri::async_runtime::spawn(
-                    integrations::slack::spawn_looper(slack_bot, router_arc.clone()),
+                    integrations::slack::spawn_looper(slack_bot, slack_router),
                 );
                 log::info!("slack socket mode looper started");
             }
 
-            // v2.2 — Audit-log database (default = SQLite at APPDATA).
-            let db_cfg = integrations::database::DatabaseConfig::default();
-            if db_cfg.is_active() {
-                let db_cfg_clone = db_cfg.clone();
-                tauri::async_runtime::spawn(async move {
-                    match integrations::database::build_dao(&db_cfg_clone).await {
-                        Ok(_dao) => {
-                            log::info!("audit DAO ready ({})", db_cfg_clone.backend.label());
-                        }
-                        Err(e) => log::warn!("audit DAO init failed: {e}"),
-                    }
-                });
-            }
+            // v2.2 / P5 — Audit-log database init lives in the Tauri `setup`
+            // hook below (it needs the app handle to resolve the config dir).
 
             // Convex periodic push was wired at the holder.* branch
             // above (real spawn of `convex_push::spawn_publisher`).
@@ -276,17 +281,38 @@ pub fn run() {
             // `signal::maybe_spawn_subprocess`. If signal-cli is on
             // PATH and the operator configured `phone_e164`, spawn
             // --json daemon. Otherwise log gracefully.
-            let signal_cfg = integrations::signal::SignalConfig::from_secrets_or_env();
-            if let Some(_handle) =
-                integrations::signal::maybe_spawn_subprocess(&signal_cfg) {
-                log::info!(
-                    "signal subprocess spawned; plug the operator's auth \
-                     into signal-cli + add this hook as a 'linked device'"
-                );
+            // P10 — gate the autonomous daemon on the Plugin Hub registry so
+            // toggling the plugin off actually stops it (it previously spawned
+            // whenever credentials existed, ignoring the registry).
+            if crate::plugins::runtime_hooks::is_enabled("signal") {
+                let signal_cfg = integrations::signal::SignalConfig::from_secrets_or_env();
+                if let Some(_handle) =
+                    integrations::signal::maybe_spawn_subprocess(&signal_cfg) {
+                    log::info!(
+                        "signal subprocess spawned; plug the operator's auth \
+                         into signal-cli + add this hook as a 'linked device'"
+                    );
+                } else {
+                    log::debug!(
+                        "signal subprocess skipped (phone_e164 empty or signal-cli missing)"
+                    );
+                }
             } else {
-                log::debug!(
-                    "signal subprocess skipped (phone_e164 empty or signal-cli missing)"
-                );
+                log::debug!("signal plugin disabled in registry; signal-cli not spawned");
+            }
+
+            // P10 — one-shot mount report for every enabled plugin, then a
+            // 15 s watcher that logs runtime-state transitions (so a daemon
+            // that dies mid-flight is visible instead of silently degrading).
+            crate::plugins::runtime_hooks::report_at_boot();
+            {
+                let (tx, rx) = tokio::sync::watch::channel(false);
+                tauri::async_runtime::spawn(async move {
+                    // Keep the sender alive: the watcher then only ever ticks
+                    // (it would otherwise wake on a dropped sender).
+                    let _keep_alive = tx;
+                    crate::plugins::runtime_hooks::daemon_loop(rx).await;
+                });
             }
         });
     }
@@ -298,6 +324,53 @@ pub fn run() {
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::TrayIconBuilder;
+
+            // Pin the absolute config path for the process BEFORE the router
+            // can ever be invoked.
+            //
+            // The multi-channel router (`lib.rs` → `AsyncRouterFn`) resolves
+            // its config from `ARK_ASA_CONFIG_PATH`, falling back to the
+            // CWD-relative literal "server-config.toml". Nothing ever set the
+            // env var, and that relative path never exists next to a shipped
+            // binary, so every remote/loopback/chat command silently ran on
+            // `ServerConfig::default()` (wrong `server_dir`, wrong passwords,
+            // wrong ports). The desktop UI was unaffected because its Tauri
+            // commands receive the already-loaded config from the frontend.
+            //
+            // The router reads the variable lazily at dispatch time, so
+            // setting it here (once the app handle exists) is early enough.
+            if let Ok(dir) = commands::get_config_dir(app.handle()) {
+                let store = config::ProfileStore::new(dir);
+                match store.resolve_config_path(None) {
+                    Ok(cfg_path) => {
+                        std::env::set_var("ARK_ASA_CONFIG_PATH", &cfg_path);
+                        log::info!(
+                            "[config] active profile `{}` → ARK_ASA_CONFIG_PATH = {}",
+                            store.active_id(),
+                            cfg_path.display()
+                        );
+                    }
+                    Err(e) => log::warn!("[config] could not resolve active profile: {e}"),
+                }
+            } else {
+                log::warn!("[config] could not resolve config dir; router will fall back to defaults");
+            }
+
+            // v2.2 / P5 — Audit-log database. Load the operator's *persisted*
+            // choice (`<config_dir>/database.toml`, DB_* env override), build
+            // the DAO and **retain** it (previously the built DAO was dropped,
+            // so a selected Convex/Supabase/Postgres/Mongo backend never
+            // received a single row).
+            if let Ok(dir) = commands::get_config_dir(app.handle()) {
+                tauri::async_runtime::spawn(async move {
+                    let status = integrations::database::init_active_dao(&dir).await;
+                    if status.ready {
+                        log::info!("audit DAO ready ({}) — {}", status.backend, status.detail);
+                    } else {
+                        log::warn!("audit DAO init failed ({}): {}", status.backend, status.detail);
+                    }
+                });
+            }
 
             // Start one process-wide publisher for live server, network,
             // version, lifecycle and log snapshots.
@@ -383,6 +456,28 @@ pub fn run() {
             crate::commands::config::save_config,
             crate::commands::config::get_default_config,
             crate::commands::config::get_config_schema,
+            // Multi-server profiles
+            crate::commands::config::load_config_for_profile,
+            crate::commands::config::save_config_for_profile,
+            crate::commands::profiles::list_server_profiles,
+            crate::commands::profiles::active_server_profile,
+            crate::commands::profiles::set_active_server_profile,
+            crate::commands::profiles::create_server_profile,
+            crate::commands::profiles::rename_server_profile,
+            crate::commands::profiles::delete_server_profile,
+            crate::commands::profiles::server_profile_config_path,
+            // Custom validators (declarative "validator plugins")
+            crate::commands::config::list_custom_validators,
+            crate::commands::config::upsert_custom_validator,
+            crate::commands::config::remove_custom_validator,
+            crate::commands::config::custom_validators_path,
+            // Config drift + presets
+            crate::commands::config::detect_config_drift,
+            crate::commands::config::list_config_presets,
+            crate::commands::config::save_config_preset,
+            crate::commands::config::load_config_preset,
+            crate::commands::config::delete_config_preset,
+            crate::commands::config::config_presets_dir,
             // Remote admin (v2.1)
             crate::commands::integrations::admin_token,
             crate::commands::integrations::rotate_admin_token,
@@ -498,12 +593,23 @@ pub fn run() {
             crate::commands::integrations::list_hosting_providers,
             crate::commands::integrations::list_database_backends,
             crate::commands::integrations::validate_database_config,
+            crate::commands::integrations::get_database_config,
+            crate::commands::integrations::save_database_config,
+            crate::commands::integrations::database_status,
+            crate::commands::integrations::get_plugin_policy,
+            crate::commands::integrations::save_plugin_policy,
             crate::commands::integrations::record_hosting_deployment,
             // v2.2 — Receipts ledger
             crate::commands::receipts::receipts_probe,
             crate::commands::receipts::receipts_today_path,
             crate::commands::receipts::receipts_tail,
             crate::commands::receipts::receipts_sweep_expired,
+            // Durable action queue (shared state machine with the mobile app)
+            crate::commands::outbox::outbox_status,
+            crate::commands::outbox::outbox_list,
+            crate::commands::outbox::outbox_enqueue_command,
+            crate::commands::outbox::outbox_drain,
+            crate::commands::outbox::outbox_prune,
             // Ping / Tailscale
             crate::commands::utilities::start_ping,
             crate::commands::utilities::stop_ping,

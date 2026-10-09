@@ -1,0 +1,28 @@
+[package]
+name = "ark-mobile-facade"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "UniFFI facade over ark-core for the mobile companion app (Kotlin/Swift bindings)."
+
+[lib]
+# `cdylib` for Android/iOS dynamic linking; `staticlib` is what we want on iOS
+# (the linker dead-strips it); `lib` keeps the crate usable from Rust tests.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+ark-core = { path = "../ark-core" }
+thiserror = "1.0"
+uniffi = { version = "0.32", features = ["cli"] }
+# `ark-core`'s loader/persister/validator are async; the UniFFI surface is
+# synchronous, so the facade owns a small runtime to bridge the two.
+tokio = { version = "1.40", features = ["rt", "macros"] }
+
+[build-dependencies]
+uniffi = { version = "0.32", features = ["build"] }
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

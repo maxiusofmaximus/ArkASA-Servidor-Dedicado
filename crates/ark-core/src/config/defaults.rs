@@ -22,11 +22,15 @@ impl AppConfig {
         }
     }
 
+    /// Best-effort configuration directory for a *desktop* build.
+    ///
+    /// Mobile callers (Android/iOS) must NOT rely on this: they have no
+    /// `APPDATA`/`HOME` and no writable fixed path, so the facade is given the
+    /// app-private directory (`filesDir` / app container) from the host and
+    /// passes it down explicitly. This branch exists so the crate still
+    /// *compiles* for those targets and only panics if someone genuinely calls
+    /// desktop path resolution there, which the mobile facade never does.
     fn get_config_dir() -> PathBuf {
-        // Windows: %APPDATA%/ARK ASA Config Manager
-        // macOS: ~/Library/Application Support/ARK ASA Config Manager
-        // Linux: ~/.config/ark-asa-config
-
         #[cfg(target_os = "windows")]
         {
             let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
@@ -43,6 +47,30 @@ impl AppConfig {
         {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             PathBuf::from(home).join(".config/ark-asa-config")
+        }
+
+        // Android and iOS have no such convention; the host passes the
+        // directory in. Unreachable in the mobile facade, which never calls
+        // this, but required for the crate to build for those targets.
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            panic!(
+                "AppConfig::from_env() is desktop-only; on Android/iOS pass the \
+                 app-private config directory to the mobile facade constructor"
+            )
+        }
+
+        // Any other platform: fall back to a relative directory rather than
+        // failing to compile.
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "ios"
+        )))]
+        {
+            PathBuf::from("ark-asa-config")
         }
     }
 

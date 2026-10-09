@@ -1,0 +1,13 @@
+# Workspace root. Members are added as the platform-agnostic crates are
+# extracted; `src-tauri` keeps its own manifest and is picked up here so a
+# single `target/` at the repo root serves every crate (no per-crate targets).
+[workspace]
+resolver = "2"
+members = ["crates/ark-core", "crates/ark-mobile-facade", "src-tauri"]
+
+[workspace.package]
+version = "2.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["MaxiusOfMaximus"]
+license = "MIT"

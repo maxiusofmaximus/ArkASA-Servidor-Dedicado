@@ -67,7 +67,7 @@ impl ConfigPersister {
     // Game.ini  →  C:\ASA\server\ShooterGame\Saved\Config\WindowsServer\Game.ini
     // Contains gameplay multipliers, stat arrays, and game-mode flags.
     // ─────────────────────────────────────────────────────────────────
-    fn generate_game_ini_content(config: &ServerConfig) -> String {
+    pub fn generate_game_ini_content(config: &ServerConfig) -> String {
         let m  = &config.multipliers;
         let xp = &config.xp_multipliers;
         let w  = &config.world;
@@ -295,7 +295,7 @@ impl ConfigPersister {
     // GameUserSettings.ini  →  ...WindowsServer\GameUserSettings.ini
     // Contains server identification, network, session settings, mods.
     // ─────────────────────────────────────────────────────────────────
-    fn generate_gamesettings_ini_content(config: &ServerConfig) -> String {
+    pub fn generate_gamesettings_ini_content(config: &ServerConfig) -> String {
         let id  = &config.identification;
         let net = &config.network;
         let gp  = &config.gameplay;
