@@ -7,7 +7,7 @@ use crate::config::schema::ServerConfig;
 use crate::integrations::command_router::{
     CommandKind, MapDigest, IpDigest, RouterError, RouterOutcome,
 };
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[cfg(windows)]
 fn kill_all_ark() {
@@ -21,6 +21,40 @@ fn kill_all_ark() {
     let _ = std::process::Command::new("pkill")
         .args(["-f", "ArkAscendedServer"])
         .output();
+}
+
+/// Regenerate `Game.ini` + `GameUserSettings.ini` from the in-memory config
+/// immediately before launch.
+///
+/// Since `launcher.rs` stopped putting the admin/join passwords in the `?`
+/// chain (ASA mangles them — see the long note in `ark/launcher.rs`), the INI
+/// is now the single source of truth for them. Every start path (desktop UI,
+/// loopback HTTP API, chat bots, standalone CLI) therefore has to make sure
+/// the on-disk INI is fresh before the server boots, or the server would come
+/// up with no admin password at all.
+async fn ensure_ini(config: &ServerConfig) {
+    use crate::config::ConfigPersister;
+    use std::path::Path;
+    if !config.paths.game_ini_path.trim().is_empty() {
+        if let Err(e) = ConfigPersister::generate_game_ini(
+            config,
+            Path::new(&config.paths.game_ini_path),
+        )
+        .await
+        {
+            log::warn!("[bridge] could not regenerate Game.ini: {e}");
+        }
+    }
+    if !config.paths.gamesettings_ini_path.trim().is_empty() {
+        if let Err(e) = ConfigPersister::generate_gamesettings_ini(
+            config,
+            Path::new(&config.paths.gamesettings_ini_path),
+        )
+        .await
+        {
+            log::warn!("[bridge] could not regenerate GameUserSettings.ini: {e}");
+        }
+    }
 }
 
 /// Start one map instance directly (no cluster delays).
@@ -46,6 +80,7 @@ async fn start_instance_inner(config: &ServerConfig, map_index: usize) -> Result
             "[paths] ark_exe is empty".to_string(),
         ));
     }
+    ensure_ini(config).await;
     let args = build_launch_args(config, &map, map_index);
     let (game_port, _peer_port, _query_port, _rcon_port) = config.network.ports_for_index(map_index);
 
@@ -54,6 +89,11 @@ async fn start_instance_inner(config: &ServerConfig, map_index: usize) -> Result
     for flag in &args.flags {
         cmd.arg(flag);
     }
+    // Detach the child's stdio. Without this, when the launcher is a console
+    // process (e.g. the `ark-config` CLI) the server inherits the console and
+    // floods it with GameAnalytics/UE output; worse, it dies with the parent
+    // shell. ARK writes its own ShooterGame.log regardless, so nothing is lost.
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 
     #[cfg(windows)]
     {
@@ -124,6 +164,7 @@ async fn start_full_cluster_inner(
         ));
     }
 
+    ensure_ini(config).await;
     let mut launched: Vec<String> = Vec::with_capacity(maps.len());
 
     for (i, raw_map) in maps.iter().enumerate() {
@@ -140,6 +181,9 @@ async fn start_full_cluster_inner(
         for flag in &args.flags {
             cmd.arg(flag);
         }
+        // See start_instance_inner: detach stdio so a console launcher (CLI)
+        // neither floods its terminal nor takes the server down with it.
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 
         #[cfg(windows)]
         {

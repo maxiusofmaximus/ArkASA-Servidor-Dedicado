@@ -97,6 +97,127 @@ impl Gateway {
     }
 }
 
+// ── Operator policy + router wiring (P11) ────────────────────────────────────
+// `Gateway` above was metadata-only until it was reachable. This section makes
+// it operational: an operator-editable `plugin_policy.toml` decides, per
+// plugin id, whether the gate is enforced and which capabilities apply; and
+// `gate_router` wraps the shared router so the gate actually fires before the
+// trusted dispatcher.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+/// Per-plugin operator decision.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginPolicyEntry {
+    /// `None`/`true` → enforce the capability check; `Some(false)` → pass-through.
+    #[serde(default)]
+    pub enforce: Option<bool>,
+    /// Override the capabilities the adapter declared. Keys: `recv`, `send`,
+    /// `secrets`, `oauth`. When set, this is authoritative.
+    #[serde(default)]
+    pub capabilities: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginPolicyFile {
+    #[serde(default)]
+    pub plugins: BTreeMap<String, PluginPolicyEntry>,
+}
+
+fn cap_from_key(k: &str) -> Option<PluginCapability> {
+    Some(match k.trim().to_ascii_lowercase().as_str() {
+        "recv" | "messagesrecv" | "messages_recv" => PluginCapability::MessagesRecv,
+        "send" | "messagessend" | "messages_send" => PluginCapability::MessagesSend,
+        "secrets" | "requiresecrets" | "requires_secrets" => PluginCapability::RequiresSecrets,
+        "oauth" | "requiresoauth" | "requires_oauth" => PluginCapability::RequiresOAuth,
+        _ => return None,
+    })
+}
+
+impl PluginPolicyFile {
+    pub fn path() -> std::path::PathBuf {
+        crate::plugins::plugin_storage_dir().join("plugin_policy.toml")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|raw| toml::from_str::<Self>(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let path = Self::path();
+        let dir = path.parent().ok_or("plugin_policy path missing parent")?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("create {dir:?}: {e}"))?;
+        let raw = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let tmp = dir.join(".plugin_policy.tmp");
+        std::fs::write(&tmp, raw).map_err(|e| format!("write tmp: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+        Ok(())
+    }
+
+    /// Enforced unless the operator explicitly set `enforce = false`.
+    pub fn enforce(&self, plugin_id: &str) -> bool {
+        self.plugins
+            .get(plugin_id)
+            .and_then(|e| e.enforce)
+            .unwrap_or(true)
+    }
+
+    /// Effective capabilities for `plugin_id`: the operator override when
+    /// present, else the adapter's declared set, else full (so enforcing never
+    /// silently bricks an adapter that declared nothing).
+    pub fn caps_for(&self, plugin_id: &str, declared: &[PluginCapability]) -> Vec<PluginCapability> {
+        if let Some(over) = self.plugins.get(plugin_id).and_then(|e| e.capabilities.as_ref()) {
+            let parsed: Vec<PluginCapability> = over.iter().filter_map(|k| cap_from_key(k)).collect();
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+        if !declared.is_empty() {
+            return declared.to_vec();
+        }
+        vec![
+            PluginCapability::MessagesRecv,
+            PluginCapability::MessagesSend,
+            PluginCapability::RequiresSecrets,
+            PluginCapability::RequiresOAuth,
+        ]
+    }
+
+    /// Resolve the caps to enforce for a plugin, honouring `enforce`.
+    /// `None` → do not gate (pass-through).
+    pub fn enforce_caps(&self, plugin_id: &str, declared: &[PluginCapability]) -> Option<Vec<PluginCapability>> {
+        if self.enforce(plugin_id) {
+            Some(self.caps_for(plugin_id, declared))
+        } else {
+            None
+        }
+    }
+}
+
+/// Wrap a shared router so the capability gate fires before the trusted
+/// dispatcher. `caps` empty or `None` → returns the router unchanged.
+pub fn gate_router(
+    router: Arc<crate::integrations::RouterFn>,
+    caps: Option<Vec<PluginCapability>>,
+) -> Arc<crate::integrations::RouterFn> {
+    let Some(caps) = caps else { return router };
+    if caps.is_empty() {
+        return router;
+    }
+    Arc::new(move |ctx, cmd| {
+        if let Err(reason) = Gateway::check(&caps, &cmd.kind) {
+            log::warn!("capability gate refused {:?}: {reason}", cmd.kind);
+            return Err(format!("capability denied for {:?}: {reason}", cmd.kind));
+        }
+        router(ctx, cmd)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +278,47 @@ mod tests {
         // The dispatcher must NOT have been called.
         assert_eq!(counter.load(Ordering::SeqCst), 0,
             "wrap must short-circuit before downstream");
+    }
+
+    #[test]
+    fn policy_caps_override_and_enforce() {
+        let mut f = PluginPolicyFile::default();
+        // Default: enforced, declared caps used.
+        assert!(f.enforce("telegram"));
+        assert_eq!(f.caps_for("telegram", &[PluginCapability::MessagesRecv]).len(), 1);
+        // Operator restricts telegram to recv only.
+        f.plugins.insert("telegram".into(), PluginPolicyEntry {
+            enforce: None,
+            capabilities: Some(vec!["recv".into()]),
+        });
+        let caps = f
+            .enforce_caps("telegram", &[PluginCapability::MessagesRecv, PluginCapability::MessagesSend])
+            .unwrap();
+        assert_eq!(caps, vec![PluginCapability::MessagesRecv]);
+        assert!(Gateway::check(&caps, &Start).is_err());
+        assert!(Gateway::check(&caps, &Status).is_ok());
+        // Operator disables enforcement → pass-through.
+        f.plugins.get_mut("telegram").unwrap().enforce = Some(false);
+        assert!(f.enforce_caps("telegram", &[PluginCapability::MessagesRecv]).is_none());
+    }
+
+    #[test]
+    fn gate_router_blocks_writes_and_passes_reads() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let reached = Arc::new(AtomicUsize::new(0));
+        let r = reached.clone();
+        let inner: Arc<crate::integrations::RouterFn> = Arc::new(move |_c, _cmd| {
+            r.fetch_add(1, Ordering::SeqCst);
+            Ok(RouterOutcome::Error { reason: "ok".into() })
+        });
+        let gated = gate_router(inner, Some(vec![PluginCapability::MessagesRecv]));
+        let ctx = RemoteCommandContext::desktop(
+            "t", "T", crate::integrations::command_router::Role::Admin,
+        );
+        let mk = |k| RemoteCommand { kind: k, map_index: None, config_patch: None, tail: None };
+        assert!(gated(ctx.clone(), mk(Status)).is_ok());
+        assert!(gated(ctx, mk(Start)).is_err());
+        assert_eq!(reached.load(Ordering::SeqCst), 1, "only the read reached the router");
     }
 }

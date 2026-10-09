@@ -163,23 +163,60 @@ pub fn snapshot() -> Vec<(String, PluginRuntimeState)> {
         .collect()
 }
 
-/// Polled every `Duration::from_secs(15)` so we can spot a plugin
-/// that crashes mid-flight; used by lib::run() in its tokio::spawn.
+/// Whether the operator enabled this plugin in the Plugin Hub registry.
+/// Adapters must gate their autonomous daemons on this, or toggling a plugin
+/// off in the UI would not actually stop it.
+pub fn is_enabled(plugin_id: &str) -> bool {
+    registry::read().enabled.contains(plugin_id)
+}
+
+/// Log the mount state of every enabled plugin once, at boot. Replaces the
+/// previous silence where a plugin could be "● connected" in the UI while its
+/// runtime was parked.
+pub fn report_at_boot() {
+    let rfile = registry::read();
+    if rfile.enabled.is_empty() {
+        log::info!("[plugins] registry empty — no adapter daemons mounted");
+        return;
+    }
+    for (id, st) in snapshot() {
+        match st {
+            PluginRuntimeState::Disabled => {}
+            failed @ PluginRuntimeState::Failed(_) => {
+                log::warn!("[plugins] {}: {}", id, state_label(failed));
+            }
+            other => log::info!("[plugins] {}: {}", id, state_label(other)),
+        }
+    }
+}
+
+/// Watcher: every `Duration::from_secs(15)` it re-reads the runtime state and
+/// logs **transitions only**, so a daemon that dies mid-flight (e.g. the sshd
+/// sidecar going down, so `ssh` flips Running → PendingCredentials) becomes
+/// visible in the log instead of silently degrading. Spawned once from
+/// `lib::run()`; exits when the `shutdown` watch flips to `true`.
 pub async fn daemon_loop(mut rx: tokio::sync::watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(Duration::from_secs(15));
     tick.tick().await; // skip first immediate
+    let mut prev: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     loop {
         tokio::select! {
             _ = tick.tick() => {}
-            _ = rx.changed() => {}
+            changed = rx.changed() => {
+                // Sender dropped or value changed — either way, stop if asked.
+                if changed.is_err() || *rx.borrow() { break; }
+            }
         }
         if *rx.borrow() {
             break;
         }
-        // We could refresh state here. Today state is read lazily
-        // each time a Tauri command runs; the watch channel is
-        // only here to let `lib::run()` exit cleanly when the
-        // operator closes the app.
+        for (id, st) in snapshot() {
+            let label = state_label(st);
+            if prev.get(&id) != Some(&label) {
+                log::info!("[plugins] {} → {}", id, label);
+                prev.insert(id, label);
+            }
+        }
     }
 }
 
@@ -258,6 +295,17 @@ mod tests {
     fn plugin_runtime_state_derives_partial_eq() {
         assert_eq!(PluginRuntimeState::Disabled, PluginRuntimeState::Disabled);
         assert_ne!(PluginRuntimeState::Disabled, PluginRuntimeState::EventDriven);
+    }
+
+    #[test]
+    fn is_enabled_false_for_unknown_id() {
+        assert!(!is_enabled("definitely-not-a-real-plugin-id"));
+    }
+
+    #[test]
+    fn report_at_boot_never_panics() {
+        // Must be safe to call with whatever registry/secret state exists.
+        report_at_boot();
     }
 
     #[test]

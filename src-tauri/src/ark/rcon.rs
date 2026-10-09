@@ -117,16 +117,10 @@ impl RconClient {
 }
 
 /// Build a Source RCON framed packet.
-/// Layout: size(4 LE) | id(4 LE) | type(4 LE) | body | NUL | NUL
+///
+/// Delegates to the shared protocol implementation in `ark-core`, so the wire
+/// format has exactly one definition across the desktop app, the CLI and the
+/// mobile companion — and is covered by that crate's tests.
 fn rcon_packet(id: i32, ptype: i32, body: &str) -> Vec<u8> {
-    let body_bytes = body.as_bytes();
-    let size = 4 + 4 + body_bytes.len() + 2; // id + type + body + 2×NUL
-    let mut pkt = Vec::with_capacity(4 + size);
-    pkt.extend_from_slice(&(size as i32).to_le_bytes());
-    pkt.extend_from_slice(&id.to_le_bytes());
-    pkt.extend_from_slice(&ptype.to_le_bytes());
-    pkt.extend_from_slice(body_bytes);
-    pkt.push(0); // body NUL
-    pkt.push(0); // trailing NUL
-    pkt
+    ark_core::rcon::encode_packet(id, ptype, body)
 }

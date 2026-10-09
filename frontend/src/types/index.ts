@@ -1,5 +1,5 @@
 // Primary and sub-tab type unions
-export type PrimaryTab = 'arks' | 'mod_settings' | 'game_rules' | 'advanced' | 'engrams'
+export type PrimaryTab = 'arks' | 'mod_settings' | 'game_rules' | 'advanced' | 'engrams' | 'analytics'
 export type GameRulesSubTab = 'player' | 'creature' | 'structure' | 'world' | 'rules'
 export type AdvancedSubTab = 'pve' | 'pvp' | 'world' | 'wild_dino' | 'tamed_dino' | 'player' | 'xp_multipliers' | 'misc'
 export type ModSettingsSubTab = 'active_mods' | 'available_mods'

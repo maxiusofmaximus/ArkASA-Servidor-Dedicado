@@ -37,6 +37,12 @@ pub struct WeChatConfig {
     pub corp_secret:       String,    // corpsecret
     pub agent_id:          String,    // application id
     pub admin_user_ids:    String,    // comma-separated WeChat userIds
+    /// Msg-Crypt token configured in the WeChat Work app console.
+    #[serde(default)]
+    pub token:             String,
+    /// Msg-Crypt `EncodingAESKey` (43 chars, base64 of 32 bytes without pad).
+    #[serde(default)]
+    pub encoding_aes_key:  String,
 }
 
 impl WeChatConfig {
@@ -48,6 +54,8 @@ impl WeChatConfig {
                 corp_secret:    get("corp_secret"),
                 agent_id:       get("agent_id"),
                 admin_user_ids: get("admin_user_ids"),
+                token:             get("token"),
+                encoding_aes_key:  get("encoding_aes_key"),
             };
         }
         Self {
@@ -55,6 +63,8 @@ impl WeChatConfig {
             corp_secret:    std::env::var("WECHAT_CORP_SECRET").unwrap_or_default(),
             agent_id:       std::env::var("WECHAT_AGENT_ID").unwrap_or_default(),
             admin_user_ids: std::env::var("WECHAT_ADMIN_USER_IDS").unwrap_or_default(),
+            token:             std::env::var("WECHAT_TOKEN").unwrap_or_default(),
+            encoding_aes_key:  std::env::var("WECHAT_ENCODING_AES_KEY").unwrap_or_default(),
         }
     }
     pub fn is_admin(&self, user_id: &str) -> bool {
@@ -71,6 +81,8 @@ impl Default for WeChatConfig {
             corp_secret:    String::new(),
             agent_id:       String::new(),
             admin_user_ids: String::new(),
+            token:             String::new(),
+            encoding_aes_key:  String::new(),
         }
     }
 }
@@ -199,6 +211,116 @@ pub fn wechat_handshake_sha1(corp_secret: &str, timestamp: &str, nonce: &str) ->
         let _ = write!(&mut hex, "{b:02x}");
     }
     hex
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P7 — WeChat Work Msg-Crypt (the real encrypted callback)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// WeChat Work callbacks can be AESCBC-encrypted. The algorithm (documented by
+// Tencent) is:
+//   * `EncodingAESKey` is 43 base64 chars → 32 bytes (append `=` to decode).
+//   * AES-256-CBC, IV = first 16 bytes of the key, PKCS#7 padding.
+//   * Plaintext layout: 16 random bytes | 4-byte BE msg length | msg | receiveid.
+//   * `msg_signature` = SHA-1 of the lexicographically-sorted
+//     [token, timestamp, nonce, encrypt] concatenated with no separator.
+//
+// Previously the webhook trusted plain XML and only had a handshake SHA-1
+// helper (P33). This is the verification + decryption path.
+
+fn aes_key_bytes(encoding_aes_key: &str) -> Result<Vec<u8>, String> {
+    let mut key_b64 = encoding_aes_key.trim().to_string();
+    if key_b64.len() != 44 {
+        key_b64.push('=');
+    }
+    use base64::Engine as _;
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(key_b64.as_bytes())
+        .map_err(|e| format!("EncodingAESKey base64: {e}"))?;
+    if key.len() != 32 {
+        return Err(format!("EncodingAESKey must decode to 32 bytes, got {}", key.len()));
+    }
+    Ok(key)
+}
+
+/// SHA-1 over the sorted `[token, timestamp, nonce, encrypt]` (hex).
+pub fn msg_signature(token: &str, timestamp: &str, nonce: &str, encrypt: &str) -> String {
+    let mut parts = [token, timestamp, nonce, encrypt];
+    parts.sort_unstable();
+    let d = sha1_smol::Sha1::from(parts.concat().as_bytes()).digest();
+    let mut hex = String::with_capacity(40);
+    use std::fmt::Write;
+    for b in d.bytes() {
+        let _ = write!(&mut hex, "{b:02x}");
+    }
+    hex
+}
+
+/// Decrypt an `EncodingAESKey`-encrypted payload and return the plaintext XML.
+pub fn decrypt_msg(encoding_aes_key: &str, encrypt_b64: &str) -> Result<String, String> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use base64::Engine as _;
+
+    let key = aes_key_bytes(encoding_aes_key)?;
+    let iv = &key[..16];
+    let mut buf = base64::engine::general_purpose::STANDARD
+        .decode(encrypt_b64.trim().as_bytes())
+        .map_err(|e| format!("ciphertext base64: {e}"))?;
+
+    let pt = cbc::Decryptor::<aes::Aes256>::new_from_slices(&key, iv)
+        .map_err(|e| e.to_string())?
+        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .map_err(|e| format!("AES-CBC decrypt: {e}"))?;
+
+    if pt.len() < 20 {
+        return Err("decrypted payload too short".into());
+    }
+    let msg_len = u32::from_be_bytes([pt[16], pt[17], pt[18], pt[19]]) as usize;
+    if 20 + msg_len > pt.len() {
+        return Err("declared msg length exceeds payload".into());
+    }
+    std::str::from_utf8(&pt[20..20 + msg_len])
+        .map(|s| s.to_string())
+        .map_err(|e| format!("payload not utf-8: {e}"))
+}
+
+/// Encrypt a payload (`receive_id` = corp_id). Used for replies and tests.
+pub fn encrypt_msg(encoding_aes_key: &str, receive_id: &str, plaintext: &str) -> Result<String, String> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use base64::Engine as _;
+
+    let key = aes_key_bytes(encoding_aes_key)?;
+    let iv = &key[..16];
+
+    let mut body = Vec::with_capacity(20 + plaintext.len() + receive_id.len());
+    body.extend_from_slice(&[0u8; 16]); // random nonce (zeros acceptable for callbacks/tests)
+    body.extend_from_slice(&(plaintext.len() as u32).to_be_bytes());
+    body.extend_from_slice(plaintext.as_bytes());
+    body.extend_from_slice(receive_id.as_bytes());
+
+    let mut buf = vec![0u8; body.len() + 16]; // room for PKCS#7 padding
+    buf[..body.len()].copy_from_slice(&body);
+    let ct = cbc::Encryptor::<aes::Aes256>::new_from_slices(&key, iv)
+        .map_err(|e| e.to_string())?
+        .encrypt_padded_mut::<Pkcs7>(&mut buf, body.len())
+        .map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(ct))
+}
+
+/// Full verification: check `msg_signature` in constant time, then decrypt.
+pub fn decrypt_and_verify(
+    token: &str,
+    encoding_aes_key: &str,
+    msg_signature_hex: &str,
+    timestamp: &str,
+    nonce: &str,
+    encrypt_b64: &str,
+) -> Result<String, String> {
+    let expected = msg_signature(token, timestamp, nonce, encrypt_b64);
+    if !constant_time_eq(expected.as_bytes(), msg_signature_hex.trim().as_bytes()) {
+        return Err("msg_signature mismatch".into());
+    }
+    decrypt_msg(encoding_aes_key, encrypt_b64)
 }
 
 /// Tiny pull-style XML→flat-field extractor for WeChat Work.
@@ -366,8 +488,46 @@ mod tests {
         </xml>"#;
         let v = parse_wechat_xml_loose(xml);
         assert_eq!(v["ToUserName"], "corp_xxx");
-        assert_eq!(v["Content"], "this is 🦊 content");
+        assert_eq!(v["Content"], format!("this is {} content", '\u{1F98A}'));
         assert_eq!(v["MsgType"], "text");
         assert!(v["CreateTime"].is_string());
+    }
+
+    // ── P7: Msg-Crypt ────────────────────────────────────────────────────────
+
+    /// A valid 43-char EncodingAESKey (base64 of 32 bytes, padding stripped).
+    fn test_aes_key() -> String {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode([0x42u8; 32]);
+        b64.trim_end_matches('=').to_string()
+    }
+
+    #[test]
+    fn msgcrypt_roundtrip() {
+        let key = test_aes_key();
+        assert_eq!(key.len(), 43);
+        let xml = "<xml><Content>hola</Content></xml>";
+        let enc = encrypt_msg(&key, "corp_abc", xml).unwrap();
+        let dec = decrypt_msg(&key, &enc).unwrap();
+        assert_eq!(dec, xml);
+    }
+
+    #[test]
+    fn msgcrypt_signature_verifies_and_rejects_tampering() {
+        let key = test_aes_key();
+        let enc = encrypt_msg(&key, "corp_abc", "<xml/>").unwrap();
+        let sig = msg_signature("TOK", "1700000000", "NONCE", &enc);
+        // Correct signature → decrypts.
+        assert!(decrypt_and_verify("TOK", &key, &sig, "1700000000", "NONCE", &enc).is_ok());
+        // Wrong token → constant-time mismatch.
+        assert!(decrypt_and_verify("BAD", &key, &sig, "1700000000", "NONCE", &enc).is_err());
+        // Tampered ciphertext → mismatch too.
+        let tampered = format!("{}A", enc);
+        assert!(decrypt_and_verify("TOK", &key, &sig, "1700000000", "NONCE", &tampered).is_err());
+    }
+
+    #[test]
+    fn msgcrypt_rejects_bad_key_length() {
+        assert!(decrypt_msg("tooshort", "AAAA").is_err());
     }
 }

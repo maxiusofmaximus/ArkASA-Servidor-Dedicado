@@ -31,27 +31,35 @@ pub async fn server_status() -> std::result::Result<serde_json::Value, String> {
     }))
 }
 
+/// Load the **active** server profile's config (multi-server aware). Every
+/// command that only needs "the server I'm looking at" must go through this
+/// instead of hardcoding `server-config.toml`, or it would ignore the profile
+/// registry and report the wrong server's paths.
+pub(crate) async fn active_config(app: &tauri::AppHandle) -> std::result::Result<ServerConfig, String> {
+    let cfg_dir = crate::commands::get_config_dir(app)?;
+    tokio::fs::create_dir_all(&cfg_dir).await.map_err(|e| e.to_string())?;
+    let store = crate::config::ProfileStore::new(cfg_dir);
+    let path = store.resolve_config_path(None)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+    crate::config::ConfigLoader::load_or_default(&path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_server_logs(app: tauri::AppHandle, lines: Option<i32>) -> std::result::Result<Vec<String>, String> {
-    let cfg_dir = crate::commands::get_config_dir(&app)?;
-    tokio::fs::create_dir_all(&cfg_dir).await.map_err(|e| e.to_string())?;
-    let config = crate::config::ConfigLoader::load_or_default(&cfg_dir.join("server-config.toml"))
-        .await
-        .map_err(|e| e.to_string())?;
+    let config = active_config(&app).await?;
     let n = lines.unwrap_or(100).clamp(1, 5000) as usize;
     backup::read_server_log(config.paths.server_dir, None, n)
         .await
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<serde_json::Value, String> {
-    let cfg_dir = crate::commands::get_config_dir(&app)?;
-    tokio::fs::create_dir_all(&cfg_dir).await.map_err(|e| e.to_string())?;
-    let config = crate::config::ConfigLoader::load_or_default(&cfg_dir.join("server-config.toml"))
-        .await
-        .map_err(|e| e.to_string())?;
-
+/// Gather the runtime metrics for one config. No Tauri handle is needed, so
+/// the Prometheus exporter (plain axum handler) can reuse this exact logic.
+pub(crate) async fn metrics_for_config(config: &ServerConfig) -> serde_json::Value {
     let pid = ark_process_pid().await;
     let (memory_mb, network) = match pid {
         Some(p) => {
@@ -78,7 +86,13 @@ pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<se
         .ok()
         .and_then(|lines| extract_last_stat_fps(&lines));
 
-    Ok(json!({
+    // Config-derived context so the analytics dashboard can render the
+    // "what am I running" panel without a second round-trip.
+    let maps_total   = config.effective_maps().len();
+    let active_mods  = config.mods.active_mods.len();
+    let (game_port, _peer, query_port, rcon_port) = config.network.ports_for_index(0);
+
+    json!({
         // Per P28: we no longer ship null fields the UI was painting as
         // phatom zeros.  Only keys with real data are emitted:
         "running":        pid.is_some(),
@@ -87,7 +101,34 @@ pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<se
         "memory_mb":      memory_mb,    // None if live-parse failed
         "fps":            fps,          // None if log hasn't seen Stat FPS
         "udp_conns":      network,      // None on linux
-    }))
+        // Config context (always present):
+        "session_name":   config.identification.session_name,
+        "max_players":    config.gameplay.max_players,
+        "mods_count":     active_mods,
+        "maps_total":     maps_total,
+        "game_port":      game_port,
+        "query_port":     query_port,
+        "rcon_port":      rcon_port,
+        "server_platform": config.network.server_platform,
+        "server_dir":     config.paths.server_dir,
+        "timestamp_ms":   chrono::Utc::now().timestamp_millis(),
+    })
+}
+
+#[tauri::command]
+pub async fn get_server_metrics(app: tauri::AppHandle) -> std::result::Result<serde_json::Value, String> {
+    let config = active_config(&app).await?;
+    Ok(metrics_for_config(&config).await)
+}
+
+/// Resolve the active config from `ARK_ASA_CONFIG_PATH` and gather metrics.
+/// Used by the Prometheus exporter (loopback HTTP), which has no AppHandle.
+pub(crate) async fn metrics_from_env() -> Option<serde_json::Value> {
+    let path = std::env::var("ARK_ASA_CONFIG_PATH").ok()?;
+    let config = crate::config::ConfigLoader::load_or_default(std::path::Path::new(&path))
+        .await
+        .ok()?;
+    Some(metrics_for_config(&config).await)
 }
 
 async fn ark_process_pid() -> Option<u32> {
@@ -198,8 +239,22 @@ pub struct ServerVersionInfo {
 #[tauri::command]
 pub async fn check_server_version(config: ServerConfig) -> Result<ServerVersionInfo, String> {
     let server_dir = std::path::PathBuf::from(&config.paths.server_dir);
-    let steamapps = server_dir.join("steamapps");
-    let manifest = steamapps.join("appmanifest_2430930.acf");
+    // A steamcmd install keeps `appmanifest_2430930.acf` INSIDE the install
+    // dir (`<install>/steamapps/`). A Steam-client install keeps it in the
+    // library's `steamapps/`, i.e. two levels up from
+    // `<library>/steamapps/common/<game>`. Without this fallback a
+    // Steam-client server always reported `local_buildid = None` and looked
+    // permanently out of date.
+    let mut manifest = server_dir.join("steamapps").join("appmanifest_2430930.acf");
+    if !manifest.exists() {
+        let library_manifest = server_dir
+            .join("..")
+            .join("..")
+            .join("appmanifest_2430930.acf");
+        if library_manifest.exists() {
+            manifest = library_manifest;
+        }
+    }
     let local_buildid = read_local_buildid(&manifest).map_err(|e| e.to_string())?;
     let latest_buildid = read_remote_buildid(&config.paths.steam_cmd_dir)
         .await

@@ -46,13 +46,22 @@ pub fn build_launch_args(config: &ServerConfig, map: &str, instance_idx: usize) 
     };
 
     // ── URL-style parameter string (first CLI arg) ────────────────────────────
-    let mut url = format!(
-        "{}?listen?SessionName={}?ServerAdminPassword={}",
-        map, session_name, config.identification.admin_password,
-    );
-    if !config.identification.server_password.is_empty() {
-        url.push_str(&format!("?ServerPassword={}", config.identification.server_password));
-    }
+    // The admin and join passwords are deliberately NOT passed as `?` options.
+    //
+    // ASA parses this `?`-chain left-to-right and treats *everything after
+    // `ServerAdminPassword=`* as part of the password value. A URL such as
+    //   …?ServerAdminPassword=pw?ServerPassword=join?MaxPlayers=70?…
+    // therefore lands in GameUserSettings.ini as
+    //   ServerAdminPassword=pw?ServerPassword=join?MaxPlayers=70?…
+    // which silently breaks RCON authentication and the in-game
+    // `enablecheats <password>` (the server's real password becomes the whole
+    // tail). Both passwords are written to GameUserSettings.ini instead (see
+    // `config::persister::generate_gamesettings_ini`), which is the
+    // ARK-recommended placement and survives the boot re-read. `bridge.rs`
+    // regenerates that INI from the live config before every launch, so the
+    // file is authoritative for passwords even when starting from the CLI or a
+    // remote admin channel.
+    let mut url = format!("{}?listen?SessionName={}", map, session_name);
     // ServerPlatform is mandatory in ASA so the server registers in the
     // EOS/Steam browser. Default to ALL for crossplay if operator hasn't set it.
     let platform = if config.network.server_platform.trim().is_empty() {

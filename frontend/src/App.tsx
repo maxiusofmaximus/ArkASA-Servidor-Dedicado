@@ -17,6 +17,7 @@ import ArkLayout from './components/ArkLayout'
 import PrimaryNav from './components/PrimaryNav'
 import SubNav from './components/SubNav'
 import ActionBar from './components/ActionBar'
+import ServerSwitcher from './components/ServerSwitcher'
 import DifficultyModal from './components/DifficultyModal'
 import OptionsModal from './components/OptionsModal'
 import ConfigDiffViewer from './components/ConfigDiffViewer'
@@ -46,6 +47,7 @@ const MiscTab = lazy(() => import('./pages/advanced/MiscTab'))
 const ActiveModsTab = lazy(() => import('./pages/mod-settings/ActiveModsTab'))
 const AvailableModsTab = lazy(() => import('./pages/mod-settings/AvailableModsTab'))
 const EngramsTab = lazy(() => import('./pages/engrams/EngramsTab'))
+const AnalyticsTab = lazy(() => import('./pages/analytics/AnalyticsTab'))
 
 import type { ServerConfig, GameRulesSubTab, AdvancedSubTab } from './types'
 
@@ -345,6 +347,7 @@ function App() {
       switch (primaryTab) {
         case 'arks':         return <ArksTab config={config} />
         case 'engrams':      return <EngramsTab />
+        case 'analytics':    return <AnalyticsTab config={config} />
         case 'mod_settings': return modSettingsSubTab === 'active_mods' ? <ActiveModsTab /> : <AvailableModsTab />
         case 'game_rules':   return GAME_RULES_TABS[gameRulesSubTab]?.(config) ?? null
         case 'advanced':     return ADVANCED_TABS[advancedSubTab]?.(config) ?? null
@@ -424,6 +427,10 @@ function App() {
           </div>
         </div>
       )}
+
+      <div className="px-3 pt-2">
+        <ServerSwitcher onSwitched={loadConfig} />
+      </div>
 
       <ActionBar
         onSave={handleSave}

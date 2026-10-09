@@ -6,6 +6,15 @@ import { invoke } from '../../services/tauri'
 interface DbBackendView {
   key: string
   label: string
+  local: boolean
+  implemented: boolean
+  note: string
+}
+
+interface DaoStatus {
+  backend: string
+  ready: boolean
+  detail: string
 }
 
 interface DbConfig {
@@ -35,12 +44,46 @@ export default function DatabaseTab() {
   const [deployStatus, setDeployStatus] = useState<'idle' | 'ok' | 'fail'>('idle')
   const [deployError, setDeployError] = useState('')
   const [deployLog, setDeployLog] = useState('')
+  const [dao, setDao] = useState<DaoStatus | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [savedOk, setSavedOk] = useState(false)
 
   useEffect(() => {
     invoke<DbBackendView[]>('list_database_backends')
       .then(setBackends)
       .catch(() => setBackends([]))
+    invoke<DbConfig>('get_database_config')
+      .then((c) => setCfg(c))
+      .catch(() => {})
+    invoke<DaoStatus>('database_status')
+      .then(setDao)
+      .catch(() => {})
   }, [])
+
+  const save = async () => {
+    setSaving(true)
+    setSavedOk(false)
+    setError('')
+    try {
+      const st = await invoke<DaoStatus>('save_database_config', {
+        cfg: {
+          backend: cfg.backend,
+          url: cfg.url,
+          api_key: cfg.api_key,
+          schema: cfg.schema,
+          table: cfg.table,
+        },
+      })
+      setDao(st)
+      setSavedOk(true)
+      setTimeout(() => setSavedOk(false), 2000)
+    } catch (e: unknown) {
+      setStatus('fail')
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const validate = async () => {
     setValidating(true)
@@ -106,6 +149,14 @@ export default function DatabaseTab() {
           options={backendOptions}
           placeholder="—"
         />
+        {(() => {
+          const sel = backends.find((b) => b.key === cfg.backend)
+          return sel ? (
+            <p className={`text-[10px] leading-relaxed ${sel.local ? 'text-ark-cyan/50' : 'text-amber-400/70'}`}>
+              {sel.implemented ? '•' : '⚠'} {sel.note}
+            </p>
+          ) : null
+        })()}
         <Field
           label={cfg.backend === 'sqlite' ? 'File path' : 'URL'}
           value={cfg.url}
@@ -141,7 +192,7 @@ export default function DatabaseTab() {
           value={cfg.table}
           onChange={(v) => setCfg({ ...cfg, table: v })}
         />
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={validate}
             disabled={validating || !cfg.url}
@@ -149,13 +200,32 @@ export default function DatabaseTab() {
           >
             {validating ? tk('validating', 'Validating…') : tk('btn_validate', 'VALIDATE')}
           </button>
+          <button
+            onClick={save}
+            disabled={saving || !cfg.url}
+            className="ark-action-btn px-4 py-2 text-xs tracking-widest disabled:opacity-40"
+          >
+            {saving ? tk('saving', 'Saving…') : tk('btn_save', 'SAVE')}
+          </button>
           {status === 'ok' && (
             <span className="text-emerald-400 text-xs tracking-widest">✓ {tk('db_valid', 'Config valid')}</span>
+          )}
+          {savedOk && (
+            <span className="text-emerald-400 text-xs tracking-widest">✓ {tk('db_saved', 'Saved & applied')}</span>
           )}
           {status === 'fail' && (
             <span className="text-red-400 text-xs">⚠ {error}</span>
           )}
         </div>
+        {dao && (
+          <p className="text-[10px] text-ark-cyan/50">
+            {tk('db_active_backend', 'Active backend')}: <span className="text-white/70">{dao.backend}</span> —{' '}
+            {dao.ready
+              ? <span className="text-emerald-400">ready</span>
+              : <span className="text-red-400">not initialised</span>}
+            {!dao.ready && dao.detail ? ` · ${dao.detail}` : ''}
+          </p>
+        )}
       </Section>
 
       <Section title={tk('section_db_notes', 'Behaviour')}>

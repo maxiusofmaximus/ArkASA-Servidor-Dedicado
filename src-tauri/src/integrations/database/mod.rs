@@ -43,6 +43,55 @@ impl DbBackend {
         }
     }
 
+    /// Stable, lowercased key used in the UI / TOML / env var.
+    pub fn key(self) -> &'static str {
+        match self {
+            DbBackend::Sqlite | DbBackend::SqliteAlt => "sqlite",
+            DbBackend::Convex => "convex",
+            DbBackend::Supabase => "supabase",
+            DbBackend::Insforge => "insforge",
+            DbBackend::Postgres => "postgres",
+            DbBackend::Mongodb => "mongodb",
+        }
+    }
+
+    /// SQLite is the only zero-config, always-available backend.
+    pub fn is_local(self) -> bool {
+        matches!(self, DbBackend::Sqlite | DbBackend::SqliteAlt)
+    }
+
+    /// Parse from the stable key (`DB_BACKEND` / `database.toml`).
+    pub fn from_key(s: &str) -> Option<DbBackend> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "sqlite" | "sqlitealt" => DbBackend::Sqlite,
+            "convex" => DbBackend::Convex,
+            "supabase" => DbBackend::Supabase,
+            "insforge" => DbBackend::Insforge,
+            "postgres" | "postgresql" => DbBackend::Postgres,
+            "mongodb" | "mongo" => DbBackend::Mongodb,
+            _ => return None,
+        })
+    }
+
+    /// Honest one-liner shown in the UI so the operator knows what a backend
+    /// actually needs before picking it.
+    pub fn note(self) -> &'static str {
+        match self {
+            DbBackend::Sqlite | DbBackend::SqliteAlt =>
+                "Default · zero-config · local file, no network",
+            DbBackend::Convex =>
+                "HTTP DAO implemented · requires the `command_log:append` / `:recent` functions on your deployment",
+            DbBackend::Supabase =>
+                "HTTP DAO implemented · PostgREST table + anon key required",
+            DbBackend::Insforge =>
+                "HTTP DAO implemented · InsForge records API + key required",
+            DbBackend::Postgres =>
+                "PostgREST-compatible HTTP DAO · use a PostgREST URL (native libpq not bundled)",
+            DbBackend::Mongodb =>
+                "Atlas Data API DAO · use the Data API base URL + API key",
+        }
+    }
+
     pub fn all() -> &'static [DbBackend] {
         const ALL: &[DbBackend] = &[
             DbBackend::Sqlite,
@@ -60,12 +109,21 @@ impl DbBackend {
 pub struct DbBackendView {
     pub key: String,
     pub label: String,
+    pub local: bool,
+    /// A DAO exists for this backend (all of them do today). Kept explicit so
+    /// future "advertised but unimplemented" entries can say so instead of
+    /// silently no-op'ing.
+    pub implemented: bool,
+    pub note: String,
 }
 
 pub fn all_backends() -> Vec<DbBackendView> {
     DbBackend::all().iter().map(|b| DbBackendView {
-        key: format!("{:?}", b).to_lowercase(),
+        key: b.key().to_string(),
         label: b.label().to_string(),
+        local: b.is_local(),
+        implemented: true,
+        note: b.note().to_string(),
     }).collect()
 }
 
@@ -112,6 +170,42 @@ impl DatabaseConfig {
     pub fn is_active(&self) -> bool {
         !self.url.is_empty()
     }
+
+    /// `<config_dir>/database.toml`.
+    pub fn path(config_dir: &std::path::Path) -> std::path::PathBuf {
+        config_dir.join("database.toml")
+    }
+
+    /// Resolve the effective backend config: the persisted
+    /// `<config_dir>/database.toml` (the operator's choice made in the UI),
+    /// optionally overridden per-field by `DB_BACKEND` / `DB_URL` /
+    /// `DB_API_KEY` / `DB_SCHEMA` / `DB_TABLE` so headless & CI runs can force
+    /// a backend. Missing file → env/defaults.
+    pub fn load(config_dir: &std::path::Path) -> DatabaseConfig {
+        let mut cfg = std::fs::read_to_string(Self::path(config_dir))
+            .ok()
+            .and_then(|raw| toml::from_str::<DatabaseConfig>(&raw).ok())
+            .unwrap_or_default();
+        if let Ok(v) = std::env::var("DB_BACKEND") {
+            if let Some(b) = DbBackend::from_key(&v) { cfg.backend = b; }
+        }
+        if let Ok(v) = std::env::var("DB_URL")     { if !v.is_empty() { cfg.url = v; } }
+        if let Ok(v) = std::env::var("DB_API_KEY") { if !v.is_empty() { cfg.api_key = v; } }
+        if let Ok(v) = std::env::var("DB_SCHEMA")  { if !v.is_empty() { cfg.schema = v; } }
+        if let Ok(v) = std::env::var("DB_TABLE")   { if !v.is_empty() { cfg.table = v; } }
+        cfg
+    }
+
+    /// Persist the operator's choice.
+    pub fn save(&self, config_dir: &std::path::Path) -> Result<(), String> {
+        std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        let raw = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let path = Self::path(config_dir);
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, raw).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("rename -> {}: {e}", path.display()))?;
+        Ok(())
+    }
 }
 
 /// Async Insert API contract — every backend implements this.
@@ -145,6 +239,67 @@ pub async fn build_dao(cfg: &DatabaseConfig) -> Result<Box<dyn AuditDao>, String
 
 pub mod sqlite;
 pub mod remote;
+
+// ── Active DAO (P5) ──────────────────────────────────────────────────────────
+// The built DAO used to be discarded (`Ok(_dao)`), so a selected Convex /
+// Supabase / Postgres / Mongo backend never received a single row — the
+// catalog was effectively a label. We now retain it in process-wide state and
+// expose its readiness so the UI can tell the truth.
+
+use std::sync::{Arc, Mutex, OnceLock};
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct DaoStatus {
+    pub backend: String,
+    pub ready: bool,
+    pub detail: String,
+}
+
+fn status_cell() -> &'static Mutex<DaoStatus> {
+    static S: OnceLock<Mutex<DaoStatus>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(DaoStatus::default()))
+}
+
+fn dao_cell() -> &'static Mutex<Option<Arc<dyn AuditDao>>> {
+    static D: OnceLock<Mutex<Option<Arc<dyn AuditDao>>>> = OnceLock::new();
+    D.get_or_init(|| Mutex::new(None))
+}
+
+/// Current DAO readiness (backend key + whether it initialised).
+pub fn dao_status() -> DaoStatus {
+    status_cell().lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// The live DAO, when one is configured and initialised.
+pub fn active_dao() -> Option<Arc<dyn AuditDao>> {
+    dao_cell().lock().ok().and_then(|g| g.clone())
+}
+
+/// Load the persisted config, build the DAO and **retain** it.
+pub async fn init_active_dao(config_dir: &std::path::Path) -> DaoStatus {
+    let cfg = DatabaseConfig::load(config_dir);
+    let status = match build_dao(&cfg).await {
+        Ok(dao) => {
+            if let Ok(mut slot) = dao_cell().lock() {
+                *slot = Some(Arc::from(dao));
+            }
+            DaoStatus {
+                backend: cfg.backend.key().to_string(),
+                ready: true,
+                detail: cfg.backend.note().to_string(),
+            }
+        }
+        Err(e) => DaoStatus {
+            backend: cfg.backend.key().to_string(),
+            ready: false,
+            detail: e,
+        },
+    };
+    if let Ok(mut s) = status_cell().lock() {
+        *s = status.clone();
+    }
+    status
+}
 
 #[cfg(test)]
 mod tests {

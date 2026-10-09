@@ -12,10 +12,11 @@ const tabs: { id: PrimaryTab; label: string }[] = [
   { id: 'game_rules', label: 'GAME RULES' },
   { id: 'advanced', label: 'ADVANCED' },
   { id: 'engrams', label: 'ENGRAMS' },
+  { id: 'analytics', label: 'ANALYTICS' },
 ]
 
-const leftTabs  = tabs.slice(0, 2)  // ARKS, MOD SETTINGS
-const rightTabs = tabs.slice(2)     // GAME RULES, ADVANCED, ENGRAMS
+const leftTabs  = tabs.slice(0, 3)  // ARKS, MOD SETTINGS, GAME RULES
+const rightTabs = tabs.slice(3)     // ADVANCED, ENGRAMS, ANALYTICS
 
 export default function PrimaryNav({ activeTab, onTabChange }: PrimaryNavProps) {
   const tabClass = (id: PrimaryTab) =>

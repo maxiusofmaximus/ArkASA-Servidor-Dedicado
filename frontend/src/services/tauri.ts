@@ -389,6 +389,43 @@ function createMockInvoke() {
     // Alias so load_config_or_default returns the same shape as get_default_config
     mocks['load_config_or_default'] = mocks['get_default_config']
 
+    // ── Multi-server profile registry (dev mocks) ────────────────────────────
+    mocks['list_server_profiles'] = () => ([
+      { id: 'default', name: 'Servidor principal', config_path: '/dev/null/server-config.toml', created_at_unix: 0 },
+    ])
+    mocks['active_server_profile'] = () => 'default'
+    mocks['set_active_server_profile'] = () => null
+    mocks['rename_server_profile'] = () => null
+    mocks['delete_server_profile'] = () => null
+    mocks['create_server_profile'] = (args: any) => ({
+      id: 'dev', name: args?.name ?? 'Nuevo servidor',
+      config_path: '/dev/null/server-config.toml', created_at_unix: 0,
+    })
+    mocks['server_profile_config_path'] = () => '/dev/null/server-config.toml'
+    mocks['load_config_for_profile'] = mocks['get_default_config']
+    mocks['save_config_for_profile'] = () => null
+
+    // ── Analytics (dev mocks) ────────────────────────────────────────────────
+    mocks['get_server_metrics'] = () => ({
+      running: false, process_id: null, image_name: 'ArkAscendedServer.exe',
+      memory_mb: null, fps: null, udp_conns: null,
+      session_name: 'ARK Server', max_players: 70, mods_count: 0, maps_total: 1,
+      game_port: 7777, query_port: 27015, rcon_port: 27020,
+      server_platform: 'ALL', server_dir: 'C:\\ASA\\server',
+      timestamp_ms: Date.now(),
+    })
+    mocks['get_cluster_instance_status'] = () => ([
+      { map_index: 0, map_id: 'TheIsland_WP', map_label: 'TheIsland', running: false },
+    ])
+
+    // ── Database adapter (P5 dev mocks) ──────────────────────────────────────
+    mocks['list_database_backends'] = () => ([
+      { key: 'sqlite', label: 'SQLite (local)', local: true, implemented: true, note: 'Default · zero-config · local file, no network' },
+    ])
+    mocks['get_database_config'] = () => ({ backend: 'sqlite', url: 'ark-config.db', api_key: '', schema: 'public', table: 'command_log' })
+    mocks['save_database_config'] = () => ({ backend: 'sqlite', ready: true, detail: 'default' })
+    mocks['database_status'] = () => ({ backend: 'sqlite', ready: true, detail: 'default' })
+
     // Backup mocks
     mocks['backup_saves'] = () => `ark_backup_TheIsland_WP_${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}.zip`
     mocks['read_server_log'] = () => [

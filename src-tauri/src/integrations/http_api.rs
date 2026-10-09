@@ -115,7 +115,10 @@ pub async fn spawn_loopback_server(
         .route("/api/v1/stop",         post(post_stop))
         .route("/api/v1/restart",      post(post_restart))
         .route("/api/v1/internal/dispatch", post(internal_dispatch))
-        .route("/api/v1/internal/auth-check", get(auth_check))
+            .route("/api/v1/internal/auth-check", get(auth_check))
+            .route("/api/v1/metrics",      get(get_metrics))
+            .route("/api/v1/public/status",    get(public_status))
+            .route("/api/v1/public/badge.svg", get(public_badge))
         // ── Session 10: webhook receivers for chat-bot plugins ──
         // WhatsApp Cloud & WeChat Work POST raw payloads here. Both
         // honour per-plugin secrets (HMAC for WhatsApp, plain XML
@@ -156,6 +159,13 @@ async fn run_auth(
     if path == "/api/v1/health" {
         return next.run(req).await;
     }
+    // Public read-only surface — only when the operator opted in.
+    if path.starts_with("/api/v1/public/") {
+        if crate::integrations::public_status::enabled() {
+            return next.run(req).await;
+        }
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
 
     let header = req
         .headers()
@@ -191,6 +201,51 @@ fn unauthorized(reason: &str) -> Response {
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
+
+/// Prometheus exposition (bearer-authenticated like every other endpoint, so
+/// the scrape config must send `Authorization: Bearer <token>`).
+async fn get_metrics() -> Response {
+    let body = crate::integrations::metrics_exporter::render().await;
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
+}
+
+/// Public, sanitised status document (opt-in via `ARK_ASA_PUBLIC_STATUS`).
+async fn public_status() -> Response {
+    (
+        StatusCode::OK,
+        Json(crate::integrations::public_status::status_json().await),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct BadgeQuery {
+    #[serde(default)]
+    label: String,
+}
+
+/// Public SVG badge `?label=ARK` (opt-in via `ARK_ASA_PUBLIC_STATUS`).
+async fn public_badge(Query(q): Query<BadgeQuery>) -> Response {
+    let svg = crate::integrations::public_status::badge_svg(&q.label).await;
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "image/svg+xml; charset=utf-8",
+        )],
+        svg,
+    )
+        .into_response()
+}
+
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
@@ -582,9 +637,17 @@ async fn whatsapp_webhook(
      }))).into_response()
 }
 
+#[derive(Deserialize)]
+struct WechatQuery {
+    #[serde(default)] msg_signature: Option<String>,
+    #[serde(default)] timestamp:     Option<String>,
+    #[serde(default)] nonce:         Option<String>,
+}
+
 async fn wechat_webhook(
     AxState(_api): AxState<Arc<AdminApiState>>,
     headers: axum::http::HeaderMap,
+    Query(q): Query<WechatQuery>,
     body: axum::body::Bytes,
 ) -> Response {
     // WeChat Work's GET ?msg_signature handshake is handled at boot
@@ -609,10 +672,51 @@ async fn wechat_webhook(
     if !auth_ok {
         return err_500("wechat webhook: missing token header / xml body".into());
     }
-    let payload: crate::integrations::wechat::WeChatXmlPayload = match serde_json::from_slice(&body) {
+
+    // P7 — real Msg-Crypt. WeChat Work can encrypt the callback body; when it
+    // does, the payload is `<xml><Encrypt>…</Encrypt></xml>` plus
+    // `?msg_signature=&timestamp=&nonce=` query params. Verify the SHA-1
+    // signature in constant time and AES-256-CBC-decrypt before parsing.
+    let text_body = std::str::from_utf8(&body).unwrap_or("");
+    let decrypted: String;
+    let body: &[u8] = if text_body.contains("<Encrypt>") {
+        let (Some(sig), Some(ts), Some(nonce)) =
+            (q.msg_signature.as_deref(), q.timestamp.as_deref(), q.nonce.as_deref())
+        else {
+            return err_500(
+                "wechat webhook: encrypted body without msg_signature/timestamp/nonce".into(),
+            );
+        };
+        if cfg.token.is_empty() || cfg.encoding_aes_key.is_empty() {
+            return err_500(
+                "wechat webhook: encrypted callback but token / EncodingAESKey not configured".into(),
+            );
+        }
+        let encrypt = crate::integrations::wechat::parse_wechat_xml_loose(text_body)
+            .get("Encrypt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        match crate::integrations::wechat::decrypt_and_verify(
+            &cfg.token, &cfg.encoding_aes_key, sig, ts, nonce, &encrypt,
+        ) {
+            Ok(xml) => {
+                decrypted = xml;
+                decrypted.as_bytes()
+            }
+            Err(e) => {
+                log::warn!("wechat webhook: Msg-Crypt rejected: {e}");
+                return unauthorized(&format!("wechat msg_signature: {e}"));
+            }
+        }
+    } else {
+        body.as_ref()
+    };
+
+    let payload: crate::integrations::wechat::WeChatXmlPayload = match serde_json::from_slice(body) {
         Ok(p)  => p,
         Err(_e) => {
-            let text = match std::str::from_utf8(&body) {
+            let text = match std::str::from_utf8(body) {
                 Ok(s)  => s,
                 Err(_) => return err_500("wechat webhook: not utf-8".into()),
             };

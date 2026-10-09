@@ -314,6 +314,47 @@ pub fn validate_database_config(cfg: integrations::database::DatabaseConfig) -> 
     }
 }
 
+/// P11 — read the operator-editable plugin capability policy.
+#[tauri::command]
+pub fn get_plugin_policy() -> integrations::plugin_gateway::PluginPolicyFile {
+    integrations::plugin_gateway::PluginPolicyFile::load()
+}
+
+/// P11 — persist the plugin capability policy (`plugin_policy.toml`).
+#[tauri::command]
+pub fn save_plugin_policy(
+    policy: integrations::plugin_gateway::PluginPolicyFile,
+) -> Result<(), String> {
+    policy.save()
+}
+
+/// v2.2 / P5 — read the *persisted* database choice (`database.toml` + env).
+#[tauri::command]
+pub fn get_database_config(
+    app: tauri::AppHandle,
+) -> Result<integrations::database::DatabaseConfig, String> {
+    let dir = crate::commands::get_config_dir(&app)?;
+    Ok(integrations::database::DatabaseConfig::load(&dir))
+}
+
+/// v2.2 / P5 — persist the choice, rebuild + retain the DAO, return readiness.
+#[tauri::command]
+pub async fn save_database_config(
+    app: tauri::AppHandle,
+    cfg: integrations::database::DatabaseConfig,
+) -> Result<integrations::database::DaoStatus, String> {
+    validate_database_config(cfg.clone())?;
+    let dir = crate::commands::get_config_dir(&app)?;
+    cfg.save(&dir)?;
+    Ok(integrations::database::init_active_dao(&dir).await)
+}
+
+/// v2.2 / P5 — current DAO readiness (backend + whether it initialised).
+#[tauri::command]
+pub fn database_status() -> integrations::database::DaoStatus {
+    integrations::database::dao_status()
+}
+
 /// v2.2 — Hosting adapter: track a deployment record inside the audit log.
 #[tauri::command]
 pub async fn record_hosting_deployment(target: integrations::hosting::HostTarget) -> Result<(), String> {
