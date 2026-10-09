@@ -36,12 +36,8 @@ pub enum Channel {
     Ssh,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Admin,
-    Viewer,
-}
+/// Single source of truth lives in `auth` (P24).
+pub use crate::auth::Role;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteCommandContext {

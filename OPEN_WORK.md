@@ -68,10 +68,10 @@ of the tree.
 | P21 | High     | `commands/integrations.rs::update_server` lives in the wrong module — it operates on the ARK server (SteamCmdInstaller::update), not on integrations. Move to `commands/server.rs`. | Audit 2026-07 (this branch) |
 | P22 | Med      | `integrations/hosting.rs` (552 LOC) mixes 4 concerns. Split into `hosting/{types,cloud_init,bash_runner,provider_cli,self_hosted}.rs`. | Audit 2026-07 (this branch) |
 | P23 | Med      | `integrations/command_router.rs` (571 LOC) mixes types / authorization / `run_with_receipts` pipeline. Split into `command_router/{types,policy,pipeline}.rs`. | Audit 2026-07 (this branch) |
-| P24 | Med      | `Role` enum duplicated as `auth::Role` + `command_router::Role`. Replace with `pub use crate::auth::Role;` alias in command_router. | Audit 2026-07 (this branch) |
+| P24 | Med      | `Role` enum duplicated as `auth::Role` + `command_router::Role`. Replace with `pub use crate::auth::Role;` alias in command_router. | Audit 2026-07 (this branch) | | **CLOSED** (`refactor(P24)`)
 | P25 | Med      | `map_display_label` byte-identical 2x (`commands/server.rs:350`, `integrations/bridge.rs:12`), drift in 3 inline siblings. Promote to `ark::map_label()`. | Audit 2026-07 (this branch) |
 | P26 | Med      | `bridge.rs:289` hardcodes `C:\\ASA\\server\\ShooterGame\\Saved\\Logs\\ShooterGame.log` for `CommandKind::Logs`. Re-route through `config.paths.server_dir`. | Audit 2026-07 (this branch) | **CLOSED** (`0fc9933`) |
-| P27 | Med      | `admin_only_call` + `internal_dispatch` reimplement `run_with_receipts` inline. After P19 lands (async router), reuse the canonical pipeline. | Audit 2026-07 (this branch) |
+| P27 | Med      | `admin_only_call` + `internal_dispatch` reimplement `run_with_receipts` inline. After P19 lands (async router), reuse the canonical pipeline. | Audit 2026-07 (this branch) | | **CLOSED** (`b8cd166`)
 | P28 | Med      | `commands/server.rs:113-152` 5 stub metric helpers (`process_uptime_seconds` always None, etc.) shipped in production JS payload as `null` keys. Either populate via `wmic` or strip the null keys. | Audit 2026-07 (this branch) |
 | P29 | Med      | `lib.rs:53-67` 5-second busy-wait poll for `auth_holder`. Replace with `tokio::sync::watch` or `Notify`. | Audit 2026-07 (this branch) |
 | P30 | Med      | Once-Lock proliferation (`AUTH_HOLDER`, `admin_state_holder`, `EMITTER`, `TEST_STORE`). Migrate to `app.manage(...)` pattern (Tauri 2 idiom). | Audit 2026-07 (this branch) |
