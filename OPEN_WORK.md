@@ -5,19 +5,57 @@
 > that adds surface, replaces documented behaviour, or is a feature
 > belongs here.
 
+## 2026-09 — Steam-install migration pass (closed)
+
+Three production defects surfaced while migrating a real cluster from a
+steamcmd install to the Steam-client install, plus the CLI that was
+previously "documented but not shipped":
+
+| ID  | Sev  | Title                                                                                         | Status |
+|-----|------|-----------------------------------------------------------------------------------------------|--------|
+| S1  | **High** | `ServerAdminPassword` in the `?`-option chain corrupts `GameUserSettings.ini` → RCON auth fails **and** in-game `enablecheats <password>` rejects the real password | **CLOSED** (`ark/launcher.rs`: passwords no longer in the URL; INI only) |
+| S2  | High | `ARK_ASA_CONFIG_PATH` was never set → the multi-channel router ran every remote / loopback / chat command on `ServerConfig::default()` (wrong `server_dir`, ports, passwords) | **CLOSED** (`lib.rs::run` setup hook pins `commands::get_config_dir`) |
+| S3  | Med  | Server spawned from a console front-end inherited the launcher's console (terminal flood + died with the parent shell) | **CLOSED** (`integrations/bridge.rs`: `Stdio::null()` on both spawn sites) |
+| —   | —    | Standalone CLI                                                                                 | **SHIPPED** — real `ark-config` bin replaces the P3b "delete it" decision. See `docs/CLI.md`. |
+
+Also in this pass: `bridge::ensure_ini` regenerates `Game.ini` /
+`GameUserSettings.ini` before every launch, so the INI is authoritative for the
+passwords on **all** start paths (UI, CLI, bots, Convex). The uncommitted WIP
+`src-tauri/src/integrations/command_router/` directory — a partial P23 split
+that collided with `command_router.rs` and broke every build — was parked out
+of the tree.
+
+**Still open from this pass (report only, not yet actioned):**
+- ~~Single-server desktop~~ **DONE** — multi-server profiles shipped
+  (`config::profiles` + `ServerSwitcher` UI + `ark-config servers` / `--server`).
+- README roadmap items: ~~performance-analytics dashboard~~ **DONE** (ANALYTICS
+  tab), ~~custom validator plugin system~~ **DONE**
+  (`config::custom_validators` + `ark-config validate`), mobile companion app
+  **still open**.
+- **App signed self-updater not wired.** `tauri-plugin-updater` is neither a
+  dependency nor configured in `tauri.conf.json` (no `plugins.updater` /
+  `pubkey` / `endpoints`, no `bundle.createUpdaterArtifacts`). TODO.md F9
+  assumed it shipped; it did not. Needs the operator's signing keys + a release
+  feed to be testable. (The **server** update path *is* now verified —
+  `ark-config update`.)
+- New idea backlog from the deep-research pass: see
+  [`docs/RESEARCH_NEW_IDEAS.md`](./docs/RESEARCH_NEW_IDEAS.md) (Prometheus
+  exporter, config-drift detection, mod-health watchdog, self-healing
+  guardian, status page, cluster integrity guard, …).
+
 ## Status summary
 
 | ID  | Severity  | Title                                                              | Source                                          |
 |-----|-----------|--------------------------------------------------------------------|-------------------------------------------------|
 | P3  | **Med-Hi** | `src-tauri/src/cli.rs` dead but documented                          | Audit 2026-07 (this branch)                     | **CLOSED** (P3b, `0fc9933`) |
 | P4  | Med       | `set_admin_feature_flag` silently no-ops                            | Audit 2026-07 (this branch)                     | **CLOSED** (`0fc9933`) |
-| P5  | Med       | DB DAO only SQLite — Convex/Supabase/Mongo/Postgres are labels-only | Audit 2026-07 (this branch)                     |
+| P5  | Med       | DB DAO only SQLite — Convex/Supabase/Mongo/Postgres are labels-only | Audit 2026-07 (this branch) | **CLOSED** (DAO retained + config persisted + UI wired) |
 | P6  | Med       | `diagnostics::steam_validate` ignores `_repair` flag                | Audit 2026-07 (this branch)                     | **CLOSED** (`0fc9933`) |
-| P7  | Med       | WeChat / SSH adapters lack real wire-up                             | Audit 2026-07 (this branch)                     |
+| P7  | Med       | WeChat / SSH adapters lack real wire-up                             | Audit 2026-07 (this branch)                     | **CLOSED** — WeChat Msg-Crypt (verify + AES-256-CBC decrypt) implemented and wired into `/hooks/wechat`; SSH is the **sidecar** design by decision (Sesión 13), no russh. |
 | P8  | Med       | `auth/admin.jwt` plaintext on disk, not keyring                     | Audit 2026-07 (this branch)                     | **CLOSED** (`fix/ga.1-secrets-keyring`) |
 | P9  | Low-Med   | 33 dev-mode mock strings in `services/tauri.ts`                     | Audit 2026-07 (this branch)                     | **CLOSED** (`0fc9933`) |
-| P10 | Low       | Plugin runtime mounts (signal-cli / russh)                         | `docs/ARCHITECTURE_AUDIT.md`                    |
-| P11 | Low       | Tauri v2 capability-based permissions not enforced on adapters      | `docs/ARCHITECTURE_AUDIT.md`                    |
+| P10 | Low       | Plugin runtime mounts (signal-cli / russh)                         | `docs/ARCHITECTURE_AUDIT.md`                    | **CLOSED** (signal daemon gated on registry; boot mount report; transition watcher no longer dead code) — the russh *server* remains the sidecar approach (P7). |
+| P11 | Low       | Tauri v2 capability-based permissions not enforced on adapters      | `docs/ARCHITECTURE_AUDIT.md`                    | **CLOSED** (`PluginPolicyFile` + `gate_router` wired to Telegram/Discord/Slack) |
 | P12 | Low       | Plugin gateway / OTA update signature verification                  | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P13 | Info      | PluginHub `enable/disable` doesn't kill live `JoinHandle`s          | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P14 | Info      | Tailscale `--advertise-tags` UX gap                                 | `docs/ARCHITECTURE_AUDIT.md`                    |
@@ -42,6 +80,7 @@
 | P33 | Med      | `sha1_smol`/`constant_time_eq`/`parse_wechat_xml_loose` (~40 LOC) belong in `integrations/wechat.rs` not `http_api.rs`. Pure boundary move. | Audit 2026-07 (this branch) | **CLOSED** (`8f4dd23`) |
 | P34 | Low      | Spanish/English error strings mixed at backup.rs:62 etc. (cosmetic) | Audit 2026-07 (this branch) |
 | P35 | Info     | Frontend `any`/`as unknown` casts concentrated in dynamic setter pattern (SettingRow, ServerSettings, etc.). Replace with `ConfigField<T>` typing. | Audit 2026-07 (this branch) |
+| P36 | Med      | Mobile companion app: Kotlin Multiplatform + Compose + Rust core via UniFFI. Pre-req = extract platform-agnostic `ark-core`. | `docs/MOBILE_DECISION.md` | **IN PROGRESS** - `ark-core` extraido, bridge UniFFI verificado (9/9 tests host-JVM), APK Android construido y verificado en dispositivo, capa offline Y su consumer del outbox DONE (`docs/MOBILE_DECISION.md` S3, S3b); UI Compose completa aun OPEN |
 
 **Closed in `fix/rc.3-cleanup` (commit ff00a4c):**
 
@@ -88,9 +127,7 @@
     was already declared. 158 cargo test pass; `cargo build --release`
     emits the same binary cleanly.
 
-**Closed in `fix/rc.4-layer-tighten` (commit tbd):**
-
-  - P21: `update_server` + `check_server_version` + `read_*_buildid` helpers moved out of `commands/integrations.rs` (the integrations adapter layer doesn't operate the ARK server lifecycle) into `commands/server.rs`.  `commands/integrations.rs` shed 124 LOC; `commands/server.rs` is now self-contained.  `events.rs::emit_version` and `lib.rs::generate_handler!` re-pointed accordingly.
+**Closed in `fix/rc.4-layer-tighten` (commit tbd):**  - P21: `update_server` + `check_server_version` + `read_*_buildid` helpers moved out of `commands/integrations.rs` (the integrations adapter layer doesn't operate the ARK server lifecycle) into `commands/server.rs`.  `commands/integrations.rs` shed 124 LOC; `commands/server.rs` is now self-contained.  `events.rs::emit_version` and `lib.rs::generate_handler!` re-pointed accordingly.
   - P22: still OPEN — split of `integrations/hosting.rs` (552 LOC).  Deferred to single dedicated sub-PR.
   - P23: still OPEN — split of `integrations/command_router.rs` (571 LOC).  Deferred until P19 (async-router) lands.
   - P25: NEW `ark/labels.rs` exposes canonical `map_label(&str) -> String` and `map_key_stem(&str) -> &str`.  Removed 2 byte-identical `map_display_label` definitions (commands/server.rs:350, integrations/bridge.rs:12); updated 4 inline `trim_end_matches("_WP")` callsites in launcher.rs, stub.rs, bridge.rs, server.rs to use the canonical helper.  Centralised drift.
@@ -109,6 +146,73 @@
   - P31: `src-tauri/src/receipts/mod.rs` adds `Receipt.retention_expires_at_ms` + `DEFAULT_RAW_TEXT_RETENTION_MS = 30 days`; `Ledger::sweep_expired()` rewrites expired `ChannelIngress` rows (removes `rawText`, sets `textLength=0`, `redactedAt`, `redactionReason="gdpr_art5_storage_limitation"`) via atomic `tmp+rename+fsync`. Boot-time invocation corrected to `ChannelIngress→Audit` staging. Three tests (`default_ttl_persists_on_write`, `sweep_removes_raw_text_and_keeps_metadata`, `sweep_is_idempotent`). New `receipts_sweep_expired` Tauri command. (commit `8f4dd23`)
   - P32: `auth::PrincipalKind { Desktop, Loopback, Convex, Vercel }` with `as_str()`; `Claims.principal: PrincipalKind` defaults to `Desktop` via `#[serde(default)]`. `sign_jwt(principal: PrincipalKind, role: Role)` rewritten to thread the principal through the token. `http_api::admin_only_call` tags Identity fields with the deserialised principal tag. New `principal_roundtrips_in_claims` test. (commit `8f4dd23`)
   - P33: `sha1_smol`, `constant_time_eq`, `wechat_handshake_sha1`, `parse_wechat_xml_loose` (CDATA-aware + `<?xml…?>` stripping) plus their 3 tests relocated from `http_api.rs` to `integrations/wechat.rs`. `http_api.rs` shed ~115 LOC; `wechat.rs` is now the single host for WeChat verification primitives. (commit `8f4dd23`)
+
+**Closed in `feat/ark-core-extraction` (commit tbd):**
+
+  - **P36 (partial) — `ark-core` platform-agnostic extraction.** New
+    cargo crate `crates/ark-core` (version 2.1.0, edition 2021,
+    `rust-version = "1.80"`; deps: `serde`, `serde_json`, `toml`,
+    `async-trait`, `thiserror`, `log`, `tokio` (`fs`), `uuid`). It owns
+    the whole `config` module (`schema`, `defaults`, `loader`,
+    `persister`, `validator`, `profiles`, `custom_validators`, `drift`,
+    `presets`) plus `error` (`Error` / `Result`). Measured before the
+    move: `config` leaked only **3** `crate::error` references and
+    nothing else, and `error.rs` had no internal deps, so the cut is
+    cycle-free by construction.
+  - `src-tauri/src/config/` and `src-tauri/src/error.rs` were deleted
+    and `lib.rs` now has `pub use ark_core::{config, error};`. The
+    historic `crate::config::*` / `crate::error::*` paths therefore keep
+    resolving, so **all 24 consuming files and the 42 + 13 reference
+    sites were left untouched**, and the `ark-config` CLI kept working
+    for free. `src-tauri/Cargo.toml` gained
+    `ark-core = { path = "../crates/ark-core" }`.
+  - Verified: `cargo check --bins --tests` clean; `cargo test --lib`
+    **168 passed** in `src-tauri` (was 186 — the 18 config/error tests
+    now run in their own crate); `cargo test` in `ark-core` **18
+    passed, 0 failed** (`ark-core` gained a `[dev-dependencies] tokio`
+    with `macros` + `rt-multi-thread` because its tests use
+    `#[tokio::test]`).
+  - Still OPEN under P36: the `ark-mobile-facade` crate + UniFFI
+    bindings, the Kotlin/Compose app, and the on-device verification
+    flow (see `docs/MOBILE_STRATEGY.md`).
+
+**Toolchain note (2026-09-28).** The mobile half needs a JDK: Eclipse
+Temurin **17.0.20.101** was installed via `winget`
+(`EclipseAdoptium.Temurin.17.JDK`). Still absent and required only for
+actual device/emulator testing: the Android SDK + `adb`, plus
+`rustup target add aarch64-linux-android armv7-linux-androideabi
+x86_64-linux-android`, `cargo install cargo-ndk` and `uniffi-bindgen`.
+`github.com/google/artemis` is **not** a JVM test harness — it is an
+LLM-driven Android-automation agent (ADB + multimodal model, Python
+3.12+/uv, optional MCP) aimed at driving a real device, so it is a
+verification aid for later, not part of the build.
+
+**Decision record (2026-09-28).** `docs/MOBILE_DECISION.md` supersedes the
+phase list in `docs/MOBILE_STRATEGY.md` §3–5 as the execution plan. Decision:
+**UniFFI 0.32.2 facade + Compose Multiplatform 1.12.1, Android-first**;
+verify the bridge with **host-JVM JUnit tests before installing the Android
+SDK**; adopt Artémis only as a later device-level acceptance layer. Rejected
+for the record: Tauri 2 mobile (parity but weak on background/push/plugins),
+Flutter/Dart (third language, non-standard bridge), hand-written JNI
+(maintenance sink), Gobley (revisit at the iOS phase).
+
+**Phase 2A delivered (2026-09-28).** `crates/ark-mobile-facade` exposes
+`MobileCore` / `ProfileView` / `FacadeError` via UniFFI 0.32.2 and is verified by
+`crates/ark-mobile-facade/jvmTest` (Gradle 9.8.0 wrapper checked in): **6/6 JVM
+tests pass** against the real Rust `.dll`, no Android SDK needed. Workspace
+tests: 168 + 18 + 4 Rust, all green. Regenerate bindings with
+`scripts/generate-uniffi-bindings.ps1` (pinned `uniffi-bindgen` 0.32.2).
+
+Three traps found and recorded in `MOBILE_DECISION.md` §3 (Phase 2A findings):
+a global unpinned `uniffi-bindgen` drifts and fails with a checksum mismatch;
+an error-enum field named `message` will not compile as Kotlin (collides with
+`Throwable.message`) — ours is `detail`; and
+`layout.projectDirectory.dir("../..")` does not normalise `..` and silently
+yields `NO-SOURCE`.
+
+
+
+**Closed in `fix/rc.4-layer-tighten` (commit tbd):**
 
 > **Manifest contract.** Each entry below names the file(s), the
 > bad behaviour, the recommended fix shape, and a `?` for "needs

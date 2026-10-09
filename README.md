@@ -19,6 +19,14 @@ A modern, desktop application built with **Rust + Tauri + React** for managing A
 - **Remote Admin via Convex + Vercel (v2.1)** - 8-channel admin: web, REST, Telegram, Discord, WhatsApp, Signal, WeChat, SSH
 - **Internet-Gated Server Start (v2.1)** - Prevents silent crashes from offline boots
 - **Fixed-by-Map Port Assignment (v2.1)** - Each cluster map always lands on the same triplet
+- **Multi-server profiles** - Manage several servers from one app, each with its own config, saves, ports, mods and cluster (selector in the desktop UI, `ark-config servers` / `--server <id>` in the CLI)
+- **Analytics dashboard** - Live status / memory / FPS / connections cards, sparklines, per-map cluster table and active-profile summary (new `ANALYTICS` tab)
+- **Custom validators** - Add your own declarative validation rules at runtime (`custom_validators.toml`, `ark-config validate`); see [docs/CUSTOM_VALIDATORS.md](docs/CUSTOM_VALIDATORS.md)
+- **Prometheus + Grafana** - `GET /api/v1/metrics` (authenticated) exposes server/memory/FPS/mod gauges; import `docs/grafana/ark-asa-dashboard.json`; see [docs/METRICS.md](docs/METRICS.md)
+- **Config drift detection** - Detects when ARK (or another tool) rewrote `Game.ini`/`GameUserSettings.ini` behind your back (`ark-config drift`)
+- **Config presets** - Save/share/apply whole-server config templates (`<config_dir>/presets/`, `ark-config presets`)
+- **Public status page + badges** - Opt-in, sanitised read-only status JSON and an embeddable SVG badge (`ARK_ASA_PUBLIC_STATUS=1`); see [docs/PUBLIC_STATUS.md](docs/PUBLIC_STATUS.md)
+- **Standalone CLI** - `ark-config status/start/stop/restart/logs/config/validate/drift/update/servers/presets` (shares the same dispatch layer as the GUI, needs no GUI running; see [docs/CLI.md](docs/CLI.md))
 
 ## 🚀 Quick Start
 
@@ -77,12 +85,19 @@ pnpm run tauri:build
 
 ```
 ArkASA-Servidor-Dedicado/
-├── src-tauri/src/               # Rust backend
+├── crates/ark-core/src/         # Platform-agnostic core (no Tauri/OS deps)
 │   ├── config/                  # Configuration module
 │   │   ├── schema.rs           # Data structures + ConnectionMethod enum
 │   │   ├── validator.rs        # Validation logic (OCP)
 │   │   ├── loader.rs           # Load from TOML/INI
-│   │   └── persister.rs        # Save to disk + INI generation
+│   │   ├── persister.rs        # Save to disk + INI generation
+│   │   ├── profiles.rs         # Multi-server registry
+│   │   ├── custom_validators.rs# Declarative rule engine
+│   │   ├── drift.rs            # Config drift detection
+│   │   └── presets.rs          # Named config presets
+│   └── error.rs                # Error types (Error / Result)
+│
+├── src-tauri/src/               # Rust backend (desktop app + CLI)
 │   ├── ark/                    # Server management
 │   │   ├── launcher.rs         # CLI argument builder (single source of truth)
 │   │   ├── server.rs           # Start/stop/restart lifecycle
@@ -92,8 +107,7 @@ ArkASA-Servidor-Dedicado/
 │   ├── storage/                # SQLite audit log + version history
 │   ├── stub.rs                 # On-demand dormant server stubs
 │   ├── backup.rs               # Cloud backup (S3, GDrive, OneDrive, iCloud)
-│   ├── error.rs                # Error types
-│   ├── lib.rs                  # Tauri commands
+│   ├── lib.rs                  # Tauri commands (re-exports ark-core as crate::config/error)
 │   └── main.rs                 # Entry point
 │
 ├── frontend/src/                # React + TypeScript frontend
@@ -109,7 +123,7 @@ ArkASA-Servidor-Dedicado/
 ├── scripts/                     # Utility scripts (DuckDNS, firewall)
 ├── installer/                   # NSIS full installer
 ├── migrations/                  # Database migrations
-├── Cargo.toml                   # Rust dependencies
+├── Cargo.toml                   # Rust workspace
 └── package.json                 # Node dependencies
 ```
 
@@ -241,6 +255,9 @@ If you need the old files:
 
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, principles, patterns
 - **[API.md](docs/API.md)** - Tauri command reference
+- **[CLI.md](docs/CLI.md)** - `ark-config` operator CLI reference
+- **[MOBILE_STRATEGY.md](docs/MOBILE_STRATEGY.md)** - Companion mobile app: quality model, stack decision, Rust-core sharing
+- **[RESEARCH_NEW_IDEAS.md](docs/RESEARCH_NEW_IDEAS.md)** - Competitive landscape, ranked feature ideas, idea-generation process
 - **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
 
 ## ✅ Current Status
