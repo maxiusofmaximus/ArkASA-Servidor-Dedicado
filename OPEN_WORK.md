@@ -57,7 +57,7 @@ of the tree.
 | P10 | Low       | Plugin runtime mounts (signal-cli / russh)                         | `docs/ARCHITECTURE_AUDIT.md`                    | **CLOSED** (signal daemon gated on registry; boot mount report; transition watcher no longer dead code) — the russh *server* remains the sidecar approach (P7). |
 | P11 | Low       | Tauri v2 capability-based permissions not enforced on adapters      | `docs/ARCHITECTURE_AUDIT.md`                    | **CLOSED** (`PluginPolicyFile` + `gate_router` wired to Telegram/Discord/Slack) |
 | P12 | Low       | Plugin gateway / OTA update signature verification                  | `docs/ARCHITECTURE_AUDIT.md`                    |
-| P13 | Info      | PluginHub `enable/disable` doesn't kill live `JoinHandle`s          | `docs/ARCHITECTURE_AUDIT.md`                    |
+| P13 | Info      | PluginHub `enable/disable` doesn't kill live `JoinHandle`s          | `docs/ARCHITECTURE_AUDIT.md`                    | | **CLOSED** (registry retains + aborts JoinHandle)
 | P14 | Info      | Tailscale `--advertise-tags` UX gap                                 | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P15 | Info      | Frontend `services/tauri.ts` mocks should throw dev-mock-only errors | `docs/ARCHITECTURE_AUDIT.md`                    |
 | P16 | Info      | Apple Silicon notarization pipeline                                 | `docs/ARCHITECTURE_AUDIT.md`                    |

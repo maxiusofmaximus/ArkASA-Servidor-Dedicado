@@ -224,6 +224,10 @@ pub struct PluginRegistry {
     pub catalog: Vec<PluginEntry>,
     /// Currently-enabled plugin IDs (the rest of catalog is loaded but idle).
     pub enabled: std::collections::BTreeSet<String>,
+    /// Live `JoinHandle`s for enabled plugins, keyed by plugin id. `disable`
+    /// removes the entry and aborts the task so a toggled-off plugin's loop
+    /// actually stops instead of leaking (P13).
+    pub handles: BTreeMap<String, tokio::task::JoinHandle<()>>,
 }
 
 /// A wrapper around any concrete plugin implementing the `Plugin` trait.
@@ -373,6 +377,7 @@ impl PluginRegistry {
             descriptors: Vec::with_capacity(8),
             catalog:     Vec::new(),
             enabled:     std::collections::BTreeSet::new(),
+            handles:     BTreeMap::new(),
         }
     }
 
@@ -388,29 +393,32 @@ impl PluginRegistry {
         self.catalog.push(entry);
     }
 
-    /// Enable by id and start it. Returns the spawned JoinHandle. If the
-    /// plugin is already enabled this is a no-op.
+    /// Enable by id and start it. The spawned `JoinHandle` is retained in
+    /// `self.handles` so `disable` can abort it. Returns `Ok(true)` when the
+    /// plugin was started, `Ok(false)` when it was already enabled (no-op).
     pub async fn enable(
         &mut self,
         id: &str,
         ctx_for: impl Fn(&'static str) -> PluginContext,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, PluginStartError> {
-        if self.enabled.contains(id) { return Ok(None); }
+    ) -> Result<bool, PluginStartError> {
+        if self.enabled.contains(id) { return Ok(false); }
         let entry = match self.catalog.iter().find(|e| e.id == id) {
             Some(e) => e,
             None => return Err(PluginStartError::Internal(format!("plugin `{id}` not in catalog"))),
         };
         let ctx = ctx_for(entry.id);
         let h = entry.inner.start(ctx).await?;
+        self.handles.insert(id.to_string(), h);
         self.enabled.insert(id.to_string());
-        Ok(Some(h))
+        Ok(true)
     }
 
-    /// Disable a plugin — we don't currently support stopping an in-flight
-    /// JoinHandle because each plugin owns its own shutdown; this just
-    /// removes from the enabled set so subsequent `start()` calls won't
-    /// spawn it without an explicit re-enable.
+    /// Disable a plugin: abort its in-flight runtime loop (dropping the
+    /// `JoinHandle`) and remove it from the enabled set. Idempotent.
     pub fn disable(&mut self, id: &str) {
+        if let Some(handle) = self.handles.remove(id) {
+            handle.abort();
+        }
         self.enabled.remove(id);
     }
 
@@ -543,5 +551,123 @@ pub(crate) fn lock_plugin_storage_for_test() -> std::sync::MutexGuard<'static, (
         .get_or_init(|| std::sync::Mutex::new(()))
         .lock()
         .expect("plugin storage test lock poisoned")
+}
+
+// P13 regression: `disable()` must abort the joined task, not just forget it.
+#[cfg(test)]
+mod p13_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Sets a shared flag when dropped — used to observe task cancellation.
+    struct DropFlagGuard(Arc<AtomicBool>);
+    impl Drop for DropFlagGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// A plugin whose `start()` spawns an infinite loop that owns a
+    /// `DropFlagGuard`. Aborting the returned handle must drop the guard.
+    struct LoopPlugin {
+        running: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    fn noop_ctx(id: &'static str) -> PluginContext {
+        PluginContext {
+            id,
+            channel_kind: ChannelKind::Web,
+            secrets: PluginSecrets::default(),
+            dispatch: Arc::new(|_ctx, _cmd| Err("noop dispatch".to_string())),
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AnyPlugin for LoopPlugin {
+        fn id(&self) -> &'static str { "p13-loop" }
+        fn descriptor(&self) -> PluginDescriptor {
+            PluginDescriptor {
+                id: "p13-loop",
+                label: "P13 Loop",
+                channel: ChannelKind::Web,
+                capabilities: &[],
+                required_secrets: &[],
+                oauth_url: None,
+            }
+        }
+        async fn start(&self, _ctx: PluginContext)
+            -> Result<tokio::task::JoinHandle<()>, PluginStartError>
+        {
+            let running = self.running.clone();
+            let flag = self.dropped.clone();
+            let h = tokio::spawn(async move {
+                let _guard = DropFlagGuard(flag);
+                // Signal that the guard now exists so the test can abort a
+                // task that is genuinely mid-flight (not one that was aborted
+                // before its first poll, which would never build the guard).
+                running.store(true, Ordering::SeqCst);
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            });
+            Ok(h)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disable_aborts_handle_and_drops_guard() {
+        let running = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut reg = PluginRegistry::new();
+        let plugin = LoopPlugin { running: running.clone(), dropped: dropped.clone() };
+        let entry = PluginEntry {
+            id: "p13-loop",
+            descriptor: plugin.descriptor(),
+            inner: Box::new(plugin),
+        };
+        reg.register(entry);
+
+        // Enable → starts the loop and retains the handle.
+        let started = reg.enable("p13-loop", noop_ctx).await.expect("enable ok");
+        assert!(started, "first enable must report started=true");
+        assert!(reg.handles.contains_key("p13-loop"), "enable must retain the handle");
+
+        // Wait until the spawned loop has actually started (guard constructed).
+        for _ in 0..200 {
+            if running.load(Ordering::SeqCst) { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(running.load(Ordering::SeqCst), "spawned loop must have started");
+        assert!(
+            !reg.handles.get("p13-loop").unwrap().is_finished(),
+            "infinite-loop task must still be running right after enable"
+        );
+        assert!(!dropped.load(Ordering::SeqCst), "guard must not drop while running");
+        assert!(reg.enabled_ids().any(|e| e == "p13-loop"));
+
+        // Re-enable is a no-op reported as `false`.
+        let again = reg.enable("p13-loop", noop_ctx).await.expect("enable ok");
+        assert!(!again, "re-enable must report started=false");
+
+        // Disable → aborts the task and removes the handle.
+        reg.disable("p13-loop");
+        assert!(
+            !reg.handles.contains_key("p13-loop"),
+            "disable must remove the retained handle"
+        );
+        assert!(!reg.enabled_ids().any(|e| e == "p13-loop"));
+
+        // Let cancellation propagate; the guard's Drop must run.
+        for _ in 0..200 {
+            if dropped.load(Ordering::SeqCst) { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "disable must abort the spawned task, dropping its guard"
+        );
+    }
 }
 
