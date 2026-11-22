@@ -16,7 +16,7 @@
     "i18n:check": "tsx scripts/i18n-diff.ts"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/api": "^2.12.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zustand": "^4.5.7"
